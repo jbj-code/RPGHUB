@@ -1,11 +1,6 @@
-// Vercel serverless function: OAuth callback from Schwab.
-// Exchanges ?code for access token and stores it in memory on this lambda instance.
+// Vercel serverless: OAuth callback. Exchanges code for tokens and stores in Supabase.
 
-let schwabTokens: {
-  access_token: string;
-  refresh_token?: string;
-  expires_at: number; // epoch ms
-} | null = null;
+import { createClient } from "@supabase/supabase-js";
 
 export default async function handler(req: any, res: any) {
   try {
@@ -18,11 +13,19 @@ export default async function handler(req: any, res: any) {
     const clientId = process.env.SCHWAB_CLIENT_ID;
     const clientSecret = process.env.SCHWAB_CLIENT_SECRET;
     const redirectUri = process.env.SCHWAB_REDIRECT_URI;
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
     if (!clientId || !clientSecret || !redirectUri) {
       res
         .status(500)
         .send("Server missing SCHWAB_CLIENT_ID/SECRET/REDIRECT_URI env vars.");
+      return;
+    }
+    if (!supabaseUrl || !supabaseServiceKey) {
+      res
+        .status(500)
+        .send("Server missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.");
       return;
     }
 
@@ -53,29 +56,38 @@ export default async function handler(req: any, res: any) {
     }
 
     const json: any = await tokenResp.json();
-    const now = Date.now();
     const expiresInSec =
       typeof json.expires_in === "number" ? json.expires_in : 3600;
+    const expiresAt = new Date(
+      Date.now() + expiresInSec * 1000
+    ).toISOString();
 
-    schwabTokens = {
-      access_token: json.access_token,
-      refresh_token: json.refresh_token,
-      expires_at: now + expiresInSec * 1000,
-    };
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const { error } = await supabase
+      .from("schwab_tokens")
+      .upsert(
+        {
+          id: "default",
+          access_token: json.access_token,
+          refresh_token: json.refresh_token ?? null,
+          expires_at: expiresAt,
+        },
+        { onConflict: "id" }
+      );
+
+    if (error) {
+      console.error("Supabase upsert error:", error);
+      res.status(500).send("Failed to save tokens. Check Vercel logs and Supabase table name/schema.");
+      return;
+    }
 
     res
       .status(200)
       .send(
-        "Schwab authorization complete for this server instance. You can close this tab and use RPG HUB."
+        "Schwab authorization complete. You can close this tab and use RPG HUB."
       );
   } catch (err) {
     console.error("schwab-auth-callback error", err);
     res.status(500).send("Unexpected error handling Schwab callback.");
   }
 }
-
-// Export a helper getter for other functions in this lambda to use.
-export function getSchwabTokens() {
-  return schwabTokens;
-}
-
