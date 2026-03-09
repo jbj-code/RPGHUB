@@ -94,17 +94,24 @@ export default async function handler(req: any, res: any) {
         });
 
         if (!resp.ok) {
-          // Skip this symbol on failure, but log for debugging.
           const text = await resp.text();
-          // eslint-disable-next-line no-console
-          console.error("pricehistory error for", symbol, text);
+          console.error("[schwab-returns] pricehistory error for", symbol, resp.status, text.slice(0, 300));
           continue;
         }
 
         const body: any = await resp.json();
-        const candles: { close: number; datetime: number }[] =
-          body?.candles ?? [];
-        if (!Array.isArray(candles) || candles.length < 2) continue;
+        // Schwab returns { candles: [ { open, high, low, close, volume, datetime } ], ... } — we use daily closes.
+        const rawCandles = body?.candles ?? body?.priceHistory ?? [];
+        const candles: { close: number; datetime: number }[] = Array.isArray(rawCandles)
+          ? rawCandles.map((c: any) => ({
+              close: c.close ?? c.Close,
+              datetime: c.datetime ?? c.date ?? c.timestamp ?? 0,
+            })).filter((c: any) => c.close > 0 && c.datetime > 0)
+          : [];
+        if (candles.length < 2) {
+          console.warn("[schwab-returns] not enough candles for", symbol, "response keys:", Object.keys(body || {}), "rawCandles length:", Array.isArray(rawCandles) ? rawCandles.length : 0);
+          continue;
+        }
 
         const sorted = candles
           .slice()
@@ -155,7 +162,15 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    res.status(200).json(results);
+    const isEmpty = Object.keys(results).length === 0;
+    if (isEmpty) {
+      res.status(200).json({
+        ...results,
+        _hint: "No candle data from Schwab for any symbol. Token may be expired or market data restricted. Run the Schwab OAuth flow again from the deployed app (Vercel), then retry. Check Vercel function logs for each symbol.",
+      });
+    } else {
+      res.status(200).json(results);
+    }
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error("schwab-returns error", err);

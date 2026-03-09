@@ -46,15 +46,18 @@ body {
   background-size: 100% 100%;
 }
 
-/* Copy table button: hover and active */
-.stock-comparison-page .stock-comparison-copy-table {
+/* Copy table and Refresh buttons: same hover and active */
+.stock-comparison-page .stock-comparison-copy-table,
+.stock-comparison-page .stock-comparison-refresh {
   transition: color 0.15s ease, background 0.15s ease, transform 0.1s ease;
 }
-.stock-comparison-page .stock-comparison-copy-table:hover {
+.stock-comparison-page .stock-comparison-copy-table:hover,
+.stock-comparison-page .stock-comparison-refresh:hover {
   color: var(--checkbox-primary, #44c1c1) !important;
   background: rgba(68, 193, 193, 0.1) !important;
 }
-.stock-comparison-page .stock-comparison-copy-table:active {
+.stock-comparison-page .stock-comparison-copy-table:active,
+.stock-comparison-page .stock-comparison-refresh:active {
   transform: scale(0.92);
   background: rgba(68, 193, 193, 0.2) !important;
 }

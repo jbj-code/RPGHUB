@@ -31,7 +31,9 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
   const [copyJustPressed, setCopyJustPressed] = useState(false);
   const [returnsMap, setReturnsMap] = useState<Record<string, Returns>>({});
   const [loading, setLoading] = useState(false);
+  const [loadingTickers, setLoadingTickers] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [apiHint, setApiHint] = useState<string | null>(null); // server hint when no data (e.g. token expired)
   const [fetchKey, setFetchKey] = useState(0); // bump to force re-fetch (Refresh)
 
   const pageStyle: React.CSSProperties = {
@@ -183,17 +185,21 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
   useEffect(() => {
     if (tickers.length === 0) {
       setReturnsMap({});
+      setLoadingTickers(new Set());
       setError(null);
       setLoading(false);
       return;
     }
 
     const controller = new AbortController();
+    // Only show "Loading from Schwab…" for tickers we don't have data for yet (e.g. newly added).
+    setLoadingTickers(new Set(tickers.filter((t) => !returnsMap[t])));
+    setLoading(true);
+    setError(null);
+    setApiHint(null);
 
     async function loadReturns() {
       try {
-        setLoading(true);
-        setError(null);
         const symbolsParam = encodeURIComponent(tickers.join(","));
         const res = await fetch(
           `${SCHWAB_API_BASE}/api/schwab-returns?symbols=${symbolsParam}`,
@@ -203,14 +209,25 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
           const body = await res.json().catch(() => ({}));
           throw new Error((body as { error?: string }).error || `Request failed with ${res.status}`);
         }
-        const data = (await res.json()) as Record<string, Returns>;
-        setReturnsMap(data);
+        const data = (await res.json()) as Record<string, Returns | string>;
+        // Normalize keys to uppercase; skip _hint and non-object values
+        const normalized: Record<string, Returns> = {};
+        for (const [k, v] of Object.entries(data)) {
+          if (k === "_hint" && typeof v === "string") {
+            setApiHint(v);
+            continue;
+          }
+          if (v && typeof v === "object") normalized[k.trim().toUpperCase()] = v as Returns;
+        }
+        if (Object.keys(normalized).length > 0) setApiHint(null);
+        setReturnsMap((prev) => ({ ...prev, ...normalized }));
       } catch (e: unknown) {
         if (e instanceof Error && e.name === "AbortError") return;
         setError(e instanceof Error ? e.message : "Failed to load returns from Schwab");
-        setReturnsMap({});
+        // Keep existing returnsMap on error so we don't wipe partial data
       } finally {
         setLoading(false);
+        setLoadingTickers(new Set());
       }
     }
 
@@ -282,8 +299,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
   const allSelected = lookbacks.size === TIMEFRAMES.length;
   const canReorder = tickers.length > 1;
   const hasAnyReturns = tickers.some((t) => returnsMap[t]);
-  const canCopyTable =
-    tickers.length > 0 && selectedLookbacks.length > 0 && hasAnyReturns;
+  const canCopyTable = tickers.length > 0 && selectedLookbacks.length > 0;
 
   function copyTableToClipboard() {
     if (!canCopyTable) return;
@@ -459,27 +475,26 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: t.spacing(3) }}>
           <h3 style={cardTitleStyle}>Performance</h3>
           <div style={{ display: "flex", alignItems: "center", gap: t.spacing(2) }}>
-            {tickers.length > 0 && !loading && (
+            {tickers.length > 0 && (
               <button
                 type="button"
                 onClick={refreshReturns}
+                className="stock-comparison-refresh"
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
-                  gap: t.spacing(1),
+                  justifyContent: "center",
                   padding: t.spacing(1.5),
-                  border: `1px solid ${t.colors.border}`,
-                  borderRadius: t.radius.sm,
+                  border: "none",
                   background: "none",
-                  color: t.colors.textMuted,
                   cursor: "pointer",
-                  fontSize: "0.875rem",
+                  color: t.colors.textMuted,
+                  borderRadius: t.radius.sm,
                 }}
                 title="Refresh returns"
                 aria-label="Refresh returns from Schwab"
               >
-                <span className="material-symbols-outlined" style={{ fontSize: 20 }} aria-hidden>refresh</span>
-                Refresh
+                <span className="material-symbols-outlined" style={{ fontSize: 22 }} aria-hidden>refresh</span>
               </button>
             )}
             {canCopyTable && (
@@ -519,7 +534,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
           <div style={{ padding: t.spacing(6), textAlign: "center" as const, color: t.colors.textMuted, fontSize: "0.9rem", border: `1px dashed ${t.colors.border}`, borderRadius: t.radius.md, backgroundColor: t.colors.background }}>
             Add tickers above to see returns.
           </div>
-        ) : loading ? (
+        ) : loading && tickers.every((t) => !returnsMap[t]) ? (
           <div style={{ padding: t.spacing(6), textAlign: "center" as const, color: t.colors.textMuted, fontSize: "0.9rem", border: `1px dashed ${t.colors.border}`, borderRadius: t.radius.md, backgroundColor: t.colors.background }}>
             Loading returns from Schwab…
           </div>
@@ -538,6 +553,20 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
                 {error} (showing partial data.)
               </p>
             )}
+            {!loading && !hasAnyReturns && tickers.length > 0 && (
+              <p style={{ marginBottom: t.spacing(2), fontSize: "0.875rem", color: t.colors.textMuted }}>
+                {apiHint || "No return data for these symbols. This can happen when the market is closed, the Schwab token has expired, or the API returned no candles."}
+                {" "}
+                <a
+                  href={`${SCHWAB_API_BASE}/api/schwab-auth`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: t.colors.primary, fontWeight: t.typography.headingWeight }}
+                >
+                  Authorize Schwab (log in to refresh token)
+                </a>
+              </p>
+            )}
           <div style={tableWrapStyle}>
             <table style={tableStyle}>
               <thead>
@@ -553,6 +582,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
               <tbody>
                 {tickers.map((ticker, i) => {
                   const returns = returnsMap[ticker];
+                  const isLoadingRow = loadingTickers.has(ticker);
                   const isDragging = draggedIndex === i;
                   const isDropTarget = dropTargetIndex === i;
                   return (
@@ -571,15 +601,21 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
                       }}
                     >
                       <td style={{ ...tdStyle, fontWeight: t.typography.headingWeight }}>{ticker}</td>
-                      {selectedLookbacks.map((tf) => {
-                        const value = returns != null ? (returns[tf] ?? null) : null;
-                        const isPos = value !== null && value >= 0;
-                        return (
-                          <td key={tf} style={{ ...tdNumStyle, color: isPos ? t.colors.success : t.colors.danger }}>
-                            {value === null ? "—" : formatPct(value)}
-                          </td>
-                        );
-                      })}
+                      {isLoadingRow ? (
+                        <td colSpan={selectedLookbacks.length} style={{ ...tdNumStyle, color: t.colors.textMuted, fontStyle: "italic" }}>
+                          Loading from Schwab…
+                        </td>
+                      ) : (
+                        selectedLookbacks.map((tf) => {
+                          const value = returns != null ? (returns[tf] ?? null) : null;
+                          const isPos = value !== null && value >= 0;
+                          return (
+                            <td key={tf} style={{ ...tdNumStyle, color: isPos ? t.colors.success : t.colors.danger }}>
+                              {value === null ? "—" : formatPct(value)}
+                            </td>
+                          );
+                        })
+                      )}
                     </tr>
                   );
                 })}
