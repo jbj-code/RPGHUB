@@ -1,0 +1,331 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* Material Symbols (Google) */
+.material-symbols-outlined {
+  font-family: "Material Symbols Outlined";
+  font-weight: normal;
+  font-style: normal;
+  font-size: 28px;
+  line-height: 1;
+  letter-spacing: normal;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+}
+
+/* Stock Comparison: checkboxes with primary fill and white checkmark */
+.stock-comparison-page input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--input-border, #e2e8f0);
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+}
+.stock-comparison-page input[type="checkbox"]:checked {
+  background: var(--checkbox-primary, #44c1c1);
+  border-color: var(--checkbox-primary, #44c1c1);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='%23ffffff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' d='M5 12.5l4 4 10-11'/%3E%3C/svg%3E");
+  background-size: 100% 100%;
+}
+
+/* Copy table button: hover and active */
+.stock-comparison-page .stock-comparison-copy-table {
+  transition: color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+.stock-comparison-page .stock-comparison-copy-table:hover {
+  color: var(--checkbox-primary, #44c1c1) !important;
+  background: rgba(68, 193, 193, 0.1) !important;
+}
+.stock-comparison-page .stock-comparison-copy-table:active {
+  transform: scale(0.92);
+  background: rgba(68, 193, 193, 0.2) !important;
+}
+
+/* Clear tickers button: hover and active */
+.stock-comparison-page .stock-comparison-clear-tickers {
+  transition: color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+.stock-comparison-page .stock-comparison-clear-tickers:hover {
+  color: var(--checkbox-primary, #44c1c1) !important;
+  background: rgba(68, 193, 193, 0.1) !important;
+}
+.stock-comparison-page .stock-comparison-clear-tickers:active {
+  transform: scale(0.92);
+  background: rgba(68, 193, 193, 0.2) !important;
+}
+
+.tool-card {
+  transition:
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.2s ease,
+    background-color 0.2s ease,
+    outline 0.2s ease;
+}
+
+.tool-card:hover {
+  border-color: rgba(68, 193, 193, 0.7); /* #44c1c1 with transparency */
+  outline: 2px solid #44c1c1;
+  outline-offset: 2px;
+  box-shadow: 0 8px 24px rgba(15, 42, 54, 0.12);
+  transform: translateY(-2px);
+  background-color: rgba(68, 193, 193, 0.06);
+}
+
+/* Left sidebar: menu link hover */
+.app-nav-sidebar .app-nav-menu a:hover {
+  background-color: rgba(68, 193, 193, 0.08);
+  color: #44c1c1;
+}
+
+/* Nav: theme toggle (sun/moon) hover */
+.app-nav-theme-toggle {
+  transition: color 0.2s ease, background-color 0.2s ease, border-color 0.2s ease;
+}
+.app-nav-theme-toggle:hover {
+  color: #44c1c1;
+  background-color: rgba(68, 193, 193, 0.12);
+  border-color: rgba(68, 193, 193, 0.5);
+}
+
+/* Raise.ai: no focus/hover/active box on fund expand arrow */
+.raise-ai-page .fund-expand-cell,
+.raise-ai-page .fund-expand-cell:hover,
+.raise-ai-page .fund-expand-cell:focus,
+.raise-ai-page .fund-expand-cell:focus-visible,
+.raise-ai-page .fund-expand-cell:active,
+.raise-ai-page .fund-expand-icon,
+.raise-ai-page .fund-expand-icon:hover,
+.raise-ai-page .fund-expand-icon:focus,
+.raise-ai-page .fund-expand-icon:focus-visible,
+.raise-ai-page .fund-expand-icon:active {
+  outline: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  border: none !important;
+}
+.raise-ai-page tr[tabindex="-1"]:focus,
+.raise-ai-page tr[tabindex="-1"]:focus-visible {
+  outline: none !important;
+}
+.raise-ai-page .fund-expand-cell * {
+  outline: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+/* Raise.ai: arrows not selectable as text */
+.raise-ai-page .raise-ai-sort-arrow,
+.raise-ai-page .fund-expand-icon {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+/* ---- Home: hero animation ---- */
+.home-hero {
+  animation: home-hero-fade 0.8s ease-out both;
+}
+.home-hero-logo {
+  animation: home-hero-logo 1s ease-out 0.2s both;
+}
+.home-hero-hub {
+  animation: home-hero-hub 0.8s ease-out 0.35s both;
+  letter-spacing: 0.02em;
+}
+
+/* ---- Universal hover: tappable cards / interactive elements (subtle lift + teal glow) ---- */
+.interactive-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+.interactive-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(68, 193, 193, 0.35);
+}
+.interactive-card:active {
+  transform: translateY(0) scale(0.99);
+  box-shadow: 0 2px 8px rgba(68, 193, 193, 0.2);
+}
+.interactive-card:focus {
+  outline: none;
+}
+.interactive-card:focus-visible {
+  outline: 2px solid rgba(68, 193, 193, 0.6);
+  outline-offset: 2px;
+}
+
+/* Home quick-link cards: base shadow in CSS so hover can override; stronger selector so it beats .page-card:hover */
+.home-quick-link-card {
+  text-decoration: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+.home-quick-link-card.interactive-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(68, 193, 193, 0.35);
+}
+.home-quick-link-card.interactive-card:active {
+  transform: translateY(0) scale(0.99);
+  box-shadow: 0 2px 8px rgba(68, 193, 193, 0.2);
+}
+@keyframes home-hero-fade {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes home-hero-logo {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes home-hero-hub {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* ---- Shared page card animations (all tool pages) ---- */
+.page-card {
+  transition: box-shadow 0.25s ease, border-color 0.25s ease, opacity 0.3s ease, transform 0.3s ease;
+  animation: page-card-in 0.45s ease-out both;
+}
+@keyframes page-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.page-card:hover {
+  box-shadow: 0 4px 16px rgba(15, 42, 54, 0.08);
+}
+/* Inputs and selects in main content: focus ring and transitions */
+.app-main-inner input,
+.app-main-inner select {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.app-main-inner input:focus,
+.app-main-inner select:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(68, 193, 193, 0.25);
+}
+/* ---- Options Optimizer: premium feel ---- */
+.options-optimizer-page .options-optimizer-header-row button {
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+.options-optimizer-page .options-optimizer-header-row button:hover {
+  transform: scale(1.08);
+  opacity: 0.9;
+}
+.options-optimizer-header-row .options-optimizer-info-icon {
+  line-height: 1;
+}
+.options-optimizer-page .options-optimizer-card {
+  transition: box-shadow 0.25s ease, border-color 0.25s ease, opacity 0.3s ease, transform 0.3s ease;
+  animation: page-card-in 0.45s ease-out both;
+}
+.options-optimizer-page .options-optimizer-card:hover {
+  box-shadow: 0 4px 16px rgba(15, 42, 54, 0.08);
+}
+.options-optimizer-page input,
+.options-optimizer-page select {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.options-optimizer-page input:focus,
+.options-optimizer-page select:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(68, 193, 193, 0.25);
+}
+.options-optimizer-page .options-optimizer-card button[style*="background-color"] {
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+.options-optimizer-page .options-optimizer-card button[style*="background-color"]:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(68, 193, 193, 0.35);
+}
+.options-optimizer-page .options-optimizer-card button[style*="border"]:hover {
+  border-color: rgba(15, 42, 54, 0.3);
+}
+
+/* ---- Layout: left sidebar (fixed) + main ---- */
+.app-nav-logo {
+  object-fit: contain;
+  object-position: left center;
+}
+
+.app-main-inner {
+  /* padding set inline; overridden per breakpoint below */
+}
+
+@media (max-width: 768px) {
+  .app-nav-sidebar {
+    min-width: 200px !important;
+    width: 200px !important;
+  }
+
+  .app-main {
+    margin-left: 200px !important;
+  }
+
+  .app-main-inner {
+    padding: 20px 16px !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .app-nav-sidebar {
+    min-width: 180px !important;
+    width: 180px !important;
+  }
+
+  .app-main {
+    margin-left: 180px !important;
+  }
+
+  .app-main-inner {
+    padding: 16px 12px !important;
+  }
+
+  .home-section {
+    max-width: 100%;
+  }
+
+  .home-cards-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}

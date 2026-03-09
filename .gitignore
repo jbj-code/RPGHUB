@@ -1,0 +1,18 @@
+# Node / Vite / TypeScript
+node_modules
+dist
+*.log
+*.tmp
+
+# Env and secrets
+.env
+.env.local
+.env.*.local
+schwab_tokens.json
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+
