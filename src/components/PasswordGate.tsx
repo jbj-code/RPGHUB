@@ -55,6 +55,24 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
       .finally(() => setStatusLoading(false));
   }, [step]);
 
+  // When user returns to this tab after authorizing in the other tab, re-check and let them in if connected
+  useEffect(() => {
+    if (step !== "schwab" || schwabStatus?.connected) return;
+    const onFocus = () => {
+      fetch(`${SCHWAB_API_BASE}/api/schwab-status`)
+        .then((res) => res.json())
+        .then((data: { connected?: boolean; expired?: boolean }) => {
+          if (data.connected && !data.expired) {
+            setSchwabStatus({ connected: true });
+            onUnlock();
+          }
+        })
+        .catch(() => {});
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [step, schwabStatus, onUnlock]);
+
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault();
@@ -187,6 +205,11 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
     whiteSpace: "nowrap",
   };
 
+  const authorizeBtnStyle: React.CSSProperties = {
+    ...enterBtnStyle,
+    borderRadius: t.radius.md,
+  };
+
   const smallBtnStyle: React.CSSProperties = {
     padding: `${t.spacing(1.5)} ${t.spacing(3)}`,
     fontSize: "0.875rem",
@@ -228,7 +251,7 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
                 href={`${SCHWAB_API_BASE}/api/schwab-auth`}
                 target="_blank"
                 rel="noopener noreferrer"
-                style={{ ...enterBtnStyle, display: "inline-block", textDecoration: "none", marginTop: t.spacing(2) }}
+                style={{ ...authorizeBtnStyle, display: "inline-block", textDecoration: "none", marginTop: t.spacing(2) }}
               >
                 Authorize Schwab
               </a>

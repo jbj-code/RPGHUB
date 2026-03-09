@@ -26,6 +26,7 @@ export default async function handler(req: any, res: any) {
 
   try {
     const symbolsParam = req.query.symbols as string | undefined;
+    console.log("[schwab-returns] invoked", symbolsParam || "(no symbols)");
     if (!symbolsParam) {
       res.status(400).json({
         error: "symbols query parameter is required, e.g. ?symbols=SPY,QQQ",
@@ -45,7 +46,7 @@ export default async function handler(req: any, res: any) {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const { data: tokenRow, error: tokenError } = await supabase
       .from("schwab_tokens")
-      .select("access_token, expires_at")
+      .select("access_token, refresh_token, expires_at")
       .eq("id", "default")
       .single();
 
@@ -57,18 +58,61 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    // Only treat as expired when we have a value and it's in the past (null = skip check, let Schwab reject if bad)
     const expiresAt = tokenRow.expires_at != null
       ? new Date(tokenRow.expires_at).getTime()
       : null;
-    if (expiresAt != null && Date.now() >= expiresAt) {
+    const now = Date.now();
+    const bufferMs = 5 * 60 * 1000; // refresh 5 min before expiry
+    const needsRefresh = expiresAt != null && now >= expiresAt - bufferMs;
+
+    let accessToken = tokenRow.access_token as string;
+
+    if (needsRefresh && tokenRow.refresh_token) {
+      const clientId = process.env.SCHWAB_CLIENT_ID;
+      const clientSecret = process.env.SCHWAB_CLIENT_SECRET;
+      if (!clientId || !clientSecret) {
+        res.status(500).json({ error: "Server missing Schwab client credentials." });
+        return;
+      }
+      const authHeader = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+      const refreshBody = new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: tokenRow.refresh_token,
+      });
+      const refreshResp = await fetch("https://api.schwabapi.com/v1/oauth/token", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Authorization: `Basic ${authHeader}`,
+        },
+        body: refreshBody,
+      });
+      if (!refreshResp.ok) {
+        const errText = await refreshResp.text();
+        console.error("[schwab-returns] refresh failed", refreshResp.status, errText);
+        res.status(401).json({
+          error: "Schwab token expired. Run the Schwab login flow again.",
+        });
+        return;
+      }
+      const refreshJson: any = await refreshResp.json();
+      const newExpiresIn = typeof refreshJson.expires_in === "number" ? refreshJson.expires_in : 1800;
+      const newExpiresAt = new Date(now + newExpiresIn * 1000).toISOString();
+      await supabase
+        .from("schwab_tokens")
+        .update({
+          access_token: refreshJson.access_token,
+          expires_at: newExpiresAt,
+          ...(refreshJson.refresh_token != null && { refresh_token: refreshJson.refresh_token }),
+        })
+        .eq("id", "default");
+      accessToken = refreshJson.access_token;
+    } else if (expiresAt != null && now >= expiresAt) {
       res.status(401).json({
         error: "Schwab token expired. Run the Schwab login flow again.",
       });
       return;
     }
-
-    const accessToken = tokenRow.access_token as string;
     const symbols = symbolsParam
       .split(/[,\s]+/)
       .map((s) => s.trim().toUpperCase())
@@ -101,6 +145,9 @@ export default async function handler(req: any, res: any) {
         }
 
         const body: any = await resp.json();
+        if (symbols.indexOf(symbol) === 0) {
+          console.log("[schwab-returns] first symbol response keys:", Object.keys(body || {}), "candles?", Array.isArray(body?.candles) ? body.candles.length : "n/a");
+        }
         // Schwab returns { candles: [ { open, high, low, close, volume, datetime } ], ... } — we use daily closes.
         const rawCandles = body?.candles ?? body?.priceHistory ?? [];
         const candles: { close: number; datetime: number }[] = Array.isArray(rawCandles)
