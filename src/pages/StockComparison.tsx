@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Theme } from "../theme";
 import { getPrimaryButtonStyle, PAGE_LAYOUT } from "../theme";
 
@@ -6,14 +6,12 @@ type StockComparisonProps = { theme: Theme };
 
 const TIMEFRAMES = ["1D", "1W", "1M", "3M", "6M", "1Y", "YTD"] as const;
 
-type MockReturns = Record<(typeof TIMEFRAMES)[number], number>;
+type Returns = Record<(typeof TIMEFRAMES)[number], number>;
 
-/** Mock return sets — cycle by ticker index (first ticker = row 0, second = row 1, third = row 2, fourth = row 0, …). */
-const MOCK_RETURNS: MockReturns[] = [
-  { "1D": 0.52, "1W": 1.24, "1M": 2.18, "3M": 4.62, "6M": 7.41, "1Y": 12.35, YTD: 10.12 },
-  { "1D": -0.31, "1W": 0.78, "1M": -0.54, "3M": 2.08, "6M": 4.92, "1Y": 8.66, YTD: 6.22 },
-  { "1D": 1.08, "1W": 2.44, "1M": 3.92, "3M": 6.18, "6M": 9.34, "1Y": 15.21, YTD: 11.08 },
-];
+// API base for Schwab proxy (quotes/returns). Set VITE_SCHWAB_API_BASE in .env or Vercel to override.
+const SCHWAB_API_BASE =
+  (import.meta.env.VITE_SCHWAB_API_BASE as string) ||
+  "https://rpghub-two.vercel.app";
 
 type Preset = { name: string; tickers: string[] };
 
@@ -31,6 +29,10 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
   const [copyJustPressed, setCopyJustPressed] = useState(false);
+  const [returnsMap, setReturnsMap] = useState<Record<string, Returns>>({});
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fetchKey, setFetchKey] = useState(0); // bump to force re-fetch (Refresh)
 
   const pageStyle: React.CSSProperties = {
     maxWidth: PAGE_LAYOUT.maxWidth,
@@ -178,6 +180,45 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
     return `${sign}${value.toFixed(2)}%`;
   }
 
+  useEffect(() => {
+    if (tickers.length === 0) {
+      setReturnsMap({});
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+
+    async function loadReturns() {
+      try {
+        setLoading(true);
+        setError(null);
+        const symbolsParam = encodeURIComponent(tickers.join(","));
+        const res = await fetch(
+          `${SCHWAB_API_BASE}/api/schwab-returns?symbols=${symbolsParam}`,
+          { signal: controller.signal }
+        );
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error((body as { error?: string }).error || `Request failed with ${res.status}`);
+        }
+        const data = (await res.json()) as Record<string, Returns>;
+        setReturnsMap(data);
+      } catch (e: unknown) {
+        if (e instanceof Error && e.name === "AbortError") return;
+        setError(e instanceof Error ? e.message : "Failed to load returns from Schwab");
+        setReturnsMap({});
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    void loadReturns();
+
+    return () => controller.abort();
+  }, [tickers, fetchKey]);
+
   function addTicker() {
     const raw = tickerInput.trim().toUpperCase();
     if (!raw) return;
@@ -240,20 +281,32 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
   const selectedLookbacks = TIMEFRAMES.filter((tf) => lookbacks.has(tf));
   const allSelected = lookbacks.size === TIMEFRAMES.length;
   const canReorder = tickers.length > 1;
-  const canCopyTable = tickers.length > 0 && selectedLookbacks.length > 0;
+  const hasAnyReturns = tickers.some((t) => returnsMap[t]);
+  const canCopyTable =
+    tickers.length > 0 && selectedLookbacks.length > 0 && hasAnyReturns;
 
   function copyTableToClipboard() {
     if (!canCopyTable) return;
     const headerRow = ["Ticker", ...selectedLookbacks].join("\t");
-    const dataRows = tickers.map((ticker, i) => {
-      const returns = MOCK_RETURNS[i % MOCK_RETURNS.length];
-      const cells = [ticker, ...selectedLookbacks.map((tf) => formatPct(returns[tf as keyof MockReturns]))];
+    const dataRows = tickers.map((ticker) => {
+      const returns = returnsMap[ticker];
+      const cells = [
+        ticker,
+        ...selectedLookbacks.map((tf) => {
+          const v = returns?.[tf];
+          return v != null ? formatPct(v) : "—";
+        }),
+      ];
       return cells.join("\t");
     });
     const tsv = [headerRow, ...dataRows].join("\r\n");
     void navigator.clipboard.writeText(tsv);
     setCopyJustPressed(true);
     window.setTimeout(() => setCopyJustPressed(false), 2000);
+  }
+
+  function refreshReturns() {
+    setFetchKey((k) => k + 1);
   }
 
   function applyPreset(preset: Preset) {
@@ -271,7 +324,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
     >
       <h2 style={titleStyle}>Stock Comparison</h2>
       <p style={descStyle}>
-        Compare returns across multiple tickers. Add symbols to see returns (mock data for now). Choose which timeframes to show.
+        Compare returns across multiple tickers using live Schwab market data. Add symbols to see returns and choose which timeframes to show.
       </p>
 
       {/* Inputs + Presets side by side */}
@@ -401,51 +454,90 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
         </div>
       </div>
 
-      {/* Performance — one row per added ticker, mock data by index */}
+      {/* Performance — live returns from Schwab */}
       <div className="page-card" style={cardStyle}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: t.spacing(3) }}>
           <h3 style={cardTitleStyle}>Performance</h3>
-          {canCopyTable && (
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
-              {copyJustPressed && (
-                <span style={{ fontSize: "0.7rem", color: t.colors.primary, fontWeight: t.typography.headingWeight }}>
-                  Copied
-                </span>
-              )}
+          <div style={{ display: "flex", alignItems: "center", gap: t.spacing(2) }}>
+            {tickers.length > 0 && !loading && (
               <button
                 type="button"
-                onClick={copyTableToClipboard}
-                className="stock-comparison-copy-table"
+                onClick={refreshReturns}
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
-                  justifyContent: "center",
+                  gap: t.spacing(1),
                   padding: t.spacing(1.5),
-                  border: "none",
-                  background: "none",
-                  cursor: "pointer",
-                  color: t.colors.textMuted,
+                  border: `1px solid ${t.colors.border}`,
                   borderRadius: t.radius.sm,
+                  background: "none",
+                  color: t.colors.textMuted,
+                  cursor: "pointer",
+                  fontSize: "0.875rem",
                 }}
-                title="Copy table (Excel / Google Sheets)"
-                aria-label="Copy table to clipboard"
+                title="Refresh returns"
+                aria-label="Refresh returns from Schwab"
               >
-                <span className="material-symbols-outlined" style={{ fontSize: 22 }} aria-hidden>
-                  content_copy
-                </span>
+                <span className="material-symbols-outlined" style={{ fontSize: 20 }} aria-hidden>refresh</span>
+                Refresh
               </button>
-            </div>
-          )}
+            )}
+            {canCopyTable && (
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                {copyJustPressed && (
+                  <span style={{ fontSize: "0.7rem", color: t.colors.primary, fontWeight: t.typography.headingWeight }}>
+                    Copied
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={copyTableToClipboard}
+                  className="stock-comparison-copy-table"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    padding: t.spacing(1.5),
+                    border: "none",
+                    background: "none",
+                    cursor: "pointer",
+                    color: t.colors.textMuted,
+                    borderRadius: t.radius.sm,
+                  }}
+                  title="Copy table (Excel / Google Sheets)"
+                  aria-label="Copy table to clipboard"
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 22 }} aria-hidden>
+                    content_copy
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
         {tickers.length === 0 ? (
           <div style={{ padding: t.spacing(6), textAlign: "center" as const, color: t.colors.textMuted, fontSize: "0.9rem", border: `1px dashed ${t.colors.border}`, borderRadius: t.radius.md, backgroundColor: t.colors.background }}>
             Add tickers above to see returns.
+          </div>
+        ) : loading ? (
+          <div style={{ padding: t.spacing(6), textAlign: "center" as const, color: t.colors.textMuted, fontSize: "0.9rem", border: `1px dashed ${t.colors.border}`, borderRadius: t.radius.md, backgroundColor: t.colors.background }}>
+            Loading returns from Schwab…
+          </div>
+        ) : error && !hasAnyReturns ? (
+          <div style={{ padding: t.spacing(6), textAlign: "center" as const, color: t.colors.danger, fontSize: "0.9rem", border: `1px dashed ${t.colors.border}`, borderRadius: t.radius.md, backgroundColor: t.colors.background }}>
+            {error}
           </div>
         ) : selectedLookbacks.length === 0 ? (
           <div style={{ padding: t.spacing(6), textAlign: "center" as const, color: t.colors.textMuted, fontSize: "0.9rem", border: `1px dashed ${t.colors.border}`, borderRadius: t.radius.md, backgroundColor: t.colors.background }}>
             Select at least one timeframe.
           </div>
         ) : (
+          <>
+            {error && hasAnyReturns && (
+              <p style={{ marginBottom: t.spacing(2), fontSize: "0.875rem", color: t.colors.danger }}>
+                {error} (showing partial data.)
+              </p>
+            )}
           <div style={tableWrapStyle}>
             <table style={tableStyle}>
               <thead>
@@ -460,7 +552,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
               </thead>
               <tbody>
                 {tickers.map((ticker, i) => {
-                  const returns = MOCK_RETURNS[i % MOCK_RETURNS.length];
+                  const returns = returnsMap[ticker];
                   const isDragging = draggedIndex === i;
                   const isDropTarget = dropTargetIndex === i;
                   return (
@@ -480,11 +572,11 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
                     >
                       <td style={{ ...tdStyle, fontWeight: t.typography.headingWeight }}>{ticker}</td>
                       {selectedLookbacks.map((tf) => {
-                        const value = returns[tf as keyof MockReturns];
-                        const isPos = value >= 0;
+                        const value = returns != null ? (returns[tf] ?? null) : null;
+                        const isPos = value !== null && value >= 0;
                         return (
                           <td key={tf} style={{ ...tdNumStyle, color: isPos ? t.colors.success : t.colors.danger }}>
-                            {formatPct(value)}
+                            {value === null ? "—" : formatPct(value)}
                           </td>
                         );
                       })}
@@ -494,6 +586,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
               </tbody>
             </table>
           </div>
+          </>
         )}
       </div>
     </section>

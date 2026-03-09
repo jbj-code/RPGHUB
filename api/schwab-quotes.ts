@@ -3,6 +3,15 @@
 import { createClient } from "@supabase/supabase-js";
 
 export default async function handler(req: any, res: any) {
+  // Allow calls from the Vite dev server (localhost) as well as production.
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") {
+    res.status(200).end();
+    return;
+  }
+
   try {
     const symbols = req.query.symbols as string | undefined;
     if (!symbols) {
