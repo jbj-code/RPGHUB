@@ -1,8 +1,14 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { lightTheme, assets } from "../theme";
 
 const SESSION_KEY = "rpg-hub-unlocked";
 const SITE_PASSWORD = "RPGHUB";
+
+const SCHWAB_API_BASE =
+  (import.meta.env.VITE_SCHWAB_API_BASE as string) ||
+  "https://rpghub-two.vercel.app";
+
+type SchwabStatus = { connected: boolean; expired?: boolean } | null;
 
 export function getIsUnlocked(): boolean {
   try {
@@ -25,10 +31,29 @@ type PasswordGateProps = {
 };
 
 export function PasswordGate({ onUnlock }: PasswordGateProps) {
+  const [step, setStep] = useState<"password" | "schwab">("password");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState(false);
+  const [schwabStatus, setSchwabStatus] = useState<SchwabStatus>(null);
+  const [statusLoading, setStatusLoading] = useState(false);
   const t = lightTheme;
+
+  // After password, check Schwab token status
+  useEffect(() => {
+    if (step !== "schwab") return;
+    setStatusLoading(true);
+    fetch(`${SCHWAB_API_BASE}/api/schwab-status`)
+      .then((res) => res.json())
+      .then((data: { connected?: boolean; expired?: boolean }) => {
+        setSchwabStatus({
+          connected: !!data.connected,
+          expired: data.expired,
+        });
+      })
+      .catch(() => setSchwabStatus({ connected: false }))
+      .finally(() => setStatusLoading(false));
+  }, [step]);
 
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
@@ -37,13 +62,17 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
       if (trimmed === SITE_PASSWORD) {
         setError(false);
         setUnlocked();
-        onUnlock();
+        setStep("schwab");
       } else {
         setError(true);
       }
     },
-    [password, onUnlock]
+    [password]
   );
+
+  const handleContinue = useCallback(() => {
+    onUnlock();
+  }, [onUnlock]);
 
   const wrapStyle: React.CSSProperties = {
     minHeight: "100vh",
@@ -157,6 +186,61 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
     cursor: "pointer",
     whiteSpace: "nowrap",
   };
+
+  const smallBtnStyle: React.CSSProperties = {
+    padding: `${t.spacing(1.5)} ${t.spacing(3)}`,
+    fontSize: "0.875rem",
+    fontWeight: 600,
+    color: t.colors.textMuted,
+    backgroundColor: "transparent",
+    border: `1px solid ${t.colors.border}`,
+    borderRadius: t.radius.md,
+    cursor: "pointer",
+    marginTop: t.spacing(2),
+  };
+
+  if (step === "schwab") {
+    const connected = schwabStatus?.connected && !schwabStatus?.expired;
+    return (
+      <div style={wrapStyle}>
+        <div style={cardStyle}>
+          <div style={logoWrapStyle}>
+            <img src={assets.logo} alt="RPG H.U.B" style={logoImgStyle} />
+          </div>
+          <h1 style={titleStyle}>Schwab market data</h1>
+          {statusLoading ? (
+            <p style={instructionStyle}>Checking Schwab connection…</p>
+          ) : connected ? (
+            <>
+              <p style={instructionStyle}>
+                You're connected. Stock Comparison and Options Optimizer can use live market data.
+              </p>
+              <button type="button" style={{ ...enterBtnStyle, marginTop: t.spacing(2) }} onClick={handleContinue}>
+                Continue
+              </button>
+            </>
+          ) : (
+            <>
+              <p style={instructionStyle}>
+                Connect Schwab to use live market data on Stock Comparison and Options Optimizer. You can also connect later from those pages.
+              </p>
+              <a
+                href={`${SCHWAB_API_BASE}/api/schwab-auth`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ ...enterBtnStyle, display: "inline-block", textDecoration: "none", marginTop: t.spacing(2) }}
+              >
+                Authorize Schwab
+              </a>
+              <button type="button" style={smallBtnStyle} onClick={handleContinue}>
+                Continue without connecting
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={wrapStyle}>

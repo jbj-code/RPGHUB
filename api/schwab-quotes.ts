@@ -47,10 +47,10 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    const expiresAt = data.expires_at
+    const expiresAt = data.expires_at != null
       ? new Date(data.expires_at).getTime()
-      : 0;
-    if (Date.now() >= expiresAt) {
+      : null;
+    if (expiresAt != null && Date.now() >= expiresAt) {
       res.status(401).json({
         error: "Schwab token expired. Run the Schwab login flow again.",
       });

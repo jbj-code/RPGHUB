@@ -57,10 +57,11 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    const expiresAt = tokenRow.expires_at
+    // Only treat as expired when we have a value and it's in the past (null = skip check, let Schwab reject if bad)
+    const expiresAt = tokenRow.expires_at != null
       ? new Date(tokenRow.expires_at).getTime()
-      : 0;
-    if (Date.now() >= expiresAt) {
+      : null;
+    if (expiresAt != null && Date.now() >= expiresAt) {
       res.status(401).json({
         error: "Schwab token expired. Run the Schwab login flow again.",
       });
