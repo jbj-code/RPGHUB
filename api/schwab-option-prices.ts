@@ -180,11 +180,9 @@ export default async function handler(req: any, res: any) {
       // Run group requests sequentially per underlying to avoid rate-limit / empty responses.
       for (const [key, groupOpts] of groups.entries()) {
         const [expiry, type] = key.split("|") as [string, "C" | "P"];
-        const strikes = [...new Set(groupOpts.map((o) => o.strike))].sort(
-          (a, b) => a - b
-        );
-        const centerStrike = strikes[Math.floor(strikes.length / 2)];
 
+        // Don't pass strike= — for some symbols/expiries it can yield empty strike data.
+        // Use only fromDate/toDate + strikeCount so we get a band around ATM (includes our targets).
         const params = new URLSearchParams({
           symbol: underlying,
           contractType: type === "C" ? "CALL" : "PUT",
@@ -192,8 +190,7 @@ export default async function handler(req: any, res: any) {
           strategy: "SINGLE",
           fromDate: expiry,
           toDate: expiry,
-          strike: String(centerStrike),
-          strikeCount: "50",
+          strikeCount: "60",
         });
 
         const url =
@@ -247,10 +244,13 @@ export default async function handler(req: any, res: any) {
         if (chain.putExpDateMap) expMaps.push(chain.putExpDateMap);
 
         let matched = 0;
+        const strikeKeysSeen: string[] = [];
         for (const expMap of expMaps) {
           for (const [expKey, strikesMap] of Object.entries<any>(expMap)) {
             const expDate = toExpiryYYYYMMDD(expKey as string);
             if (expDate !== expiry) continue;
+            const keys = Object.keys(strikesMap || {});
+            strikeKeysSeen.push(...keys);
             for (const [strikeStr, contracts] of Object.entries<any>(
               strikesMap
             )) {
@@ -283,14 +283,16 @@ export default async function handler(req: any, res: any) {
           }
         }
         if (matched === 0) {
-          const keys = expMaps.flatMap((m) => Object.keys(m));
+          const expKeys = expMaps.flatMap((m) => Object.keys(m));
           console.warn(
             "[schwab-option-prices] 0 matches for",
             underlying,
             expiry,
             type,
             "response expiry keys:",
-            keys.slice(0, 5)
+            expKeys.slice(0, 5),
+            "strike keys for this expiry:",
+            strikeKeysSeen.slice(0, 10)
           );
         }
       }
