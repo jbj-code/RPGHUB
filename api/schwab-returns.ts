@@ -119,28 +119,29 @@ export default async function handler(req: any, res: any) {
       .filter(Boolean);
 
     const results: Record<string, Returns> = {};
+    let had404 = false;
 
     for (const symbol of symbols) {
       try {
-        const url =
-          "https://api.schwabapi.com/marketdata/v1/pricehistory/" +
-          encodeURIComponent(symbol) +
-          "?" +
-          new URLSearchParams({
-            periodType: "year",
-            period: "1",
-            frequencyType: "daily",
-            frequency: "1",
-            needExtendedHoursData: "false",
-          }).toString();
+        const basePath = "https://api.schwabapi.com/marketdata/v1";
+        const params = new URLSearchParams({
+          symbol,
+          periodType: "year",
+          period: "1",
+          frequencyType: "daily",
+          frequency: "1",
+          needExtendedHoursData: "false",
+        });
+        const url = `${basePath}/pricehistory?${params.toString()}`;
 
         const resp = await fetch(url, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
 
         if (!resp.ok) {
+          if (resp.status === 404) had404 = true;
           const text = await resp.text();
-          console.error("[schwab-returns] pricehistory error for", symbol, resp.status, text.slice(0, 300));
+          console.error("[schwab-returns] pricehistory error for", symbol, resp.status, text.slice(0, 400));
           continue;
         }
 
@@ -212,9 +213,12 @@ export default async function handler(req: any, res: any) {
 
     const isEmpty = Object.keys(results).length === 0;
     if (isEmpty) {
+      const hint = had404
+        ? "Schwab returned 404 for price history. In the Schwab Developer Portal, ensure your app is approved for Market Data and that Price History / historical data is enabled. If your app is in Pilot, confirm you're using the correct API base URL."
+        : "No candle data from Schwab for any symbol. Token may be expired or market data restricted. Run the Schwab OAuth flow again from the deployed app (Vercel), then retry. Check Vercel function logs for each symbol.";
       res.status(200).json({
         ...results,
-        _hint: "No candle data from Schwab for any symbol. Token may be expired or market data restricted. Run the Schwab OAuth flow again from the deployed app (Vercel), then retry. Check Vercel function logs for each symbol.",
+        _hint: hint,
       });
     } else {
       res.status(200).json(results);

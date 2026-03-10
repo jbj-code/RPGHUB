@@ -39,21 +39,23 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
   const [statusLoading, setStatusLoading] = useState(false);
   const t = lightTheme;
 
-  // After password, check Schwab token status
+  // After password, check Schwab token status (Supabase). If already connected, skip the Schwab step and go in.
   useEffect(() => {
     if (step !== "schwab") return;
     setStatusLoading(true);
     fetch(`${SCHWAB_API_BASE}/api/schwab-status`)
       .then((res) => res.json())
       .then((data: { connected?: boolean; expired?: boolean }) => {
+        const connected = !!data.connected && !data.expired;
         setSchwabStatus({
           connected: !!data.connected,
           expired: data.expired,
         });
+        if (connected) onUnlock();
       })
       .catch(() => setSchwabStatus({ connected: false }))
       .finally(() => setStatusLoading(false));
-  }, [step]);
+  }, [step, onUnlock]);
 
   // When user returns to this tab after authorizing in the other tab, re-check and let them in if connected
   useEffect(() => {
@@ -224,6 +226,7 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
 
   if (step === "schwab") {
     const connected = schwabStatus?.connected && !schwabStatus?.expired;
+    if (connected) return null;
     return (
       <div style={wrapStyle}>
         <div style={cardStyle}>
