@@ -29,6 +29,16 @@ function parseBody(req: any): OptionInput[] {
   }
 }
 
+/** Build OCC option symbol: 6-char root + YYMMDD + C|P + 8-digit strike (strike * 1000). */
+function toOCCSymbol(opt: OptionInput): string {
+  const root = opt.underlying.trim().toUpperCase().padEnd(6).slice(0, 6);
+  const [y, m, d] = opt.expiry.split("-");
+  const yymmdd = `${y!.slice(-2)}${m}${d}`;
+  const strikeVal = Math.round(opt.strike * 1000);
+  const strikeStr = String(strikeVal).padStart(8, "0");
+  return `${root}${yymmdd}${opt.type}${strikeStr}`;
+}
+
 export default async function handler(req: any, res: any) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
@@ -145,164 +155,110 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    const byUnderlying: Record<string, OptionInput[]> = {};
+    const results: Record<string, OptionPrice> = {};
+    const occToOpt = new Map<string, OptionInput>();
+
     for (const opt of inputs) {
       const u = opt.underlying.trim().toUpperCase();
       if (!u) continue;
-      if (!byUnderlying[u]) byUnderlying[u] = [];
-      byUnderlying[u].push(opt);
+      const occ = toOCCSymbol(opt);
+      occToOpt.set(occ, opt);
     }
 
-    const results: Record<string, OptionPrice> = {};
-
-    /** Normalize API expiry key to YYYY-MM-DD for matching */
-    function toExpiryYYYYMMDD(expKey: string): string {
-      const datePart = expKey.split(":")[0].trim();
-      if (/^\d{8}$/.test(datePart)) {
-        return `${datePart.slice(0, 4)}-${datePart.slice(4, 6)}-${datePart.slice(6, 8)}`;
+    const allOCC = [...occToOpt.keys()];
+    const BATCH = 30;
+    let firstResponseBody: any = null;
+    for (let i = 0; i < allOCC.length; i += BATCH) {
+      const batch = allOCC.slice(i, i + BATCH);
+      const symbolsParam = batch.join(",");
+      const url =
+        "https://api.schwabapi.com/marketdata/v1/quotes?" +
+        new URLSearchParams({ symbols: symbolsParam }).toString();
+      const resp = await fetch(url, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!resp.ok) {
+        const text = await resp.text();
+        console.error(
+          "[schwab-option-prices] quotes error",
+          resp.status,
+          text.slice(0, 300)
+        );
+        continue;
       }
-      return datePart;
-    }
-
-    async function fetchChainsForUnderlying(
-      underlying: string,
-      opts: OptionInput[]
-    ): Promise<void> {
-      // Group by expiry + type so each request is a very small slice of the chain.
-      const groups = new Map<string, OptionInput[]>();
-      for (const opt of opts) {
-        const key = `${opt.expiry}|${opt.type}`;
-        const existing = groups.get(key);
-        if (existing) existing.push(opt);
-        else groups.set(key, [opt]);
-      }
-
-      // Run group requests sequentially per underlying to avoid rate-limit / empty responses.
-      for (const [key, groupOpts] of groups.entries()) {
-        const [expiry, type] = key.split("|") as [string, "C" | "P"];
-
-        // Don't pass strike= — for some symbols/expiries it can yield empty strike data.
-        // Use only fromDate/toDate + strikeCount so we get a band around ATM (includes our targets).
-        const params = new URLSearchParams({
-          symbol: underlying,
-          contractType: type === "C" ? "CALL" : "PUT",
-          includeUnderlyingQuote: "FALSE",
-          strategy: "SINGLE",
-          fromDate: expiry,
-          toDate: expiry,
-          strikeCount: "60",
-        });
-
-        const url =
-          "https://api.schwabapi.com/marketdata/v1/chains?" +
-          params.toString();
-        const resp = await fetch(url, {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
-        if (!resp.ok) {
-          const text = await resp.text();
-          console.error(
-            "[schwab-option-prices] chains error for",
-            underlying,
-            expiry,
-            type,
-            resp.status,
-            text.slice(0, 400)
-          );
-          continue;
-        }
-        const body: any = await resp.json();
-        let chain =
-          body?.callExpDateMap || body?.putExpDateMap ? body : null;
-        if (
-          !chain &&
-          Array.isArray(body?.optionChain) &&
-          body.optionChain.length > 0
-        ) {
-          chain = body.optionChain[0];
-        }
-        if (!chain) {
-          console.warn(
-            "[schwab-option-prices] no callExpDateMap/putExpDateMap for",
-            underlying,
-            "expiry",
-            expiry,
-            "type",
-            type
-          );
-          continue;
-        }
-
-        const targetMap = new Map<string, OptionInput>();
-        for (const opt of groupOpts) {
-          const tKey = `${opt.expiry}|${opt.strike}|${opt.type}`;
-          targetMap.set(tKey, opt);
-        }
-
-        const expMaps: { [k: string]: any }[] = [];
-        if (chain.callExpDateMap) expMaps.push(chain.callExpDateMap);
-        if (chain.putExpDateMap) expMaps.push(chain.putExpDateMap);
-
-        let matched = 0;
-        const strikeKeysSeen: string[] = [];
-        for (const expMap of expMaps) {
-          for (const [expKey, strikesMap] of Object.entries<any>(expMap)) {
-            const expDate = toExpiryYYYYMMDD(expKey as string);
-            if (expDate !== expiry) continue;
-            const keys = Object.keys(strikesMap || {});
-            strikeKeysSeen.push(...keys);
-            for (const [strikeStr, contracts] of Object.entries<any>(
-              strikesMap
-            )) {
-              const strike = Number(strikeStr);
-              if (!Number.isFinite(strike)) continue;
-              const list: any[] = Array.isArray(contracts)
-                ? contracts
-                : [];
-              if (!list.length) continue;
-              const c = list[0];
-              const cType: "C" | "P" =
-                c.putCall === "CALL" || c.putCall === "C" ? "C" : "P";
-              if (cType !== type) continue;
-              const tKey = `${expiry}|${strike}|${type}`;
-              const match = targetMap.get(tKey);
-              if (!match) continue;
-              matched++;
-              const id = `${match.underlying.toUpperCase()} ${
-                match.expiry
-              } ${match.strike} ${match.type}`;
-              results[id] = {
-                symbol: c.symbol ?? id,
-                description: c.description,
-                bid: typeof c.bid === "number" ? c.bid : undefined,
-                ask: typeof c.ask === "number" ? c.ask : undefined,
-                last: typeof c.last === "number" ? c.last : undefined,
-                mark: typeof c.mark === "number" ? c.mark : undefined,
-              };
-            }
+      const body: any = await resp.json();
+      if (firstResponseBody === null) firstResponseBody = body;
+      // Build map: response may be { [symbol]: quote } or { quotes: [ { symbol, ... } ] }
+      const bySymbol = new Map<string, any>();
+      if (body && typeof body === "object") {
+        if (Array.isArray(body)) {
+          for (const q of body) {
+            if (q?.symbol) bySymbol.set(String(q.symbol).trim(), q);
+          }
+        } else if (Array.isArray(body.quotes)) {
+          for (const q of body.quotes) {
+            if (q?.symbol) bySymbol.set(String(q.symbol).trim(), q);
+          }
+        } else {
+          for (const [k, v] of Object.entries(body)) {
+            if (v && typeof v === "object") bySymbol.set(String(k).trim(), v);
           }
         }
-        if (matched === 0) {
-          const expKeys = expMaps.flatMap((m) => Object.keys(m));
-          console.warn(
-            "[schwab-option-prices] 0 matches for",
-            underlying,
-            expiry,
-            type,
-            "response expiry keys:",
-            expKeys.slice(0, 5),
-            "strike keys for this expiry:",
-            strikeKeysSeen.slice(0, 10)
-          );
-        }
+      }
+      for (const occ of batch) {
+        const opt = occToOpt.get(occ);
+        if (!opt) continue;
+        const q =
+          bySymbol.get(occ) ??
+          bySymbol.get(occ.replace(/\s+/g, "")) ??
+          body?.[occ];
+        if (!q || typeof q !== "object") continue;
+        const bid =
+          typeof q.bid === "number"
+            ? q.bid
+            : typeof q.bidPrice === "number"
+              ? q.bidPrice
+              : undefined;
+        const ask =
+          typeof q.ask === "number"
+            ? q.ask
+            : typeof q.askPrice === "number"
+              ? q.askPrice
+              : undefined;
+        const last =
+          typeof q.last === "number"
+            ? q.last
+            : typeof q.lastPrice === "number"
+              ? q.lastPrice
+              : undefined;
+        const mark =
+          typeof q.mark === "number"
+            ? q.mark
+            : typeof q.markPrice === "number"
+              ? q.markPrice
+              : undefined;
+        const id = `${opt.underlying.toUpperCase()} ${opt.expiry} ${opt.strike} ${opt.type}`;
+        results[id] = {
+          symbol: (q.symbol as string) ?? occ,
+          description: q.description,
+          bid,
+          ask,
+          last,
+          mark,
+        };
       }
     }
 
-    await Promise.all(
-      Object.entries(byUnderlying).map(([underlying, opts]) =>
-        fetchChainsForUnderlying(underlying, opts)
-      )
-    );
+    if (Object.keys(results).length === 0 && allOCC.length > 0) {
+      console.warn(
+        "[schwab-option-prices] 0 results; first OCC sample:",
+        allOCC[0],
+        "Response keys:",
+        typeof firstResponseBody === "object" && firstResponseBody !== null
+          ? Object.keys(firstResponseBody).slice(0, 5)
+          : "n/a"
+      );
+    }
 
     res.status(200).json(results);
   } catch (err) {
