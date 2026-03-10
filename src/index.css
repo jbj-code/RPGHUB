@@ -62,6 +62,19 @@ body {
   background: rgba(68, 193, 193, 0.2) !important;
 }
 
+/* Options Pricing: copy table button — same hover/active as Stock Comparison */
+.options-pricing-page .options-pricing-copy-table {
+  transition: color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+.options-pricing-page .options-pricing-copy-table:hover {
+  color: var(--checkbox-primary, #44c1c1) !important;
+  background: rgba(68, 193, 193, 0.1) !important;
+}
+.options-pricing-page .options-pricing-copy-table:active {
+  transform: scale(0.92);
+  background: rgba(68, 193, 193, 0.2) !important;
+}
+
 /* Clear tickers button: hover and active */
 .stock-comparison-page .stock-comparison-clear-tickers {
   transition: color 0.15s ease, background 0.15s ease, transform 0.1s ease;

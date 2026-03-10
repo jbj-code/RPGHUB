@@ -278,6 +278,7 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
                 <button
                   type="button"
                   onClick={copyTableToClipboard}
+                  className="options-pricing-copy-table"
                   style={{
                     display: "inline-flex",
                     alignItems: "center",

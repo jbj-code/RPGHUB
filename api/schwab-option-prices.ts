@@ -162,8 +162,9 @@ export default async function handler(req: any, res: any) {
         includeUnderlyingQuote: "FALSE",
         strategy: "SINGLE",
       });
+      // Production Market Data API uses /chains (not optionchains)
       const url =
-        "https://api.schwabapi.com/marketdata/v1/optionchains?" +
+        "https://api.schwabapi.com/marketdata/v1/chains?" +
         params.toString();
       const resp = await fetch(url, {
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -171,7 +172,7 @@ export default async function handler(req: any, res: any) {
       if (!resp.ok) {
         const text = await resp.text();
         console.error(
-          "[schwab-option-prices] optionchains error for",
+          "[schwab-option-prices] chains error for",
           underlying,
           resp.status,
           text.slice(0, 400)
