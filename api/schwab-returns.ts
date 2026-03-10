@@ -180,42 +180,56 @@ export default async function handler(req: any, res: any) {
 
         const latestDate = new Date(latest.datetime);
 
-        // 1D / 1W use calendar offsets (snap to next trading day via pctFromDate)
-        const d1 = new Date(latestDate.getTime());
-        d1.setUTCDate(d1.getUTCDate() - 1);
-        const w1 = new Date(latestDate.getTime());
-        w1.setUTCDate(w1.getUTCDate() - 7);
+        // 1D: one trading day = previous candle vs latest (avoids calendar/same-candle 0% issue)
+        const oneDayPct =
+          sorted.length >= 2 && sorted[sorted.length - 2].close > 0
+            ? ((latestClose / sorted[sorted.length - 2].close - 1) * 100)
+            : 0;
 
-        // Month-based offsets
-        const m1 = new Date(latestDate.getTime());
-        m1.setUTCMonth(m1.getUTCMonth() - 1);
-        const m3 = new Date(latestDate.getTime());
-        m3.setUTCMonth(m3.getUTCMonth() - 3);
-        const m6 = new Date(latestDate.getTime());
-        m6.setUTCMonth(m6.getUTCMonth() - 6);
+        // 1W: 5 trading days back (broker-style)
+        const idx5 = sorted.length - 6;
+        const oneWeekPct =
+          idx5 >= 0 && sorted[idx5].close > 0
+            ? ((latestClose / sorted[idx5].close - 1) * 100)
+            : pctFromDate(new Date(latestDate.getTime() - 7 * 24 * 60 * 60 * 1000));
 
-        const y1 = new Date(latestDate.getTime());
-        y1.setUTCFullYear(y1.getUTCFullYear() - 1);
+        // Helper: return % from N trading days ago (index = length - 1 - N)
+        function pctFromCandlesBack(n: number): number {
+          const idx = sorted.length - 1 - n;
+          if (idx < 0 || !sorted[idx]?.close || sorted[idx].close <= 0) return 0;
+          return (latestClose / sorted[idx].close - 1) * 100;
+        }
+        // 1M ~21, 3M ~63, 6M ~126, 1Y ~252 trading days; fallback to calendar if not enough data
+        const m1Date = new Date(latestDate.getTime());
+        m1Date.setUTCMonth(m1Date.getUTCMonth() - 1);
+        const m3Date = new Date(latestDate.getTime());
+        m3Date.setUTCMonth(m3Date.getUTCMonth() - 3);
+        const y1Date = new Date(latestDate.getTime());
+        y1Date.setUTCFullYear(y1Date.getUTCFullYear() - 1);
 
-        // YTD: find first candle in current calendar year.
+        const oneMonthPct = sorted.length > 22 ? pctFromCandlesBack(21) : pctFromDate(m1Date);
+        const threeMonthPct = sorted.length > 64 ? pctFromCandlesBack(63) : pctFromDate(m3Date);
+        const sixMonthPct = sorted.length > 127 ? pctFromCandlesBack(126) : pctFromDate(new Date(latestDate.getTime() - 180 * 24 * 60 * 60 * 1000));
+        const oneYearPct = sorted.length > 253 ? pctFromCandlesBack(252) : pctFromDate(y1Date);
+
+        // YTD: first candle in current calendar year
         const yearStart = new Date(latest.datetime);
         yearStart.setUTCMonth(0, 1);
         yearStart.setUTCHours(0, 0, 0, 0);
         const firstThisYear =
-          sorted.find((c) => c.datetime >= yearStart.getTime()) ??
-          sorted[0];
+          sorted.find((c) => c.datetime >= yearStart.getTime()) ?? sorted[0];
         const ytd =
           firstThisYear && firstThisYear.close > 0
-            ? ((latestClose / firstThisYear.close - 1) * 100)
+            ? (latestClose / firstThisYear.close - 1) * 100
             : 0;
 
         results[symbol] = {
-          "1D": pctFromDate(d1),
-          "1W": pctFromDate(w1),
-          "1M": pctFromDate(m1),
-          "3M": pctFromDate(m3),
-          "6M": pctFromDate(m6),
-          "1Y": pctFromDate(y1),
+          "1D": oneDayPct,
+          "1W": oneWeekPct,
+          "1M": oneMonthPct,
+          "3M": threeMonthPct,
+          "6M": sixMonthPct,
+          "1Y": oneYearPct,
           YTD: ytd,
         };
       } catch (innerErr) {

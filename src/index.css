@@ -162,7 +162,8 @@ body {
 .home-hero-logo {
   animation: home-hero-logo 1s ease-out 0.2s both;
 }
-.home-hero-hub {
+.home-hero-hub,
+.home-hero-tagline {
   animation: home-hero-hub 0.8s ease-out 0.35s both;
   letter-spacing: 0.02em;
 }

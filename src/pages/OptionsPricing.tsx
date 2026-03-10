@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { Theme } from "../theme";
 import { getPrimaryButtonStyle, PAGE_LAYOUT } from "../theme";
 
@@ -62,11 +62,18 @@ function parseLine(line: string): ParsedOption | null {
 export function OptionsPricing({ theme: t }: OptionsPricingProps) {
   const [input, setInput] = useState("");
   const [parsed, setParsed] = useState<ParsedOption[]>([]);
+  const [resultOrder, setResultOrder] = useState<string[]>([]);
   const [prices, setPrices] = useState<Record<string, OptionPrice>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copyJustPressed, setCopyJustPressed] = useState(false);
   const [copiedColumn, setCopiedColumn] = useState<"bid" | "ask" | "last" | "mark" | null>(null);
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    setResultOrder(parsed.map((p) => p.key));
+  }, [parsed]);
 
   const pageStyle: React.CSSProperties = {
     maxWidth: PAGE_LAYOUT.maxWidth,
@@ -108,6 +115,68 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
     marginBottom: t.spacing(2),
   };
 
+  const tableWrapStyle: React.CSSProperties = {
+    overflowX: "auto",
+    borderRadius: t.radius.md,
+    border: `1px solid ${t.colors.border}`,
+  };
+  const tableStyle: React.CSSProperties = {
+    width: "100%",
+    borderCollapse: "collapse",
+    fontSize: "0.9rem",
+    fontFamily: t.typography.fontFamily,
+  };
+  const thStyle: React.CSSProperties = {
+    textAlign: "left",
+    fontWeight: t.typography.headingWeight,
+    padding: `${t.spacing(2)} ${t.spacing(3)}`,
+    backgroundColor: t.colors.background,
+    borderBottom: `1px solid ${t.colors.border}`,
+    color: t.colors.textMuted,
+    fontSize: "0.8rem",
+  };
+  const thNumStyle: React.CSSProperties = { ...thStyle, textAlign: "right" };
+  const tdStyle: React.CSSProperties = {
+    padding: `${t.spacing(2)} ${t.spacing(3)}`,
+    borderBottom: `1px solid ${t.colors.border}`,
+    color: t.colors.text,
+  };
+  const tdNumStyle: React.CSSProperties = {
+    ...tdStyle,
+    textAlign: "right" as const,
+    fontVariantNumeric: "tabular-nums",
+  };
+
+  const canReorder = resultOrder.length > 1;
+  function handleDragStart(index: number) {
+    setDraggedIndex(index);
+  }
+  function handleDragOver(e: React.DragEvent, index: number) {
+    e.preventDefault();
+    if (draggedIndex === null) return;
+    setDropTargetIndex(index);
+  }
+  function handleDragLeave() {
+    setDropTargetIndex(null);
+  }
+  function handleDragEnd() {
+    setDraggedIndex(null);
+    setDropTargetIndex(null);
+  }
+  function handleDrop(e: React.DragEvent, dropIndex: number) {
+    e.preventDefault();
+    setDropTargetIndex(null);
+    if (draggedIndex === null || draggedIndex === dropIndex) {
+      setDraggedIndex(null);
+      return;
+    }
+    const newOrder = [...resultOrder];
+    const [removed] = newOrder.splice(draggedIndex, 1);
+    newOrder.splice(dropIndex, 0, removed);
+    setResultOrder(newOrder);
+    setDraggedIndex(null);
+  }
+
   const textareaStyle: React.CSSProperties = {
     width: "100%",
     minHeight: 160,
@@ -130,7 +199,9 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
   function copyTableToClipboard() {
     if (!canCopyTable()) return;
     const header = ["Input", "Schwab symbol", "Bid", "Ask", "Last", "Mark"].join("\t");
-    const rows = parsed.map((p) => {
+    const rows = resultOrder.map((key) => {
+      const p = parsed.find((x) => x.key === key);
+      if (!p) return "";
       const id = `${p.underlying} ${p.expiry} ${p.strike} ${p.type}`;
       const q = prices[id];
       const cells = [
@@ -142,7 +213,7 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
         q?.mark != null ? q.mark.toFixed(2) : "",
       ];
       return cells.join("\t");
-    });
+    }).filter(Boolean);
     const tsv = [header, ...rows].join("\r\n");
     void navigator.clipboard.writeText(tsv);
     setCopyJustPressed(true);
@@ -151,7 +222,9 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
 
   function copyColumnToClipboard(field: "bid" | "ask" | "last" | "mark") {
     if (parsed.length === 0) return;
-    const lines = parsed.map((p) => {
+    const lines = resultOrder.map((key) => {
+      const p = parsed.find((x) => x.key === key);
+      if (!p) return "";
       const id = `${p.underlying} ${p.expiry} ${p.strike} ${p.type}`;
       const q = prices[id];
       const value = q?.[field];
@@ -337,42 +410,16 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
               </div>
             )}
           </div>
-          <div style={{ overflowX: "auto" }}>
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: "0.85rem",
-              }}
-            >
+          <div style={tableWrapStyle}>
+            <table style={tableStyle}>
               <thead>
                 <tr>
+                  <th style={thStyle}>Input</th>
+                  <th style={thStyle}>Schwab symbol</th>
                   <th
                     style={{
-                      textAlign: "left",
-                      padding: t.spacing(2),
-                      color: t.colors.textMuted,
-                      fontWeight: 600,
-                    }}
-                  >
-                    Input
-                  </th>
-                  <th
-                    style={{
-                      textAlign: "left",
-                      padding: t.spacing(2),
-                      color: t.colors.textMuted,
-                      fontWeight: 600,
-                    }}
-                  >
-                    Schwab symbol
-                  </th>
-                  <th
-                    style={{
-                      textAlign: "right",
-                      padding: t.spacing(2),
-                      color: copiedColumn === "bid" ? t.colors.primary : t.colors.textMuted,
-                      fontWeight: 600,
+                      ...thNumStyle,
+                      color: copiedColumn === "bid" ? t.colors.primary : undefined,
                       cursor: "pointer",
                       transition: "color 0.2s ease",
                     }}
@@ -383,10 +430,8 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
                   </th>
                   <th
                     style={{
-                      textAlign: "right",
-                      padding: t.spacing(2),
-                      color: copiedColumn === "ask" ? t.colors.primary : t.colors.textMuted,
-                      fontWeight: 600,
+                      ...thNumStyle,
+                      color: copiedColumn === "ask" ? t.colors.primary : undefined,
                       cursor: "pointer",
                       transition: "color 0.2s ease",
                     }}
@@ -397,10 +442,8 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
                   </th>
                   <th
                     style={{
-                      textAlign: "right",
-                      padding: t.spacing(2),
-                      color: copiedColumn === "last" ? t.colors.primary : t.colors.textMuted,
-                      fontWeight: 600,
+                      ...thNumStyle,
+                      color: copiedColumn === "last" ? t.colors.primary : undefined,
                       cursor: "pointer",
                       transition: "color 0.2s ease",
                     }}
@@ -411,10 +454,8 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
                   </th>
                   <th
                     style={{
-                      textAlign: "right",
-                      padding: t.spacing(2),
-                      color: copiedColumn === "mark" ? t.colors.primary : t.colors.textMuted,
-                      fontWeight: 600,
+                      ...thNumStyle,
+                      color: copiedColumn === "mark" ? t.colors.primary : undefined,
                       cursor: "pointer",
                       transition: "color 0.2s ease",
                     }}
@@ -426,62 +467,34 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
                 </tr>
               </thead>
               <tbody>
-                {parsed.map((p) => {
+                {resultOrder.map((key, i) => {
+                  const p = parsed.find((x) => x.key === key);
+                  if (!p) return null;
                   const id = `${p.underlying} ${p.expiry} ${p.strike} ${p.type}`;
                   const q = prices[id];
+                  const isDragging = draggedIndex === i;
+                  const isDropTarget = dropTargetIndex === i;
                   return (
                     <tr
                       key={p.key}
-                      style={{ borderBottom: `1px solid ${t.colors.border}` }}
+                      draggable={canReorder}
+                      onDragStart={() => canReorder && handleDragStart(i)}
+                      onDragOver={(e) => canReorder && handleDragOver(e, i)}
+                      onDragLeave={handleDragLeave}
+                      onDragEnd={handleDragEnd}
+                      onDrop={(e) => canReorder && handleDrop(e, i)}
+                      style={{
+                        cursor: canReorder ? "grab" : undefined,
+                        opacity: isDragging ? 0.5 : 1,
+                        backgroundColor: isDropTarget ? t.colors.background : undefined,
+                      }}
                     >
-                      <td
-                        style={{
-                          padding: t.spacing(2),
-                          fontFamily: "monospace",
-                        }}
-                      >
-                        {p.raw}
-                      </td>
-                      <td
-                        style={{
-                          padding: t.spacing(2),
-                          fontFamily: "monospace",
-                        }}
-                      >
-                        {q?.symbol ?? "—"}
-                      </td>
-                      <td
-                        style={{
-                          padding: t.spacing(2),
-                          textAlign: "right",
-                        }}
-                      >
-                        {q?.bid != null ? q.bid.toFixed(2) : "—"}
-                      </td>
-                      <td
-                        style={{
-                          padding: t.spacing(2),
-                          textAlign: "right",
-                        }}
-                      >
-                        {q?.ask != null ? q.ask.toFixed(2) : "—"}
-                      </td>
-                      <td
-                        style={{
-                          padding: t.spacing(2),
-                          textAlign: "right",
-                        }}
-                      >
-                        {q?.last != null ? q.last.toFixed(2) : "—"}
-                      </td>
-                      <td
-                        style={{
-                          padding: t.spacing(2),
-                          textAlign: "right",
-                        }}
-                      >
-                        {q?.mark != null ? q.mark.toFixed(2) : "—"}
-                      </td>
+                      <td style={{ ...tdStyle, fontFamily: "monospace" }}>{p.raw}</td>
+                      <td style={{ ...tdStyle, fontFamily: "monospace" }}>{q?.symbol ?? "—"}</td>
+                      <td style={tdNumStyle}>{q?.bid != null ? q.bid.toFixed(2) : "—"}</td>
+                      <td style={tdNumStyle}>{q?.ask != null ? q.ask.toFixed(2) : "—"}</td>
+                      <td style={tdNumStyle}>{q?.last != null ? q.last.toFixed(2) : "—"}</td>
+                      <td style={tdNumStyle}>{q?.mark != null ? q.mark.toFixed(2) : "—"}</td>
                     </tr>
                   );
                 })}
