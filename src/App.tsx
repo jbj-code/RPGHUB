@@ -3,8 +3,16 @@ import { lightTheme, darkTheme, type ThemeMode, type Theme } from "./theme";
 import { NavBar, SIDEBAR_WIDTH } from "./components/NavBar";
 import { PasswordGate, getIsUnlocked } from "./components/PasswordGate";
 import { Home, OptionsOptimizer, StockComparison, Rankinator, RaiseAi, WeeklyHighlights } from "./pages";
+import { OptionsPricing } from "./pages/OptionsPricing";
 
-export type Page = "home" | "put-optimizer" | "stock-comparison" | "rankinator" | "raise-ai" | "weekly-highlights";
+export type Page =
+  | "home"
+  | "put-optimizer"
+  | "stock-comparison"
+  | "options-pricing"
+  | "rankinator"
+  | "raise-ai"
+  | "weekly-highlights";
 
 const PAGE_PADDING_H = 9;
 
@@ -58,6 +66,7 @@ function App() {
           {page === "home" && <Home theme={t} />}
           {page === "put-optimizer" && <OptionsOptimizer theme={t} />}
           {page === "stock-comparison" && <StockComparison theme={t} />}
+          {page === "options-pricing" && <OptionsPricing theme={t} />}
           {page === "rankinator" && <Rankinator theme={t} />}
           {page === "raise-ai" && <RaiseAi theme={t} />}
           {page === "weekly-highlights" && <WeeklyHighlights theme={t} />}

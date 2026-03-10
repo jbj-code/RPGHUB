@@ -98,6 +98,7 @@ export function NavBar({ page, onNavigate, mode, onToggleMode, theme: t }: NavBa
 
   const links: { page: Page; label: string; icon: string; externalUrl?: string }[] = [
     { page: "put-optimizer", label: "Options Optimizer", icon: "tune" },
+    { page: "options-pricing", label: "Options Pricing", icon: "paid" },
     { page: "stock-comparison", label: "Stock Comparison", icon: "compare_arrows" },
     {
       page: "rankinator",
