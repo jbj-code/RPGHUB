@@ -499,11 +499,6 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
             )}
             {canCopyTable && (
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
-                {copyJustPressed && (
-                  <span style={{ fontSize: "0.7rem", color: t.colors.primary, fontWeight: t.typography.headingWeight }}>
-                    Copied
-                  </span>
-                )}
                 <button
                   type="button"
                   onClick={copyTableToClipboard}
@@ -512,18 +507,44 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
                     display: "inline-flex",
                     alignItems: "center",
                     justifyContent: "center",
-                    padding: t.spacing(1.5),
+                    width: 34,
+                    height: 34,
+                    padding: 0,
                     border: "none",
                     background: "none",
                     cursor: "pointer",
                     color: t.colors.textMuted,
                     borderRadius: t.radius.sm,
+                    position: "relative",
                   }}
                   title="Copy table (Excel / Google Sheets)"
                   aria-label="Copy table to clipboard"
                 >
-                  <span className="material-symbols-outlined" style={{ fontSize: 22 }} aria-hidden>
+                  <span
+                    className="material-symbols-outlined"
+                    style={{
+                      fontSize: 22,
+                      position: "absolute",
+                      opacity: copyJustPressed ? 0 : 1,
+                      transition: "opacity 0.2s ease",
+                      pointerEvents: "none",
+                    }}
+                    aria-hidden
+                  >
                     content_copy
+                  </span>
+                  <span
+                    className="material-symbols-outlined"
+                    style={{
+                      fontSize: 22,
+                      position: "absolute",
+                      opacity: copyJustPressed ? 1 : 0,
+                      transition: "opacity 0.2s ease",
+                      pointerEvents: "none",
+                    }}
+                    aria-hidden
+                  >
+                    check
                   </span>
                 </button>
               </div>

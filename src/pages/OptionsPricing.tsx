@@ -66,6 +66,7 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copyJustPressed, setCopyJustPressed] = useState(false);
+  const [copiedColumn, setCopiedColumn] = useState<"bid" | "ask" | "last" | "mark" | null>(null);
 
   const pageStyle: React.CSSProperties = {
     maxWidth: PAGE_LAYOUT.maxWidth,
@@ -146,6 +147,20 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
     void navigator.clipboard.writeText(tsv);
     setCopyJustPressed(true);
     window.setTimeout(() => setCopyJustPressed(false), 2000);
+  }
+
+  function copyColumnToClipboard(field: "bid" | "ask" | "last" | "mark") {
+    if (parsed.length === 0) return;
+    const lines = parsed.map((p) => {
+      const id = `${p.underlying} ${p.expiry} ${p.strike} ${p.type}`;
+      const q = prices[id];
+      const value = q?.[field];
+      return value != null && Number.isFinite(value) ? value.toString() : "";
+    });
+    const output = [field.toUpperCase(), ...lines].join("\r\n");
+    void navigator.clipboard.writeText(output);
+    setCopiedColumn(field);
+    window.setTimeout(() => setCopiedColumn(null), 2000);
   }
 
   async function handleFetch() {
@@ -264,17 +279,6 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
                   gap: 2,
                 }}
               >
-                {copyJustPressed && (
-                  <span
-                    style={{
-                      fontSize: "0.7rem",
-                      color: t.colors.primary,
-                      fontWeight: t.typography.headingWeight,
-                    }}
-                  >
-                    Copied
-                  </span>
-                )}
                 <button
                   type="button"
                   onClick={copyTableToClipboard}
@@ -283,22 +287,44 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
                     display: "inline-flex",
                     alignItems: "center",
                     justifyContent: "center",
-                    padding: t.spacing(1.5),
+                    width: 34,
+                    height: 34,
+                    padding: 0,
                     border: "none",
                     background: "none",
                     cursor: "pointer",
                     color: t.colors.textMuted,
                     borderRadius: t.radius.sm,
+                    position: "relative",
                   }}
                   title="Copy table (Excel / Google Sheets)"
                   aria-label="Copy table to clipboard"
                 >
                   <span
                     className="material-symbols-outlined"
-                    style={{ fontSize: 22 }}
+                    style={{
+                      fontSize: 22,
+                      position: "absolute",
+                      opacity: copyJustPressed ? 0 : 1,
+                      transition: "opacity 0.2s ease",
+                      pointerEvents: "none",
+                    }}
                     aria-hidden
                   >
                     content_copy
+                  </span>
+                  <span
+                    className="material-symbols-outlined"
+                    style={{
+                      fontSize: 22,
+                      position: "absolute",
+                      opacity: copyJustPressed ? 1 : 0,
+                      transition: "opacity 0.2s ease",
+                      pointerEvents: "none",
+                    }}
+                    aria-hidden
+                  >
+                    check
                   </span>
                 </button>
               </div>
@@ -338,9 +364,13 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
                     style={{
                       textAlign: "right",
                       padding: t.spacing(2),
-                      color: t.colors.textMuted,
+                      color: copiedColumn === "bid" ? t.colors.primary : t.colors.textMuted,
                       fontWeight: 600,
+                      cursor: "pointer",
+                      transition: "color 0.2s ease",
                     }}
+                    onClick={() => copyColumnToClipboard("bid")}
+                    title="Copy Bid column"
                   >
                     Bid
                   </th>
@@ -348,9 +378,13 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
                     style={{
                       textAlign: "right",
                       padding: t.spacing(2),
-                      color: t.colors.textMuted,
+                      color: copiedColumn === "ask" ? t.colors.primary : t.colors.textMuted,
                       fontWeight: 600,
+                      cursor: "pointer",
+                      transition: "color 0.2s ease",
                     }}
+                    onClick={() => copyColumnToClipboard("ask")}
+                    title="Copy Ask column"
                   >
                     Ask
                   </th>
@@ -358,9 +392,13 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
                     style={{
                       textAlign: "right",
                       padding: t.spacing(2),
-                      color: t.colors.textMuted,
+                      color: copiedColumn === "last" ? t.colors.primary : t.colors.textMuted,
                       fontWeight: 600,
+                      cursor: "pointer",
+                      transition: "color 0.2s ease",
                     }}
+                    onClick={() => copyColumnToClipboard("last")}
+                    title="Copy Last column"
                   >
                     Last
                   </th>
@@ -368,9 +406,13 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
                     style={{
                       textAlign: "right",
                       padding: t.spacing(2),
-                      color: t.colors.textMuted,
+                      color: copiedColumn === "mark" ? t.colors.primary : t.colors.textMuted,
                       fontWeight: 600,
+                      cursor: "pointer",
+                      transition: "color 0.2s ease",
                     }}
+                    onClick={() => copyColumnToClipboard("mark")}
+                    title="Copy Mark column"
                   >
                     Mark
                   </th>

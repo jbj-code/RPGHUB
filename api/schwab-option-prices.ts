@@ -155,79 +155,139 @@ export default async function handler(req: any, res: any) {
 
     const results: Record<string, OptionPrice> = {};
 
-    for (const [underlying, opts] of Object.entries(byUnderlying)) {
-      const params = new URLSearchParams({
-        symbol: underlying,
-        contractType: "ALL",
-        includeUnderlyingQuote: "FALSE",
-        strategy: "SINGLE",
-      });
-      // Production Market Data API uses /chains (not optionchains)
-      const url =
-        "https://api.schwabapi.com/marketdata/v1/chains?" +
-        params.toString();
-      const resp = await fetch(url, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!resp.ok) {
-        const text = await resp.text();
-        console.error(
-          "[schwab-option-prices] chains error for",
-          underlying,
-          resp.status,
-          text.slice(0, 400)
-        );
-        continue;
+    /** Normalize API expiry key to YYYY-MM-DD for matching */
+    function toExpiryYYYYMMDD(expKey: string): string {
+      const datePart = expKey.split(":")[0].trim();
+      if (/^\d{8}$/.test(datePart)) {
+        return `${datePart.slice(0, 4)}-${datePart.slice(4, 6)}-${datePart.slice(6, 8)}`;
       }
-      const body: any = await resp.json();
-      const chain =
-        body?.callExpDateMap || body?.putExpDateMap
-          ? body
-          : body?.optionChain || body;
-
-      function normalizeExpiryKey(expiry: string): string {
-        return expiry; // we will match by date parts below
-      }
-
-      const targetMap = new Map<string, OptionInput>();
-      for (const opt of opts) {
-        const key = `${opt.expiry}|${opt.strike}|${opt.type}`;
-        targetMap.set(key, opt);
-      }
-
-      const expMaps: { [k: string]: any }[] = [];
-      if (chain.callExpDateMap) expMaps.push(chain.callExpDateMap);
-      if (chain.putExpDateMap) expMaps.push(chain.putExpDateMap);
-
-      for (const expMap of expMaps) {
-        for (const [expKey, strikes] of Object.entries<any>(expMap)) {
-          const [datePart] = (expKey as string).split(":");
-          const expDate = datePart; // YYYY-MM-DD
-          for (const [strikeStr, contracts] of Object.entries<any>(strikes)) {
-            const strike = Number(strikeStr);
-            const list: any[] = Array.isArray(contracts) ? contracts : [];
-            if (!list.length) continue;
-            const c = list[0];
-            const type: "C" | "P" =
-              c.putCall === "CALL" || c.putCall === "C" ? "C" : "P";
-            const key = `${expDate}|${strike}|${type}`;
-            const match = targetMap.get(key);
-            if (!match) continue;
-            const id = `${match.underlying.toUpperCase()} ${match.expiry} ${
-              match.strike
-            } ${match.type}`;
-            results[id] = {
-              symbol: c.symbol ?? id,
-              description: c.description,
-              bid: typeof c.bid === "number" ? c.bid : undefined,
-              ask: typeof c.ask === "number" ? c.ask : undefined,
-              last: typeof c.last === "number" ? c.last : undefined,
-              mark: typeof c.mark === "number" ? c.mark : undefined,
-            };
-          }
-        }
-      }
+      return datePart;
     }
+
+    async function fetchChainsForUnderlying(
+      underlying: string,
+      opts: OptionInput[]
+    ): Promise<void> {
+      // Group by expiry + type so each request is a very small slice of the chain.
+      const groups = new Map<string, OptionInput[]>();
+      for (const opt of opts) {
+        const key = `${opt.expiry}|${opt.type}`;
+        const existing = groups.get(key);
+        if (existing) existing.push(opt);
+        else groups.set(key, [opt]);
+      }
+
+      await Promise.all(
+        Array.from(groups.entries()).map(async ([key, groupOpts]) => {
+          const [expiry, type] = key.split("|") as [string, "C" | "P"];
+          const strikes = [...new Set(groupOpts.map((o) => o.strike))].sort(
+            (a, b) => a - b
+          );
+          const centerStrike = strikes[Math.floor(strikes.length / 2)];
+
+          const params = new URLSearchParams({
+            symbol: underlying,
+            contractType: type === "C" ? "CALL" : "PUT",
+            includeUnderlyingQuote: "FALSE",
+            strategy: "SINGLE",
+            fromDate: expiry,
+            toDate: expiry,
+            // Center the chain around the middle strike we care about; keep count small to avoid huge payloads.
+            strike: String(centerStrike),
+            strikeCount: "50",
+          });
+
+          const url =
+            "https://api.schwabapi.com/marketdata/v1/chains?" +
+            params.toString();
+          const resp = await fetch(url, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          if (!resp.ok) {
+            const text = await resp.text();
+            console.error(
+              "[schwab-option-prices] chains error for",
+              underlying,
+              resp.status,
+              text.slice(0, 400)
+            );
+            return;
+          }
+          const body: any = await resp.json();
+          let chain =
+            body?.callExpDateMap || body?.putExpDateMap ? body : null;
+          if (
+            !chain &&
+            Array.isArray(body?.optionChain) &&
+            body.optionChain.length > 0
+          ) {
+            chain = body.optionChain[0];
+          }
+          if (!chain) {
+            console.warn(
+              "[schwab-option-prices] no callExpDateMap/putExpDateMap for",
+              underlying,
+              "expiry",
+              expiry,
+              "type",
+              type
+            );
+            return;
+          }
+
+          const targetMap = new Map<string, OptionInput>();
+          for (const opt of groupOpts) {
+            const tKey = `${opt.expiry}|${opt.strike}|${opt.type}`;
+            targetMap.set(tKey, opt);
+          }
+
+          const expMaps: { [k: string]: any }[] = [];
+          if (chain.callExpDateMap) expMaps.push(chain.callExpDateMap);
+          if (chain.putExpDateMap) expMaps.push(chain.putExpDateMap);
+
+          for (const expMap of expMaps) {
+            for (const [expKey, strikesMap] of Object.entries<any>(expMap)) {
+              const expDate = toExpiryYYYYMMDD(expKey as string);
+              if (expDate !== expiry) continue;
+              for (const [strikeStr, contracts] of Object.entries<any>(
+                strikesMap
+              )) {
+                const strike = Number(strikeStr);
+                if (!Number.isFinite(strike)) continue;
+                const list: any[] = Array.isArray(contracts)
+                  ? contracts
+                  : [];
+                if (!list.length) continue;
+                const c = list[0];
+                const cType: "C" | "P" =
+                  c.putCall === "CALL" || c.putCall === "C" ? "C" : "P";
+                if (cType !== type) continue;
+                const tKey = `${expiry}|${strike}|${type}`;
+                const match = targetMap.get(tKey);
+                if (!match) continue;
+                const id = `${match.underlying.toUpperCase()} ${
+                  match.expiry
+                } ${match.strike} ${match.type}`;
+                results[id] = {
+                  symbol: c.symbol ?? id,
+                  description: c.description,
+                  bid: typeof c.bid === "number" ? c.bid : undefined,
+                  ask: typeof c.ask === "number" ? c.ask : undefined,
+                  last: typeof c.last === "number" ? c.last : undefined,
+                  mark: typeof c.mark === "number" ? c.mark : undefined,
+                };
+              }
+            }
+          }
+        })
+      );
+    }
+
+    await Promise.all(
+      Object.entries(byUnderlying).map(([underlying, opts]) =>
+        fetchChainsForUnderlying(underlying, opts)
+      )
+    );
 
     res.status(200).json(results);
   } catch (err) {
