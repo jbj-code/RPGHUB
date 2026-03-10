@@ -39,9 +39,7 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
   const [statusLoading, setStatusLoading] = useState(false);
   const t = lightTheme;
 
-  // After password, check Schwab token status (Supabase). If already connected, skip the Schwab step and go in.
-  useEffect(() => {
-    if (step !== "schwab") return;
+  const refreshSchwabStatus = useCallback(() => {
     setStatusLoading(true);
     fetch(`${SCHWAB_API_BASE}/api/schwab-status`)
       .then((res) => res.json())
@@ -55,25 +53,23 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
       })
       .catch(() => setSchwabStatus({ connected: false }))
       .finally(() => setStatusLoading(false));
-  }, [step, onUnlock]);
+  }, [onUnlock]);
+
+  // After password, check Schwab token status (Supabase). If already connected, skip the Schwab step and go in.
+  useEffect(() => {
+    if (step !== "schwab") return;
+    refreshSchwabStatus();
+  }, [step, refreshSchwabStatus]);
 
   // When user returns to this tab after authorizing in the other tab, re-check and let them in if connected
   useEffect(() => {
     if (step !== "schwab" || schwabStatus?.connected) return;
     const onFocus = () => {
-      fetch(`${SCHWAB_API_BASE}/api/schwab-status`)
-        .then((res) => res.json())
-        .then((data: { connected?: boolean; expired?: boolean }) => {
-          if (data.connected && !data.expired) {
-            setSchwabStatus({ connected: true });
-            onUnlock();
-          }
-        })
-        .catch(() => {});
+      refreshSchwabStatus();
     };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [step, schwabStatus, onUnlock]);
+  }, [step, schwabStatus, refreshSchwabStatus]);
 
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
@@ -258,6 +254,14 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
               >
                 Authorize Schwab
               </a>
+              <button
+                type="button"
+                style={smallBtnStyle}
+                onClick={refreshSchwabStatus}
+                disabled={statusLoading}
+              >
+                {statusLoading ? "Rechecking…" : "Recheck Schwab connection"}
+              </button>
               <button type="button" style={smallBtnStyle} onClick={handleContinue}>
                 Continue without connecting
               </button>

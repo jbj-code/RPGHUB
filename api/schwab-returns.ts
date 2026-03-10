@@ -169,20 +169,33 @@ export default async function handler(req: any, res: any) {
         const latestClose = latest.close;
         if (!latestClose || latestClose <= 0) continue;
 
-        function pctChange(daysBack: number): number {
-          const idx = Math.max(sorted.length - 1 - daysBack, 0);
-          const past = sorted[idx];
-          if (!past || !past.close || past.close <= 0) return 0;
-          return ((latestClose / past.close - 1) * 100);
+        // Helper: percentage change from the first candle ON or AFTER the given date
+        function pctFromDate(startDate: Date): number {
+          const targetMs = startDate.getTime();
+          const start =
+            sorted.find((c) => c.datetime >= targetMs) ?? sorted[0];
+          if (!start || !start.close || start.close <= 0) return 0;
+          return ((latestClose / start.close - 1) * 100);
         }
 
-        // Approximate trading-day offsets.
-        const oneDay = 1;
-        const oneWeek = 5;
-        const oneMonth = 21;
-        const threeMonths = 63;
-        const sixMonths = 126;
-        const oneYear = Math.min(sorted.length - 1, 252);
+        const latestDate = new Date(latest.datetime);
+
+        // 1D / 1W use calendar offsets (snap to next trading day via pctFromDate)
+        const d1 = new Date(latestDate.getTime());
+        d1.setUTCDate(d1.getUTCDate() - 1);
+        const w1 = new Date(latestDate.getTime());
+        w1.setUTCDate(w1.getUTCDate() - 7);
+
+        // Month-based offsets
+        const m1 = new Date(latestDate.getTime());
+        m1.setUTCMonth(m1.getUTCMonth() - 1);
+        const m3 = new Date(latestDate.getTime());
+        m3.setUTCMonth(m3.getUTCMonth() - 3);
+        const m6 = new Date(latestDate.getTime());
+        m6.setUTCMonth(m6.getUTCMonth() - 6);
+
+        const y1 = new Date(latestDate.getTime());
+        y1.setUTCFullYear(y1.getUTCFullYear() - 1);
 
         // YTD: find first candle in current calendar year.
         const yearStart = new Date(latest.datetime);
@@ -197,12 +210,12 @@ export default async function handler(req: any, res: any) {
             : 0;
 
         results[symbol] = {
-          "1D": pctChange(oneDay),
-          "1W": pctChange(oneWeek),
-          "1M": pctChange(oneMonth),
-          "3M": pctChange(threeMonths),
-          "6M": pctChange(sixMonths),
-          "1Y": pctChange(oneYear),
+          "1D": pctFromDate(d1),
+          "1W": pctFromDate(w1),
+          "1M": pctFromDate(m1),
+          "3M": pctFromDate(m3),
+          "6M": pctFromDate(m6),
+          "1Y": pctFromDate(y1),
           YTD: ytd,
         };
       } catch (innerErr) {
