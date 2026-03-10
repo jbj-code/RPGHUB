@@ -297,6 +297,35 @@ body {
   border-color: rgba(15, 42, 54, 0.3);
 }
 
+/* ---- Options Pricing: fetch button spinner ---- */
+@keyframes options-pricing-spin {
+  to { transform: rotate(360deg); }
+}
+.options-pricing-fetch-spinner {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: options-pricing-spin 0.7s linear infinite;
+  vertical-align: middle;
+  margin-right: 0.5rem;
+}
+
+/* ---- Stock Comparison: row loading shimmer ---- */
+@keyframes stock-comparison-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.stock-comparison-skeleton-cell {
+  min-width: 4rem;
+  height: 1.25em;
+  border-radius: 4px;
+  background-size: 200% 100%;
+  animation: stock-comparison-shimmer 1.2s ease-in-out infinite;
+}
+
 /* ---- Layout: left sidebar (fixed) + main ---- */
 .app-nav-logo {
   object-fit: contain;

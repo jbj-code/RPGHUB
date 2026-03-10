@@ -35,6 +35,7 @@ export type PortfolioRow = {
   type: "Qty" | "Notional";
   value: number;
   days: number;
+  moneyness: "OTM" | "ITM";
   otmPct: number;
   monthly: boolean;
 };
@@ -52,7 +53,6 @@ export type RankedResult = {
   trade: OptionsTrade;
 };
 
-const TICKERS = ["OIH", "SPY", "QQQ", "IWM", "XLE", "XLF", "AAPL", "MSFT", "NVDA", "GOOGL"];
 const TICKER_TO_COMPANY: Record<string, string> = {
   OIH: "Oil Services ETF",
   SPY: "S&P 500 ETF",
@@ -65,121 +65,13 @@ const TICKER_TO_COMPANY: Record<string, string> = {
   NVDA: "NVIDIA Corp.",
   GOOGL: "Alphabet Inc.",
 };
-const SIDES: OptionSide[] = ["PUT - SELL to OPEN", "PUT - BUY to OPEN", "CALL - SELL to OPEN", "CALL - BUY to OPEN"];
 
-function randomInt(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-function randomIn(min: number, max: number): number {
-  return Math.round((min + Math.random() * (max - min)) * 100) / 100;
-}
+const SCHWAB_API_BASE =
+  (import.meta.env.VITE_SCHWAB_API_BASE as string) ||
+  "https://rpghub-two.vercel.app";
 
 function makeId(): string {
   return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-}
-
-function generateRandomTrade(): OptionsTrade {
-  const ticker = TICKERS[randomInt(0, TICKERS.length - 1)];
-  const daysToMaturity = randomInt(30, 400);
-  const maturityDate = new Date();
-  maturityDate.setDate(maturityDate.getDate() + daysToMaturity);
-  const maturity = maturityDate.toISOString().slice(0, 10);
-
-  const currentPrice = randomIn(80, 450);
-  const strikeOffset = randomIn(-0.15, 0.15) * currentPrice;
-  const strikePrice = Math.round((currentPrice + strikeOffset) * 100) / 100;
-  const moneynessPct = Math.round((strikePrice / currentPrice) * 10000) / 100;
-
-  const optionSide = SIDES[randomInt(0, SIDES.length - 1)];
-  const currentBid = randomIn(5, 80);
-  const currentAsk = currentBid * randomIn(1.02, 1.15);
-  const optionLimitPrice = randomIn(currentBid * 0.92, currentBid * 1.08);
-  const pctOffBid = Math.round(((optionLimitPrice - currentBid) / currentBid) * 10000) / 100;
-
-  const contracts = [10, 20, 40, 50, 100][randomInt(0, 4)];
-  const isSell = optionSide.includes("SELL");
-  const notional = strikePrice * contracts * 100;
-  const premiumReceived = (isSell ? 1 : -1) * Math.round(optionLimitPrice * contracts * 100);
-  const yieldAtCurrentPrice =
-    notional !== 0 ? Math.round((premiumReceived / notional) * 10000) / 100 : 0;
-  const annualizedYieldPct =
-    daysToMaturity > 0 ? Math.round(yieldAtCurrentPrice * (365 / daysToMaturity) * 100) / 100 : 0;
-  const valueOfSharesAtStrike = (isSell ? 1 : -1) * Math.round(notional);
-
-  return {
-    id: makeId(),
-    ticker,
-    maturity,
-    daysToMaturity,
-    strikePrice,
-    currentPrice,
-    moneynessPct,
-    optionSide,
-    pctOffBid,
-    optionLimitPrice,
-    currentBid,
-    currentAsk,
-    contracts,
-    premiumReceived,
-    yieldAtCurrentPrice,
-    annualizedYieldPct,
-    valueOfSharesAtStrike,
-  };
-}
-
-/** Build one full OptionsTrade plus display fields for ranked table; mock upside = 1M-style % */
-function generateMockOption(
-  tickersFromPortfolio: string[],
-  defaultTickers: string[]
-): { trade: OptionsTrade; company: string; upsidePct: number } {
-  const tickers = tickersFromPortfolio.length > 0 ? tickersFromPortfolio : defaultTickers;
-  const ticker = tickers[randomInt(0, tickers.length - 1)];
-  const company = TICKER_TO_COMPANY[ticker] ?? ticker;
-  const trade = generateRandomTrade();
-  // Override ticker so it matches portfolio when provided
-  const tradeWithTicker = { ...trade, id: makeId(), ticker };
-  // Mock "1M upside" in range roughly -40 to +30 (API can replace with real 1M perf or other metric)
-  const upsidePct = Math.round((randomIn(-40, 30)) * 10) / 10;
-  return { trade: tradeWithTicker, company, upsidePct };
-}
-
-/** Mock optimize: generate N results, score by yield + upside, return ranked. */
-function runMockOptimize(portfolioRows: PortfolioRow[]): {
-  results: RankedResult[];
-  message: string | null;
-} {
-  const tickers = portfolioRows.map((r) => r.ticker.trim().toUpperCase()).filter(Boolean);
-  if (tickers.length === 0) {
-    return {
-      results: [],
-      message: "Add at least one ticker with a symbol to optimize.",
-    };
-  }
-  const count = randomInt(5, 10);
-  const raw: RankedResult[] = [];
-  for (let i = 0; i < count; i++) {
-    const { trade, company, upsidePct } = generateMockOption(tickers, TICKERS);
-    const annYield = trade.annualizedYieldPct;
-    const premiumPerContract = Math.round(trade.currentBid * 100);
-    raw.push({
-      rank: 0,
-      ticker: trade.ticker,
-      company,
-      upsidePct,
-      strike: trade.strikePrice,
-      bid: trade.currentBid,
-      annYield,
-      premiumPerContract,
-      trade,
-    });
-  }
-  // Combined score: higher yield + higher upside = better (upside -50..50 -> 0..100 scale)
-  const score = (r: RankedResult) => r.annYield * 0.5 + (r.upsidePct + 50) * 0.5;
-  raw.sort((a, b) => score(b) - score(a));
-  raw.forEach((r, i) => {
-    r.rank = i + 1;
-  });
-  return { results: raw, message: null };
 }
 
 function formatMoney(n: number): string {
@@ -222,6 +114,7 @@ const defaultPortfolioRow = (): PortfolioRow => ({
   type: "Qty",
   value: 0,
   days: 30,
+  moneyness: "OTM",
   otmPct: 10,
   monthly: false,
 });
@@ -231,6 +124,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
   const [otmVariancePct, setOtmVariancePct] = useState(5);
   const [rankedResults, setRankedResults] = useState<RankedResult[] | null>(null);
   const [optimizeMessage, setOptimizeMessage] = useState<string | null>(null);
+  const [optimizeLoading, setOptimizeLoading] = useState(false);
   const [trades, setTrades] = useState<OptionsTrade[]>([]);
   const [showOptimizeForModal, setShowOptimizeForModal] = useState(false);
 
@@ -260,19 +154,45 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
     []
   );
 
-  const runOptimize = useCallback(() => {
-    const { results, message } = runMockOptimize(portfolioRows);
-    setRankedResults(results);
-    setOptimizeMessage(message);
-  }, [portfolioRows]);
+  const runOptimize = useCallback(async () => {
+    const tickers = portfolioRows.map((r) => r.ticker.trim().toUpperCase()).filter(Boolean);
+    if (tickers.length === 0) {
+      setOptimizeMessage("Add at least one ticker with a symbol to optimize.");
+      setRankedResults(null);
+      return;
+    }
+    setOptimizeLoading(true);
+    setOptimizeMessage(null);
+    try {
+      const res = await fetch(`${SCHWAB_API_BASE}/api/schwab-option-optimizer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          portfolioRows,
+          otmVariancePct,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setRankedResults(null);
+        setOptimizeMessage(data?.error ?? "Optimizer request failed. Check Schwab connection.");
+        return;
+      }
+      const results: RankedResult[] = Array.isArray(data.results) ? data.results : [];
+      const message: string | null = data.message ?? null;
+      setRankedResults(results);
+      setOptimizeMessage(message);
+    } catch (err) {
+      setRankedResults(null);
+      setOptimizeMessage("Network error. Try again.");
+    } finally {
+      setOptimizeLoading(false);
+    }
+  }, [portfolioRows, otmVariancePct]);
 
   const addToTradeList = useCallback((result: RankedResult) => {
     const trade = { ...result.trade, id: makeId() };
     setTrades((prev) => [...prev, trade]);
-  }, []);
-
-  const addRandomTrade = useCallback(() => {
-    setTrades((prev) => [...prev, generateRandomTrade()]);
   }, []);
 
   const removeTrade = useCallback((id: string) => {
@@ -387,7 +307,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
         </button>
       </div>
       <p style={descStyle}>
-        Define the tickers and parameters you want, run Optimize, then add ideas to your trade list (mock data until you connect an API).
+        Define the tickers and parameters you want, run Optimize to fetch live options from Schwab, then add ideas to your trade list.
       </p>
 
       {showOptimizeForModal && (
@@ -451,10 +371,10 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
       <div className="options-optimizer-card" style={cardStyle}>
         <h3 style={sectionTitleStyle}>Portfolio tickers</h3>
         <p style={{ fontSize: "0.875rem", color: t.colors.textMuted, marginBottom: t.spacing(3) }}>
-          Enter ticker, type (Qty or Notional), value, target days to maturity, and OTM %. Optionally set OTM variance to consider a strike range (e.g. 5% with 10% OTM → 5–15% OTM). Then run Optimize.
+          Enter ticker, type (Qty or Notional), value, target days to maturity, and OTM or ITM %. Optionally set variance to consider a strike range. Then run Optimize.
         </p>
         <div style={{ display: "flex", alignItems: "center", gap: t.spacing(2), marginBottom: t.spacing(3) }}>
-          <label style={{ ...labelStyle, marginBottom: 0 }}>OTM variance % (strike range)</label>
+          <label style={{ ...labelStyle, marginBottom: 0 }}>Variance % (strike range)</label>
           <input
             type="number"
             min={0}
@@ -463,9 +383,9 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
             style={{ ...inputStyle, maxWidth: 64 }}
             value={otmVariancePct}
             onChange={(e) => setOtmVariancePct(Number(e.target.value) || 0)}
-            aria-label="OTM variance percent"
+            aria-label="Variance percent"
           />
-          <span style={{ fontSize: "0.8rem", color: t.colors.textMuted }}>e.g. 5% with 10% OTM target = 5–15% OTM strikes</span>
+          <span style={{ fontSize: "0.8rem", color: t.colors.textMuted }}>e.g. 5% with 10% target = 5–15% strikes</span>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(3) }}>
           {portfolioRows.map((row) => (
@@ -556,7 +476,19 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                 />
               </div>
               <div>
-                <label style={labelStyle}>OTM %</label>
+                <label style={labelStyle}>OTM / ITM</label>
+                <select
+                  style={{ ...inputStyle, maxWidth: 90 }}
+                  value={row.moneyness ?? "OTM"}
+                  onChange={(e) => updatePortfolioRow(row.id, "moneyness", e.target.value as "OTM" | "ITM")}
+                  aria-label="Out of the money or in the money"
+                >
+                  <option value="OTM">OTM</option>
+                  <option value="ITM">ITM</option>
+                </select>
+              </div>
+              <div>
+                <label style={labelStyle}>{row.moneyness ?? "OTM"} %</label>
                 <input
                   type="number"
                   min={0}
@@ -565,7 +497,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                   value={row.otmPct || ""}
                   onChange={(e) => updatePortfolioRow(row.id, "otmPct", Number(e.target.value) || 0)}
                   placeholder="10"
-                  aria-label="OTM percent"
+                  aria-label={`${row.moneyness} percent`}
                 />
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: t.spacing(2) }}>
@@ -595,12 +527,13 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: t.spacing(3), marginTop: t.spacing(3), flexWrap: "wrap" }}>
           <button type="button" style={secondaryBtnStyle} onClick={addPortfolioRow}>
-            + Add ticker
+            + Add contract
           </button>
           <button
             type="button"
             style={primaryBtn}
             onClick={runOptimize}
+            disabled={optimizeLoading}
             aria-label="Optimize portfolio"
           >
             <span
@@ -610,7 +543,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
             >
               bolt
             </span>
-            Optimize portfolio
+            {optimizeLoading ? "Optimizing…" : "Optimize portfolio"}
           </button>
         </div>
         {optimizeMessage && (
@@ -659,7 +592,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                     <td style={{ padding: t.spacing(2), fontFamily: "monospace", fontSize: "0.8rem", color: t.colors.text }}>
                       {formatSchwabSymbol(r.trade)}
                     </td>
-                    <td style={{ padding: t.spacing(2), color: t.colors.text }}>{r.company}</td>
+                    <td style={{ padding: t.spacing(2), color: t.colors.text }}>{TICKER_TO_COMPANY[r.ticker] ?? r.company}</td>
                     <td
                       style={{
                         padding: t.spacing(2),
@@ -696,17 +629,6 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
       <div className="options-optimizer-card" style={cardStyle}>
         <h3 style={sectionTitleStyle}>Trade list</h3>
         <div style={{ display: "flex", alignItems: "center", gap: t.spacing(3), marginBottom: t.spacing(4), flexWrap: "wrap" }}>
-          <button
-            type="button"
-            style={secondaryBtnStyle}
-            onClick={addRandomTrade}
-            aria-label="Generate a random options trade"
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: 18, marginRight: t.spacing(1.5), verticalAlign: "middle" }} aria-hidden>
-              add_circle
-            </span>
-            Generate random trade
-          </button>
           {trades.length > 0 && (
             <span style={{ fontSize: "0.875rem", color: t.colors.textMuted }}>
               {trades.length} trade{trades.length !== 1 ? "s" : ""}
@@ -726,7 +648,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
             }}
           >
             <p style={{ margin: 0, fontSize: "0.95rem" }}>
-              No trades yet. Use “Add to list” from ranked results above, or “Generate random trade.”
+              No trades yet. Run Optimize above, then use “Add to list” on any ranked result.
             </p>
           </div>
         )}
@@ -875,6 +797,9 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
           </div>
         )}
       </div>
+      <footer style={{ marginTop: t.spacing(6), paddingTop: t.spacing(3), borderTop: `1px solid ${t.colors.border}`, fontSize: "0.75rem", color: t.colors.textMuted }}>
+        Market data provided by Charles Schwab.
+      </footer>
     </section>
   );
 }

@@ -3,4 +3,3 @@ export { OptionsOptimizer } from "./OptionsOptimizer";
 export { StockComparison } from "./StockComparison";
 export { Rankinator } from "./Rankinator";
 export { RaiseAi } from "./RaiseAi";
-export { WeeklyHighlights } from "./WeeklyHighlights";

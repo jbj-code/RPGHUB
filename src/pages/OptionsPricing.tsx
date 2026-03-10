@@ -244,7 +244,14 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
             onClick={handleFetch}
             disabled={loading}
           >
-            {loading ? "Fetching from Schwab…" : "Fetch prices"}
+            {loading ? (
+              <>
+                <span className="options-pricing-fetch-spinner" aria-hidden />
+                Fetching
+              </>
+            ) : (
+              "Fetch prices"
+            )}
           </button>
           {error && (
             <span
@@ -483,6 +490,9 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
           </div>
         </div>
       )}
+      <footer style={{ marginTop: t.spacing(6), paddingTop: t.spacing(3), borderTop: `1px solid ${t.colors.border}`, fontSize: "0.75rem", color: t.colors.textMuted }}>
+        Market data provided by Charles Schwab.
+      </footer>
     </section>
   );
 }

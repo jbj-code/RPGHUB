@@ -112,7 +112,6 @@ export function NavBar({ page, onNavigate, mode, onToggleMode, theme: t }: NavBa
       icon: "rocket_launch",
       externalUrl: "https://lookerstudio.google.com/s/vnU0N-aINPg",
     },
-    { page: "weekly-highlights", label: "Weekly Highlights", icon: "newspaper" },
   ];
 
   return (

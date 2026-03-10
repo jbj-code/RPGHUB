@@ -555,17 +555,13 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
           <div style={{ padding: t.spacing(6), textAlign: "center" as const, color: t.colors.textMuted, fontSize: "0.9rem", border: `1px dashed ${t.colors.border}`, borderRadius: t.radius.md, backgroundColor: t.colors.background }}>
             Add tickers above to see returns.
           </div>
-        ) : loading && tickers.every((t) => !returnsMap[t]) ? (
+        ) : selectedLookbacks.length === 0 ? (
           <div style={{ padding: t.spacing(6), textAlign: "center" as const, color: t.colors.textMuted, fontSize: "0.9rem", border: `1px dashed ${t.colors.border}`, borderRadius: t.radius.md, backgroundColor: t.colors.background }}>
-            Loading returns from Schwab…
+            Select at least one timeframe.
           </div>
         ) : error && !hasAnyReturns ? (
           <div style={{ padding: t.spacing(6), textAlign: "center" as const, color: t.colors.danger, fontSize: "0.9rem", border: `1px dashed ${t.colors.border}`, borderRadius: t.radius.md, backgroundColor: t.colors.background }}>
             {error}
-          </div>
-        ) : selectedLookbacks.length === 0 ? (
-          <div style={{ padding: t.spacing(6), textAlign: "center" as const, color: t.colors.textMuted, fontSize: "0.9rem", border: `1px dashed ${t.colors.border}`, borderRadius: t.radius.md, backgroundColor: t.colors.background }}>
-            Select at least one timeframe.
           </div>
         ) : (
           <>
@@ -623,9 +619,16 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
                     >
                       <td style={{ ...tdStyle, fontWeight: t.typography.headingWeight }}>{ticker}</td>
                       {isLoadingRow ? (
-                        <td colSpan={selectedLookbacks.length} style={{ ...tdNumStyle, color: t.colors.textMuted, fontStyle: "italic" }}>
-                          Loading from Schwab…
-                        </td>
+                        selectedLookbacks.map((tf) => (
+                          <td key={tf} style={tdNumStyle}>
+                            <div
+                              className="stock-comparison-skeleton-cell"
+                              style={{
+                                background: `linear-gradient(90deg, ${t.colors.background} 25%, ${t.colors.border} 50%, ${t.colors.background} 75%)`,
+                              }}
+                            />
+                          </td>
+                        ))
                       ) : (
                         selectedLookbacks.map((tf) => {
                           const value = returns != null ? (returns[tf] ?? null) : null;
@@ -646,6 +649,9 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
           </>
         )}
       </div>
+      <footer style={{ marginTop: t.spacing(6), paddingTop: t.spacing(3), borderTop: `1px solid ${t.colors.border}`, fontSize: "0.75rem", color: t.colors.textMuted }}>
+        Market data provided by Charles Schwab.
+      </footer>
     </section>
   );
 }

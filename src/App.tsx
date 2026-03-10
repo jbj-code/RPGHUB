@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { lightTheme, darkTheme, type ThemeMode, type Theme } from "./theme";
 import { NavBar, SIDEBAR_WIDTH } from "./components/NavBar";
 import { PasswordGate, getIsUnlocked } from "./components/PasswordGate";
-import { Home, OptionsOptimizer, StockComparison, Rankinator, RaiseAi, WeeklyHighlights } from "./pages";
+import { Home, OptionsOptimizer, StockComparison, Rankinator, RaiseAi } from "./pages";
 import { OptionsPricing } from "./pages/OptionsPricing";
 
 export type Page =
@@ -11,8 +11,7 @@ export type Page =
   | "stock-comparison"
   | "options-pricing"
   | "rankinator"
-  | "raise-ai"
-  | "weekly-highlights";
+  | "raise-ai";
 
 const PAGE_PADDING_H = 9;
 
@@ -69,7 +68,6 @@ function App() {
           {page === "options-pricing" && <OptionsPricing theme={t} />}
           {page === "rankinator" && <Rankinator theme={t} />}
           {page === "raise-ai" && <RaiseAi theme={t} />}
-          {page === "weekly-highlights" && <WeeklyHighlights theme={t} />}
         </div>
       </main>
     </div>
