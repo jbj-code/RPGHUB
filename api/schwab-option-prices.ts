@@ -213,30 +213,21 @@ export default async function handler(req: any, res: any) {
           bySymbol.get(occ.replace(/\s+/g, "")) ??
           body?.[occ];
         if (!q || typeof q !== "object") continue;
-        const bid =
-          typeof q.bid === "number"
-            ? q.bid
-            : typeof q.bidPrice === "number"
-              ? q.bidPrice
-              : undefined;
-        const ask =
-          typeof q.ask === "number"
-            ? q.ask
-            : typeof q.askPrice === "number"
-              ? q.askPrice
-              : undefined;
-        const last =
-          typeof q.last === "number"
-            ? q.last
-            : typeof q.lastPrice === "number"
-              ? q.lastPrice
-              : undefined;
-        const mark =
-          typeof q.mark === "number"
-            ? q.mark
-            : typeof q.markPrice === "number"
-              ? q.markPrice
-              : undefined;
+        // OptionContract / quote may be at top level or nested under .quote, .optionContract, .option
+        const src =
+          q.quote && typeof q.quote === "object"
+            ? q.quote
+            : q.optionContract && typeof q.optionContract === "object"
+              ? q.optionContract
+              : q.option && typeof q.option === "object"
+                ? q.option
+                : q;
+        const num = (x: any): number | undefined =>
+          typeof x === "number" && Number.isFinite(x) ? x : undefined;
+        const bid = num(src.bidPrice) ?? num(src.bid);
+        const ask = num(src.askPrice) ?? num(src.ask);
+        const last = num(src.lastPrice) ?? num(src.last);
+        const mark = num(src.markPrice) ?? num(src.mark);
         const id = `${opt.underlying.toUpperCase()} ${opt.expiry} ${opt.strike} ${opt.type}`;
         results[id] = {
           symbol: (q.symbol as string) ?? occ,
@@ -260,7 +251,35 @@ export default async function handler(req: any, res: any) {
       );
     }
 
-    res.status(200).json(results);
+    // If we have results but none have bid/ask/last/mark, attach debug so you can see response shape without server logs
+    const hasAnyPrices = Object.values(results).some(
+      (r) =>
+        r.bid != null || r.ask != null || r.last != null || r.mark != null
+    );
+    const payload: Record<string, any> = { ...results };
+    if (!hasAnyPrices && Object.keys(results).length > 0 && firstResponseBody) {
+      const firstKey = Object.keys(firstResponseBody)[0];
+      const firstQuote = firstKey
+        ? (firstResponseBody as any)[firstKey]
+        : null;
+      payload._debug = {
+        message:
+          "No bid/ask/last/mark found; check structure below and share with dev.",
+        firstResponseKey: firstKey,
+        firstQuoteKeys:
+          firstQuote && typeof firstQuote === "object"
+            ? Object.keys(firstQuote)
+            : null,
+        firstQuoteNestedKeys:
+          firstQuote?.quote && typeof firstQuote.quote === "object"
+            ? Object.keys(firstQuote.quote)
+            : firstQuote?.optionContract
+              ? Object.keys(firstQuote.optionContract)
+              : null,
+      };
+    }
+
+    res.status(200).json(payload);
   } catch (err) {
     console.error("schwab-option-prices error", err);
     res.status(500).json({ error: "Unexpected error fetching option prices" });
