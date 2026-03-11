@@ -70,6 +70,7 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
   const [copiedColumn, setCopiedColumn] = useState<"bid" | "ask" | "last" | "mark" | null>(null);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   useEffect(() => {
     setResultOrder(parsed.map((p) => p.key));
@@ -273,6 +274,7 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
       }
       const data = (await res.json()) as Record<string, OptionPrice>;
       setPrices(data);
+      setLastUpdated(new Date());
     } catch (e: unknown) {
       setError(
         e instanceof Error
@@ -501,6 +503,25 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
               </tbody>
             </table>
           </div>
+          {lastUpdated && (
+            <div
+              style={{
+                marginTop: t.spacing(2),
+                fontSize: "0.75rem",
+                color: t.colors.textMuted,
+                textAlign: "right",
+              }}
+            >
+              Data as of{" "}
+              {lastUpdated.toLocaleString(undefined, {
+                year: "numeric",
+                month: "short",
+                day: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </div>
+          )}
         </div>
       )}
       <footer style={{ marginTop: t.spacing(6), paddingTop: t.spacing(3), borderTop: `1px solid ${t.colors.border}`, fontSize: "0.75rem", color: t.colors.textMuted }}>

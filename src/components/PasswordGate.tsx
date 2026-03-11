@@ -80,7 +80,7 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
       setError(false);
 
       try {
-        const resp = await fetch("/api/site-password", {
+        const resp = await fetch(`${SCHWAB_API_BASE}/api/site-password`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ password: trimmed }),
