@@ -2,7 +2,6 @@ import { useState, useCallback, useEffect } from "react";
 import { lightTheme, assets } from "../theme";
 
 const SESSION_KEY = "rpg-hub-unlocked";
-const SITE_PASSWORD = "RPGHUB";
 
 const SCHWAB_API_BASE =
   (import.meta.env.VITE_SCHWAB_API_BASE as string) ||
@@ -72,14 +71,25 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
   }, [step, schwabStatus, refreshSchwabStatus]);
 
   const handleSubmit = useCallback(
-    (e: React.FormEvent) => {
+    async (e: React.FormEvent) => {
       e.preventDefault();
       const trimmed = password.trim();
-      if (trimmed === SITE_PASSWORD) {
-        setError(false);
-        setUnlocked();
-        setStep("schwab");
-      } else {
+      setError(false);
+
+      try {
+        const resp = await fetch("/api/site-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: trimmed }),
+        });
+
+        if (resp.ok) {
+          setUnlocked();
+          setStep("schwab");
+        } else {
+          setError(true);
+        }
+      } catch {
         setError(true);
       }
     },
