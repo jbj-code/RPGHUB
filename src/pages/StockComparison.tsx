@@ -346,33 +346,33 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
       {/* Inputs + Presets side by side */}
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 220px", gap: t.spacing(4), marginBottom: t.spacing(4) }}>
         <div className="page-card" style={cardStyle}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: t.spacing(3) }}>
-            <h3 style={cardTitleStyleNoMargin}>Inputs</h3>
-            {tickers.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setTickers([])}
-                className="stock-comparison-clear-tickers"
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  padding: t.spacing(1.5),
-                  border: "none",
-                  background: "none",
-                  cursor: "pointer",
-                  color: t.colors.textMuted,
-                  borderRadius: t.radius.sm,
-                }}
-                title="Clear all tickers"
-                aria-label="Clear all tickers"
-              >
-                <span className="material-symbols-outlined" style={{ fontSize: 22 }} aria-hidden>
-                  clear_all
-                </span>
-              </button>
-            )}
-          </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: t.spacing(3) }}>
+          <h3 style={cardTitleStyleNoMargin}>Inputs</h3>
+          {tickers.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setTickers([])}
+              className="stock-comparison-clear-tickers"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: `${t.spacing(1.5)} ${t.spacing(2.5)}`,
+                border: `1px solid ${t.colors.border}`,
+                background: "transparent",
+                cursor: "pointer",
+                color: t.colors.textMuted,
+                borderRadius: t.radius.sm,
+                fontSize: "0.8rem",
+                fontWeight: 500,
+              }}
+              title="Clear all tickers"
+              aria-label="Clear all tickers"
+            >
+              Clear
+            </button>
+          )}
+        </div>
           <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(4) }}>
             <div>
               <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: t.spacing(2) }}>

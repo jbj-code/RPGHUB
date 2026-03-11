@@ -166,6 +166,16 @@ export function NavBar({ page, onNavigate, mode, onToggleMode, theme: t }: NavBa
           </span>
           {mode === "light" ? "Dark mode" : "Light mode"}
         </button>
+        <div
+          style={{
+            marginTop: t.spacing(2),
+            fontSize: "0.75rem",
+            color: t.colors.textMuted,
+            textAlign: "center",
+          }}
+        >
+          Version 1.0.0
+        </div>
       </div>
     </nav>
   );

@@ -296,7 +296,7 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
         <code>DDOG 03/20/2026 155 C</code>
       </p>
 
-      <div className="options-pricing-card" style={cardStyle}>
+      <div className="page-card options-pricing-card" style={cardStyle}>
         <h3 style={sectionTitleStyle}>Paste options</h3>
         <textarea
           style={textareaStyle}
@@ -342,7 +342,7 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
       </div>
 
       {parsed.length > 0 && (
-        <div className="options-pricing-card" style={cardStyle}>
+        <div className="page-card options-pricing-card" style={cardStyle}>
           <div
             style={{
               display: "flex",

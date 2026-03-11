@@ -169,11 +169,11 @@ export default async function handler(req: any, res: any) {
         const latestClose = latest.close;
         if (!latestClose || latestClose <= 0) continue;
 
-        // Helper: percentage change from the first candle ON or AFTER the given date
+        // Helper: percentage change from the last candle ON or BEFORE the given date
         function pctFromDate(startDate: Date): number {
           const targetMs = startDate.getTime();
-          const start =
-            sorted.find((c) => c.datetime >= targetMs) ?? sorted[0];
+          const eligible = sorted.filter((c) => c.datetime <= targetMs);
+          const start = eligible.length > 0 ? eligible[eligible.length - 1] : sorted[0];
           if (!start || !start.close || start.close <= 0) return 0;
           return ((latestClose / start.close - 1) * 100);
         }
@@ -186,31 +186,25 @@ export default async function handler(req: any, res: any) {
             ? ((latestClose / sorted[sorted.length - 2].close - 1) * 100)
             : 0;
 
-        // 1W: 5 trading days back (broker-style)
-        const idx5 = sorted.length - 6;
-        const oneWeekPct =
-          idx5 >= 0 && sorted[idx5].close > 0
-            ? ((latestClose / sorted[idx5].close - 1) * 100)
-            : pctFromDate(new Date(latestDate.getTime() - 7 * 24 * 60 * 60 * 1000));
+        // 1W: calendar 7 days back (use last close on or before that date)
+        const oneWeekPct = pctFromDate(
+          new Date(latestDate.getTime() - 7 * 24 * 60 * 60 * 1000)
+        );
 
-        // Helper: return % from N trading days ago (index = length - 1 - N)
-        function pctFromCandlesBack(n: number): number {
-          const idx = sorted.length - 1 - n;
-          if (idx < 0 || !sorted[idx]?.close || sorted[idx].close <= 0) return 0;
-          return (latestClose / sorted[idx].close - 1) * 100;
-        }
-        // 1M ~21, 3M ~63, 6M ~126, 1Y ~252 trading days; fallback to calendar if not enough data
+        // 1M, 3M, 6M, 1Y: calendar lookbacks using months/years
         const m1Date = new Date(latestDate.getTime());
         m1Date.setUTCMonth(m1Date.getUTCMonth() - 1);
         const m3Date = new Date(latestDate.getTime());
         m3Date.setUTCMonth(m3Date.getUTCMonth() - 3);
+        const m6Date = new Date(latestDate.getTime());
+        m6Date.setUTCMonth(m6Date.getUTCMonth() - 6);
         const y1Date = new Date(latestDate.getTime());
         y1Date.setUTCFullYear(y1Date.getUTCFullYear() - 1);
 
-        const oneMonthPct = sorted.length > 22 ? pctFromCandlesBack(21) : pctFromDate(m1Date);
-        const threeMonthPct = sorted.length > 64 ? pctFromCandlesBack(63) : pctFromDate(m3Date);
-        const sixMonthPct = sorted.length > 127 ? pctFromCandlesBack(126) : pctFromDate(new Date(latestDate.getTime() - 180 * 24 * 60 * 60 * 1000));
-        const oneYearPct = sorted.length > 253 ? pctFromCandlesBack(252) : pctFromDate(y1Date);
+        const oneMonthPct = pctFromDate(m1Date);
+        const threeMonthPct = pctFromDate(m3Date);
+        const sixMonthPct = pctFromDate(m6Date);
+        const oneYearPct = pctFromDate(y1Date);
 
         // YTD: first candle in current calendar year
         const yearStart = new Date(latest.datetime);
@@ -235,6 +229,39 @@ export default async function handler(req: any, res: any) {
       } catch (innerErr) {
         // eslint-disable-next-line no-console
         console.error("schwab-returns per-symbol error", symbol, innerErr);
+      }
+    }
+
+    // Refine 1D returns using Schwab quotes netPercentChange when available
+    if (symbols.length > 0) {
+      try {
+        const quotesResp = await fetch(
+          "https://api.schwabapi.com/marketdata/v1/quotes?" +
+            new URLSearchParams({ symbols: symbols.join(",") }).toString(),
+          {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          }
+        );
+        if (quotesResp.ok) {
+          const quotesBody: any = await quotesResp.json();
+          for (const symbol of symbols) {
+            const q = quotesBody[symbol] ?? quotesBody[symbol.replace(/\s+/g, "")];
+            if (!q) continue;
+            const src = q.quote && typeof q.quote === "object" ? q.quote : q;
+            const pct =
+              typeof src.netPercentChange === "number"
+                ? src.netPercentChange * 100
+                : typeof src.markPercentChange === "number"
+                  ? src.markPercentChange * 100
+                  : null;
+            if (pct == null || !Number.isFinite(pct)) continue;
+            if (results[symbol]) {
+              results[symbol]["1D"] = pct;
+            }
+          }
+        }
+      } catch {
+        // ignore quote refinement errors; keep candle-based 1D
       }
     }
 

@@ -36,6 +36,7 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
   const [error, setError] = useState(false);
   const [schwabStatus, setSchwabStatus] = useState<SchwabStatus>(null);
   const [statusLoading, setStatusLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const t = lightTheme;
 
   const refreshSchwabStatus = useCallback(() => {
@@ -78,6 +79,7 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
       e.preventDefault();
       const trimmed = password.trim();
       setError(false);
+      setSubmitting(true);
 
       try {
         const resp = await fetch(`${SCHWAB_API_BASE}/api/site-password`, {
@@ -94,6 +96,8 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
         }
       } catch {
         setError(true);
+      } finally {
+        setSubmitting(false);
       }
     },
     [password]
@@ -333,8 +337,12 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
                 </span>
               </button>
             </div>
-            <button type="submit" style={enterBtnStyle}>
-              Enter
+            <button type="submit" style={enterBtnStyle} disabled={submitting}>
+              {submitting ? (
+                <span className="options-pricing-fetch-spinner" aria-hidden />
+              ) : (
+                "Enter"
+              )}
             </button>
           </div>
           {error && (
