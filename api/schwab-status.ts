@@ -23,23 +23,30 @@ export default async function handler(req: any, res: any) {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const { data: tokenRow, error } = await supabase
       .from("schwab_tokens")
-      .select("access_token, expires_at")
+      .select("access_token, refresh_token, expires_at")
       .eq("id", "default")
       .single();
 
     if (error || !tokenRow?.access_token) {
-      res.status(200).json({ connected: false });
+      // No usable access token; only report "connected" if we at least have a refresh token.
+      const hasRefresh = !!tokenRow?.refresh_token;
+      res.status(200).json({
+        connected: hasRefresh,
+        expired: hasRefresh || undefined,
+        hasRefresh: hasRefresh || undefined,
+      });
       return;
     }
 
     const expiresAt =
       tokenRow.expires_at != null ? new Date(tokenRow.expires_at).getTime() : null;
-    const expired =
-      expiresAt != null && Date.now() >= expiresAt;
+    const expired = expiresAt != null && Date.now() >= expiresAt;
+    const hasRefresh = !!tokenRow.refresh_token;
 
     res.status(200).json({
       connected: true,
       expired: expired || undefined,
+      hasRefresh: hasRefresh || undefined,
     });
   } catch (err) {
     console.error("schwab-status error", err);

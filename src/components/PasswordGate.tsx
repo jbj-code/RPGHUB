@@ -7,7 +7,7 @@ const SCHWAB_API_BASE =
   (import.meta.env.VITE_SCHWAB_API_BASE as string) ||
   "https://rpghub-two.vercel.app";
 
-type SchwabStatus = { connected: boolean; expired?: boolean } | null;
+type SchwabStatus = { connected: boolean; expired?: boolean; hasRefresh?: boolean } | null;
 
 export function getIsUnlocked(): boolean {
   try {
@@ -42,11 +42,14 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
     setStatusLoading(true);
     fetch(`${SCHWAB_API_BASE}/api/schwab-status`)
       .then((res) => res.json())
-      .then((data: { connected?: boolean; expired?: boolean }) => {
-        const connected = !!data.connected && !data.expired;
+      .then((data: { connected?: boolean; expired?: boolean; hasRefresh?: boolean }) => {
+        const connected =
+          !!data.connected &&
+          (!data.expired || !!data.hasRefresh);
         setSchwabStatus({
-          connected: !!data.connected,
+          connected,
           expired: data.expired,
+          hasRefresh: data.hasRefresh,
         });
         if (connected) onUnlock();
       })
@@ -231,7 +234,9 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
   };
 
   if (step === "schwab") {
-    const connected = schwabStatus?.connected && !schwabStatus?.expired;
+    const connected =
+      !!schwabStatus?.connected &&
+      (!schwabStatus.expired || !!schwabStatus.hasRefresh);
     if (connected) return null;
     return (
       <div style={wrapStyle}>
