@@ -292,8 +292,18 @@ export default async function handler(req: any, res: any) {
               return ((currentPrice / anchor - 1) * 100);
             };
 
+            // Prefer Schwab's own regularMarketPercentChange for 1D when available.
+            const regular1D =
+              typeof (src as any).regularMarketPercentChange === "number"
+                ? (src as any).regularMarketPercentChange * 100
+                : null;
+
             results[symbol] = {
-              "1D": mkReturn(anchors.prevClose),
+              // 1D: use Schwab's regularMarketPercentChange when available; otherwise current vs latest close.
+              "1D":
+                regular1D != null && Number.isFinite(regular1D)
+                  ? regular1D
+                  : mkReturn(anchors.latestClose),
               "1W": mkReturn(anchors.w1),
               "1M": mkReturn(anchors.m1),
               "3M": mkReturn(anchors.m3),
