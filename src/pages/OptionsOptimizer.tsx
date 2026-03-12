@@ -127,6 +127,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
   const [optimizeLoading, setOptimizeLoading] = useState(false);
   const [trades, setTrades] = useState<OptionsTrade[]>([]);
   const [showOptimizeForModal, setShowOptimizeForModal] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   useEffect(() => {
     if (!showOptimizeForModal) return;
@@ -182,6 +183,9 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
       const message: string | null = data.message ?? null;
       setRankedResults(results);
       setOptimizeMessage(message);
+      if (results.length > 0) {
+        setLastUpdated(new Date());
+      }
     } catch (err) {
       setRankedResults(null);
       setOptimizeMessage("Network error. Try again.");
@@ -797,8 +801,32 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
           </div>
         )}
       </div>
-      <footer style={{ marginTop: t.spacing(6), paddingTop: t.spacing(3), borderTop: `1px solid ${t.colors.border}`, fontSize: "0.75rem", color: t.colors.textMuted }}>
-        Market data provided by Charles Schwab.
+      <footer
+        style={{
+          marginTop: t.spacing(6),
+          paddingTop: t.spacing(3),
+          borderTop: `1px solid ${t.colors.border}`,
+          fontSize: "0.75rem",
+          color: t.colors.textMuted,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: t.spacing(2),
+        }}
+      >
+        <span>Market data provided by Charles Schwab.</span>
+        {lastUpdated && (
+          <span>
+            Data as of{" "}
+            {lastUpdated.toLocaleString(undefined, {
+              year: "numeric",
+              month: "short",
+              day: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </span>
+        )}
       </footer>
     </section>
   );

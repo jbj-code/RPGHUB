@@ -503,29 +503,34 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
               </tbody>
             </table>
           </div>
-          {lastUpdated && (
-            <div
-              style={{
-                marginTop: t.spacing(2),
-                fontSize: "0.75rem",
-                color: t.colors.textMuted,
-                textAlign: "right",
-              }}
-            >
-              Data as of{" "}
-              {lastUpdated.toLocaleString(undefined, {
-                year: "numeric",
-                month: "short",
-                day: "2-digit",
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
-            </div>
-          )}
         </div>
       )}
-      <footer style={{ marginTop: t.spacing(6), paddingTop: t.spacing(3), borderTop: `1px solid ${t.colors.border}`, fontSize: "0.75rem", color: t.colors.textMuted }}>
-        Market data provided by Charles Schwab.
+      <footer
+        style={{
+          marginTop: t.spacing(6),
+          paddingTop: t.spacing(3),
+          borderTop: `1px solid ${t.colors.border}`,
+          fontSize: "0.75rem",
+          color: t.colors.textMuted,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: t.spacing(2),
+        }}
+      >
+        <span>Market data provided by Charles Schwab.</span>
+        {lastUpdated && (
+          <span>
+            Data as of{" "}
+            {lastUpdated.toLocaleString(undefined, {
+              year: "numeric",
+              month: "short",
+              day: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </span>
+        )}
       </footer>
     </section>
   );

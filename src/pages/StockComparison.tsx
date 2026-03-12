@@ -52,6 +52,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
   const [error, setError] = useState<string | null>(null);
   const [apiHint, setApiHint] = useState<string | null>(null); // server hint when no data (e.g. token expired)
   const [fetchKey, setFetchKey] = useState(0); // bump to force re-fetch (Refresh)
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const pageStyle: React.CSSProperties = {
     maxWidth: PAGE_LAYOUT.maxWidth,
@@ -212,6 +213,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
       setLoadingTickers(new Set());
       setError(null);
       setLoading(false);
+      setLastUpdated(null);
       return;
     }
 
@@ -243,7 +245,10 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
           }
           if (v && typeof v === "object") normalized[k.trim().toUpperCase()] = v as Returns;
         }
-        if (Object.keys(normalized).length > 0) setApiHint(null);
+        if (Object.keys(normalized).length > 0) {
+          setApiHint(null);
+          setLastUpdated(new Date());
+        }
         setReturnsMap((prev) => ({ ...prev, ...normalized }));
       } catch (e: unknown) {
         if (e instanceof Error && e.name === "AbortError") return;
@@ -730,8 +735,32 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
           </>
         )}
       </div>
-      <footer style={{ marginTop: t.spacing(6), paddingTop: t.spacing(3), borderTop: `1px solid ${t.colors.border}`, fontSize: "0.75rem", color: t.colors.textMuted }}>
-        Market data provided by Charles Schwab.
+      <footer
+        style={{
+          marginTop: t.spacing(6),
+          paddingTop: t.spacing(3),
+          borderTop: `1px solid ${t.colors.border}`,
+          fontSize: "0.75rem",
+          color: t.colors.textMuted,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: t.spacing(2),
+        }}
+      >
+        <span>Market data provided by Charles Schwab.</span>
+        {lastUpdated && (
+          <span>
+            Data as of{" "}
+            {lastUpdated.toLocaleString(undefined, {
+              year: "numeric",
+              month: "short",
+              day: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </span>
+        )}
       </footer>
     </section>
   );
