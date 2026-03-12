@@ -68,7 +68,7 @@ const TICKER_TO_COMPANY: Record<string, string> = {
 
 const SCHWAB_API_BASE =
   (import.meta.env.VITE_SCHWAB_API_BASE as string) ||
-  "https://rpghub-two.vercel.app";
+  "https://therpghub.vercel.app";
 
 function makeId(): string {
   return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;

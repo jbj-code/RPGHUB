@@ -5,7 +5,7 @@ const SESSION_KEY = "rpg-hub-unlocked";
 
 const SCHWAB_API_BASE =
   (import.meta.env.VITE_SCHWAB_API_BASE as string) ||
-  "https://rpghub-two.vercel.app";
+  "https://therpghub.vercel.app";
 
 type SchwabStatus = { connected: boolean; expired?: boolean; hasRefresh?: boolean } | null;
 

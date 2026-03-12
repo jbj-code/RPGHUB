@@ -12,6 +12,7 @@ type Returns = {
   "6M": number;
   "1Y": number;
   YTD: number;
+  price?: number;
 };
 
 export default async function handler(req: any, res: any) {
@@ -119,6 +120,19 @@ export default async function handler(req: any, res: any) {
       .filter(Boolean);
 
     const results: Record<string, Returns> = {};
+    const anchorsBySymbol: Record<
+      string,
+      {
+        latestClose: number;
+        prevClose?: number;
+        w1?: number;
+        m1?: number;
+        m3?: number;
+        m6?: number;
+        y1?: number;
+        ytd?: number;
+      }
+    > = {};
     let had404 = false;
 
     for (const symbol of symbols) {
@@ -169,25 +183,25 @@ export default async function handler(req: any, res: any) {
         const latestClose = latest.close;
         if (!latestClose || latestClose <= 0) continue;
 
-        // Helper: percentage change from the last candle ON or BEFORE the given date
-        function pctFromDate(startDate: Date): number {
+        // Helper: close from the last candle ON or BEFORE the given date
+        function anchorCloseOnOrBefore(startDate: Date): number | null {
           const targetMs = startDate.getTime();
           const eligible = sorted.filter((c) => c.datetime <= targetMs);
           const start = eligible.length > 0 ? eligible[eligible.length - 1] : sorted[0];
-          if (!start || !start.close || start.close <= 0) return 0;
-          return ((latestClose / start.close - 1) * 100);
+          if (!start || !start.close || start.close <= 0) return null;
+          return start.close;
         }
 
         const latestDate = new Date(latest.datetime);
 
         // 1D: one trading day = previous candle vs latest (avoids calendar/same-candle 0% issue)
-        const oneDayPct =
+        const prev =
           sorted.length >= 2 && sorted[sorted.length - 2].close > 0
-            ? ((latestClose / sorted[sorted.length - 2].close - 1) * 100)
-            : 0;
+            ? sorted[sorted.length - 2].close
+            : null;
 
         // 1W: calendar 7 days back (use last close on or before that date)
-        const oneWeekPct = pctFromDate(
+        const w1Anchor = anchorCloseOnOrBefore(
           new Date(latestDate.getTime() - 7 * 24 * 60 * 60 * 1000)
         );
 
@@ -201,10 +215,10 @@ export default async function handler(req: any, res: any) {
         const y1Date = new Date(latestDate.getTime());
         y1Date.setUTCFullYear(y1Date.getUTCFullYear() - 1);
 
-        const oneMonthPct = pctFromDate(m1Date);
-        const threeMonthPct = pctFromDate(m3Date);
-        const sixMonthPct = pctFromDate(m6Date);
-        const oneYearPct = pctFromDate(y1Date);
+        const m1Anchor = anchorCloseOnOrBefore(m1Date);
+        const m3Anchor = anchorCloseOnOrBefore(m3Date);
+        const m6Anchor = anchorCloseOnOrBefore(m6Date);
+        const y1Anchor = anchorCloseOnOrBefore(y1Date);
 
         // YTD: first candle in current calendar year
         const yearStart = new Date(latest.datetime);
@@ -212,19 +226,18 @@ export default async function handler(req: any, res: any) {
         yearStart.setUTCHours(0, 0, 0, 0);
         const firstThisYear =
           sorted.find((c) => c.datetime >= yearStart.getTime()) ?? sorted[0];
-        const ytd =
-          firstThisYear && firstThisYear.close > 0
-            ? (latestClose / firstThisYear.close - 1) * 100
-            : 0;
+        const ytdAnchor =
+          firstThisYear && firstThisYear.close > 0 ? firstThisYear.close : null;
 
-        results[symbol] = {
-          "1D": oneDayPct,
-          "1W": oneWeekPct,
-          "1M": oneMonthPct,
-          "3M": threeMonthPct,
-          "6M": sixMonthPct,
-          "1Y": oneYearPct,
-          YTD: ytd,
+        anchorsBySymbol[symbol] = {
+          latestClose,
+          prevClose: prev ?? undefined,
+          w1: w1Anchor ?? undefined,
+          m1: m1Anchor ?? undefined,
+          m3: m3Anchor ?? undefined,
+          m6: m6Anchor ?? undefined,
+          y1: y1Anchor ?? undefined,
+          ytd: ytdAnchor ?? undefined,
         };
       } catch (innerErr) {
         // eslint-disable-next-line no-console
@@ -232,7 +245,7 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    // Refine 1D returns using Schwab quotes netPercentChange when available
+    // Use Schwab quotes for current price; compute all returns as currentPrice / anchorClose - 1
     if (symbols.length > 0) {
       try {
         const quotesResp = await fetch(
@@ -248,20 +261,51 @@ export default async function handler(req: any, res: any) {
             const q = quotesBody[symbol] ?? quotesBody[symbol.replace(/\s+/g, "")];
             if (!q) continue;
             const src = q.quote && typeof q.quote === "object" ? q.quote : q;
-            const pct =
-              typeof src.netPercentChange === "number"
-                ? src.netPercentChange * 100
-                : typeof src.markPercentChange === "number"
-                  ? src.markPercentChange * 100
-                  : null;
-            if (pct == null || !Number.isFinite(pct)) continue;
-            if (results[symbol]) {
-              results[symbol]["1D"] = pct;
-            }
+
+            const anchors = anchorsBySymbol[symbol];
+            if (!anchors) continue;
+
+            // Current price for display and return calculations
+            const rawPrice =
+              typeof src.regularMarketLast === "number"
+                ? src.regularMarketLast
+                : typeof src.lastPrice === "number"
+                  ? src.lastPrice
+                  : typeof src.closePrice === "number"
+                    ? src.closePrice
+                    : typeof src.close === "number"
+                      ? src.close
+                      : typeof src.regularMarketPrice === "number"
+                        ? src.regularMarketPrice
+                        : null;
+
+            const currentPrice =
+              rawPrice != null && Number.isFinite(rawPrice) && rawPrice > 0
+                ? rawPrice
+                : anchors.latestClose;
+
+            if (currentPrice == null || !Number.isFinite(currentPrice) || currentPrice <= 0)
+              continue;
+
+            const mkReturn = (anchor?: number): number => {
+              if (anchor == null || !Number.isFinite(anchor) || anchor <= 0) return 0;
+              return ((currentPrice / anchor - 1) * 100);
+            };
+
+            results[symbol] = {
+              "1D": mkReturn(anchors.prevClose),
+              "1W": mkReturn(anchors.w1),
+              "1M": mkReturn(anchors.m1),
+              "3M": mkReturn(anchors.m3),
+              "6M": mkReturn(anchors.m6),
+              "1Y": mkReturn(anchors.y1),
+              YTD: mkReturn(anchors.ytd),
+              price: currentPrice,
+            };
           }
         }
       } catch {
-        // ignore quote refinement errors; keep candle-based 1D
+        // ignore quote errors; we'll fall through and potentially return empty results
       }
     }
 

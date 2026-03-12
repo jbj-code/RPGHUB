@@ -24,7 +24,7 @@ type OptionPrice = {
 
 const SCHWAB_API_BASE =
   (import.meta.env.VITE_SCHWAB_API_BASE as string) ||
-  "https://rpghub-two.vercel.app";
+  "https://therpghub.vercel.app";
 
 function parseLine(line: string): ParsedOption | null {
   const trimmed = line.trim();

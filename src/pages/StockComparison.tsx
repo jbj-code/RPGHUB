@@ -6,20 +6,37 @@ type StockComparisonProps = { theme: Theme };
 
 const TIMEFRAMES = ["1D", "1W", "1M", "3M", "6M", "1Y", "YTD"] as const;
 
-type Returns = Record<(typeof TIMEFRAMES)[number], number>;
+type Returns = Record<(typeof TIMEFRAMES)[number], number> & {
+  price?: number;
+};
 
 // API base for Schwab proxy (quotes/returns). Set VITE_SCHWAB_API_BASE in .env or Vercel to override.
 const SCHWAB_API_BASE =
   (import.meta.env.VITE_SCHWAB_API_BASE as string) ||
-  "https://rpghub-two.vercel.app";
+  "https://therpghub.vercel.app";
 
 type Preset = { name: string; tickers: string[] };
 
 const PRESETS: Preset[] = [
-  { name: "Benchmarks", tickers: ["SPY", "QQQ", "DIA", "IWM"] },
+  { name: "US Benchmarks", tickers: ["SPY", "QQQ", "DIA", "IWM"] },
   { name: "Tech", tickers: ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA"] },
   { name: "Sector ETFs", tickers: ["XLK", "XLF", "XLE", "XLV", "XLY", "XLP"] },
   { name: "Mega cap", tickers: ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"] },
+];
+
+const BENCHMARK_GROUPS: Preset[] = [
+  {
+    name: "US Markets",
+    tickers: ["$DJI", "$COMPX", "$SPX", "$RUT"],
+  },
+  {
+    name: "EU Markets",
+    tickers: ["$GDAXI", "$SPEY", "$FCHI", "$N100"],
+  },
+  {
+    name: "Asia / Pacific",
+    tickers: ["$N225", "$HSI", "$AORD"],
+  },
 ];
 
 export function StockComparison({ theme: t }: StockComparisonProps) {
@@ -69,6 +86,12 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
     border: `1px solid ${t.colors.border}`,
   };
 
+  const inputsCardStyle: React.CSSProperties = {
+    ...cardStyle,
+    alignSelf: "stretch",
+    height: "100%",
+  };
+
   /* Card header: matches Options Optimizer (secondary color, small caps) */
   const cardTitleStyle: React.CSSProperties = {
     fontSize: "0.75rem",
@@ -87,7 +110,8 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
     ...cardStyle,
     padding: `${t.spacing(3)} ${t.spacing(4)}`,
     marginBottom: t.spacing(4),
-    alignSelf: "flex-start",
+    alignSelf: "stretch",
+    height: "100%",
   };
 
   const labelStyle: React.CSSProperties = {
@@ -303,11 +327,16 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
 
   function copyTableToClipboard() {
     if (!canCopyTable) return;
-    const headerRow = ["Ticker", ...selectedLookbacks].join("\t");
+    const headerRow = ["Ticker", "Price", ...selectedLookbacks].join("\t");
     const dataRows = tickers.map((ticker) => {
       const returns = returnsMap[ticker];
+      const priceCell =
+        returns?.price != null && Number.isFinite(returns.price)
+          ? returns.price.toFixed(2)
+          : "";
       const cells = [
         ticker,
+        priceCell,
         ...selectedLookbacks.map((tf) => {
           const v = returns?.[tf];
           return v != null ? formatPct(v) : "—";
@@ -343,9 +372,17 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
         Compare returns across multiple tickers using live Schwab market data. Add symbols to see returns and choose which timeframes to show.
       </p>
 
-      {/* Inputs + Presets side by side */}
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 220px", gap: t.spacing(4), marginBottom: t.spacing(4) }}>
-        <div className="page-card" style={cardStyle}>
+      {/* Inputs + Benchmarks + Presets side by side */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr)",
+          gap: t.spacing(4),
+          marginBottom: t.spacing(4),
+          alignItems: "stretch",
+        }}
+      >
+        <div className="page-card" style={inputsCardStyle}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: t.spacing(3) }}>
           <h3 style={cardTitleStyleNoMargin}>Inputs</h3>
           {tickers.length > 0 && (
@@ -440,6 +477,32 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
                 </label>
               ))}
             </div>
+          </div>
+        </div>
+
+        <div className="page-card" style={presetsCardStyle}>
+          <h3 style={{ ...cardTitleStyleNoMargin, marginBottom: t.spacing(2) }}>Benchmarks</h3>
+          <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(1.5) }}>
+            {BENCHMARK_GROUPS.map((preset) => (
+              <button
+                key={preset.name}
+                type="button"
+                onClick={() => applyPreset(preset)}
+                style={{
+                  padding: `${t.spacing(1.5)} ${t.spacing(2)}`,
+                  fontSize: "0.85rem",
+                  color: t.colors.text,
+                  backgroundColor: t.colors.background,
+                  border: `1px solid ${t.colors.border}`,
+                  borderRadius: t.radius.sm,
+                  cursor: "pointer",
+                  fontFamily: t.typography.fontFamily,
+                  textAlign: "left",
+                }}
+              >
+                {preset.name}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -589,6 +652,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
               <thead>
                 <tr>
                   <th style={thStyle}>Ticker</th>
+                  <th style={thNumStyle}>Price</th>
                   {selectedLookbacks.map((tf) => (
                     <th key={tf} style={thNumStyle}>
                       {tf}
@@ -619,8 +683,8 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
                     >
                       <td style={{ ...tdStyle, fontWeight: t.typography.headingWeight }}>{ticker}</td>
                       {isLoadingRow ? (
-                        selectedLookbacks.map((tf) => (
-                          <td key={tf} style={tdNumStyle}>
+                        <>
+                          <td style={tdNumStyle}>
                             <div
                               className="stock-comparison-skeleton-cell"
                               style={{
@@ -628,17 +692,34 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
                               }}
                             />
                           </td>
-                        ))
-                      ) : (
-                        selectedLookbacks.map((tf) => {
-                          const value = returns != null ? (returns[tf] ?? null) : null;
-                          const isPos = value !== null && value >= 0;
-                          return (
-                            <td key={tf} style={{ ...tdNumStyle, color: isPos ? t.colors.success : t.colors.danger }}>
-                              {value === null ? "—" : formatPct(value)}
+                          {selectedLookbacks.map((tf) => (
+                            <td key={tf} style={tdNumStyle}>
+                              <div
+                                className="stock-comparison-skeleton-cell"
+                                style={{
+                                  background: `linear-gradient(90deg, ${t.colors.background} 25%, ${t.colors.border} 50%, ${t.colors.background} 75%)`,
+                                }}
+                              />
                             </td>
-                          );
-                        })
+                          ))}
+                        </>
+                      ) : (
+                        <>
+                          <td style={tdNumStyle}>
+                            {returns?.price != null && Number.isFinite(returns.price)
+                              ? returns.price.toFixed(2)
+                              : "—"}
+                          </td>
+                          {selectedLookbacks.map((tf) => {
+                            const value = returns != null ? (returns[tf] ?? null) : null;
+                            const isPos = value !== null && value >= 0;
+                            return (
+                              <td key={tf} style={{ ...tdNumStyle, color: isPos ? t.colors.success : t.colors.danger }}>
+                                {value === null ? "—" : formatPct(value)}
+                              </td>
+                            );
+                          })}
+                        </>
                       )}
                     </tr>
                   );
