@@ -152,13 +152,13 @@ export default async function handler(req: any, res: any) {
           ? src.bidPrice
           : typeof src?.bid === "number"
             ? src.bid
-            : 0;
+            : undefined;
       const ask =
         typeof src?.askPrice === "number"
           ? src.askPrice
           : typeof src?.ask === "number"
             ? src.ask
-            : bid;
+            : undefined;
 
       const expiryDate = new Date(maturity + "T00:00:00Z");
       const dte = Math.max(
@@ -168,13 +168,25 @@ export default async function handler(req: any, res: any) {
         )
       );
 
-      if (!currentPrice || !strike || !bid) return;
+      // Require an underlying price and a valid strike; an option quote is nice-to-have.
+      if (!currentPrice || !strike) return;
 
       const isSell = row.action === "Sell to Open";
-      const limitPrice =
-        row.limitPriceMethod === "mid"
-          ? (bid + (ask || bid)) / 2
-          : bid;
+      let limitPrice: number | undefined;
+      if (row.limitPriceMethod === "mid") {
+        if (typeof bid === "number" && typeof ask === "number" && bid > 0 && ask > 0) {
+          limitPrice = (bid + ask) / 2;
+        } else if (typeof bid === "number" && bid > 0) {
+          limitPrice = bid;
+        } else if (typeof ask === "number" && ask > 0) {
+          limitPrice = ask;
+        }
+      } else {
+        if (typeof bid === "number" && bid > 0) limitPrice = bid;
+        else if (typeof ask === "number" && ask > 0) limitPrice = ask;
+      }
+
+      if (!limitPrice || limitPrice <= 0) return;
 
       const notional = strike * contracts * 100;
       const premium = (isSell ? 1 : -1) * limitPrice * contracts * 100;
@@ -196,8 +208,8 @@ export default async function handler(req: any, res: any) {
         moneynessPct,
         optionSide: `${row.putCall.toUpperCase()} - ${row.action.toUpperCase()}`,
         optionLimitPrice: limitPrice,
-        currentBid: bid,
-        currentAsk: ask,
+        currentBid: typeof bid === "number" && bid > 0 ? bid : limitPrice,
+        currentAsk: typeof ask === "number" && ask > 0 ? ask : limitPrice,
         contracts,
         premiumReceived: premium,
         yieldAtCurrentPrice,
