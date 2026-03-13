@@ -421,7 +421,7 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
                   <th
                     style={{
                       ...thNumStyle,
-                      color: copiedColumn === "bid" ? t.colors.primary : undefined,
+                  color: copiedColumn === "bid" ? t.colors.primary : "#FFFFFF",
                       cursor: "pointer",
                       transition: "color 0.2s ease",
                     }}
@@ -433,7 +433,7 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
                   <th
                     style={{
                       ...thNumStyle,
-                      color: copiedColumn === "ask" ? t.colors.primary : undefined,
+                  color: copiedColumn === "ask" ? t.colors.primary : "#FFFFFF",
                       cursor: "pointer",
                       transition: "color 0.2s ease",
                     }}
@@ -445,7 +445,7 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
                   <th
                     style={{
                       ...thNumStyle,
-                      color: copiedColumn === "last" ? t.colors.primary : undefined,
+                  color: copiedColumn === "last" ? t.colors.primary : "#FFFFFF",
                       cursor: "pointer",
                       transition: "color 0.2s ease",
                     }}
@@ -457,7 +457,7 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
                   <th
                     style={{
                       ...thNumStyle,
-                      color: copiedColumn === "mark" ? t.colors.primary : undefined,
+                  color: copiedColumn === "mark" ? t.colors.primary : "#FFFFFF",
                       cursor: "pointer",
                       transition: "color 0.2s ease",
                     }}

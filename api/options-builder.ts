@@ -108,16 +108,35 @@ export default async function handler(req: any, res: any) {
     );
     const quoteBody: any = quoteResp.ok ? await quoteResp.json() : {};
     const currentPriceByTicker: Record<string, number> = {};
-    for (const sym of distinctTickers) {
-      const q = quoteBody[sym] ?? quoteBody[sym.replace(/\s+/g, "")];
-      const src = q?.quote ?? q;
-      const p =
-        src?.regularMarketLast ??
-        src?.lastPrice ??
-        src?.last ??
-        src?.close ??
-        src?.regularMarketPrice;
-      if (typeof p === "number" && p > 0) currentPriceByTicker[sym] = p;
+    if (quoteBody && typeof quoteBody === "object") {
+      const bySymbol = new Map<string, any>();
+      if (Array.isArray(quoteBody)) {
+        for (const q of quoteBody) {
+          if (q?.symbol) bySymbol.set(String(q.symbol).trim(), q);
+        }
+      } else if (Array.isArray(quoteBody.quotes)) {
+        for (const q of quoteBody.quotes) {
+          if (q?.symbol) bySymbol.set(String(q.symbol).trim(), q);
+        }
+      } else {
+        for (const [k, v] of Object.entries(quoteBody)) {
+          if (v && typeof v === "object") bySymbol.set(String(k).trim(), v);
+        }
+      }
+      for (const sym of distinctTickers) {
+        const q =
+          bySymbol.get(sym) ??
+          bySymbol.get(sym.replace(/\s+/g, "")) ??
+          (quoteBody as any)[sym];
+        const src = q?.quote ?? q;
+        const p =
+          src?.regularMarketLast ??
+          src?.lastPrice ??
+          src?.last ??
+          src?.close ??
+          src?.regularMarketPrice;
+        if (typeof p === "number" && p > 0) currentPriceByTicker[sym] = p;
+      }
     }
 
     const occSymbols = rows.map((r) =>
