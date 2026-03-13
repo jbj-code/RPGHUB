@@ -136,6 +136,23 @@ export default async function handler(req: any, res: any) {
     );
     const occBody: any = occResp.ok ? await occResp.json() : {};
 
+    const bySymbol = new Map<string, any>();
+    if (occBody && typeof occBody === "object") {
+      if (Array.isArray(occBody)) {
+        for (const q of occBody) {
+          if (q?.symbol) bySymbol.set(String(q.symbol).trim(), q);
+        }
+      } else if (Array.isArray(occBody.quotes)) {
+        for (const q of occBody.quotes) {
+          if (q?.symbol) bySymbol.set(String(q.symbol).trim(), q);
+        }
+      } else {
+        for (const [k, v] of Object.entries(occBody)) {
+          if (v && typeof v === "object") bySymbol.set(String(k).trim(), v);
+        }
+      }
+    }
+
     const out: BuilderRowOutput[] = [];
 
     rows.forEach((row, idx) => {
@@ -145,7 +162,10 @@ export default async function handler(req: any, res: any) {
       const contracts = Math.max(1, Number(row.contracts) || 0);
       const currentPrice = currentPriceByTicker[ticker];
       const occ = occSymbols[idx];
-      const q = occBody[occ] ?? occBody[occ.replace(/\s+/g, "")];
+      const q =
+        bySymbol.get(occ) ??
+        bySymbol.get(occ.replace(/\s+/g, "")) ??
+        (occBody && typeof occBody === "object" ? (occBody as any)[occ] : undefined);
       const src = q?.quote ?? q?.optionContract ?? q;
       const bid =
         typeof src?.bidPrice === "number"
