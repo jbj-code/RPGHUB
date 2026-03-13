@@ -196,6 +196,7 @@ body {
 .home-quick-link-card.interactive-card:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(68, 193, 193, 0.35);
+  border-color: rgba(68, 193, 193, 0.8) !important;
 }
 .home-quick-link-card.interactive-card:active {
   transform: translateY(0) scale(0.99);

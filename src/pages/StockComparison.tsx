@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Theme } from "../theme";
-import { getPrimaryButtonStyle, PAGE_LAYOUT } from "../theme";
+import { getPrimaryActionButtonStyle, getPrimaryButtonStyle, PAGE_LAYOUT } from "../theme";
 
 type StockComparisonProps = { theme: Theme };
 
@@ -24,19 +24,14 @@ const PRESETS: Preset[] = [
   { name: "Mega cap", tickers: ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"] },
 ];
 
-const BENCHMARK_GROUPS: Preset[] = [
-  {
-    name: "US Markets",
-    tickers: ["$DJI", "$COMPX", "$SPX", "$RUT"],
-  },
-  {
-    name: "EU Markets",
-    tickers: ["$GDAXI", "$SPEY", "$FCHI", "$N100"],
-  },
-  {
-    name: "Asia / Pacific",
-    tickers: ["$N225", "$HSI", "$AORD"],
-  },
+type Benchmark = { symbol: string; label: string; description: string };
+
+const BENCHMARKS: Benchmark[] = [
+  { symbol: "VOO", label: "VOO", description: "Vanguard S&P 500 ETF" },
+  { symbol: "QQQ", label: "QQQ", description: "Nasdaq-100 ETF" },
+  { symbol: "IWM", label: "IWM", description: "Russell 2000 ETF" },
+  { symbol: "EFA", label: "EFA", description: "Intl Developed (EAFE)" },
+  { symbol: "IBIT", label: "IBIT", description: "iShares Bitcoin Trust" },
 ];
 
 export function StockComparison({ theme: t }: StockComparisonProps) {
@@ -53,6 +48,21 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
   const [apiHint, setApiHint] = useState<string | null>(null); // server hint when no data (e.g. token expired)
   const [fetchKey, setFetchKey] = useState(0); // bump to force re-fetch (Refresh)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [selectedBenchmarks, setSelectedBenchmarks] = useState<Set<string>>(
+    () => new Set()
+  );
+  const lastFetchKeyRef = useRef(fetchKey);
+
+  const allTickersForFetch = [
+    ...new Set([
+      ...tickers,
+      ...Array.from(selectedBenchmarks),
+    ]),
+  ];
+  const tableTickers = [
+    ...tickers,
+    ...Array.from(selectedBenchmarks).filter((b) => !tickers.includes(b)),
+  ];
 
   const pageStyle: React.CSSProperties = {
     maxWidth: PAGE_LAYOUT.maxWidth,
@@ -133,6 +143,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
   };
 
   const buttonStyle = getPrimaryButtonStyle(t);
+  const actionButtonStyle = getPrimaryActionButtonStyle(t);
 
   const checkboxRowStyle: React.CSSProperties = {
     display: "flex",
@@ -181,9 +192,9 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
     textAlign: "left",
     fontWeight: t.typography.headingWeight,
     padding: `${t.spacing(2)} ${t.spacing(3)}`,
-    backgroundColor: t.colors.background,
+    backgroundColor: t.colors.secondary,
     borderBottom: `1px solid ${t.colors.border}`,
-    color: t.colors.textMuted,
+    color: "#FFFFFF",
     fontSize: "0.8rem",
   };
 
@@ -208,25 +219,38 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
   }
 
   useEffect(() => {
-    if (tickers.length === 0) {
+    // Keep state clean when everything is cleared, regardless of fetch key.
+    if (allTickersForFetch.length === 0) {
       setReturnsMap({});
       setLoadingTickers(new Set());
       setError(null);
       setLoading(false);
       setLastUpdated(null);
+    }
+  }, [allTickersForFetch.length]);
+
+  useEffect(() => {
+    // Only run the fetch logic when fetchKey actually changes (manual Fetch).
+    if (fetchKey === lastFetchKeyRef.current) {
       return;
     }
+    lastFetchKeyRef.current = fetchKey;
 
+    if (allTickersForFetch.length === 0) {
+      return;
+    }
     const controller = new AbortController();
     // Only show "Loading from Schwab…" for tickers we don't have data for yet (e.g. newly added).
-    setLoadingTickers(new Set(tickers.filter((t) => !returnsMap[t])));
+    setLoadingTickers(
+      new Set(allTickersForFetch.filter((t) => !returnsMap[t]))
+    );
     setLoading(true);
     setError(null);
     setApiHint(null);
 
     async function loadReturns() {
       try {
-        const symbolsParam = encodeURIComponent(tickers.join(","));
+        const symbolsParam = encodeURIComponent(allTickersForFetch.join(","));
         const res = await fetch(
           `${SCHWAB_API_BASE}/api/schwab-returns?symbols=${symbolsParam}`,
           { signal: controller.signal }
@@ -263,7 +287,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
     void loadReturns();
 
     return () => controller.abort();
-  }, [tickers, fetchKey]);
+  }, [tickers, selectedBenchmarks, fetchKey]);
 
   function addTicker() {
     const raw = tickerInput.trim().toUpperCase();
@@ -326,14 +350,14 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
 
   const selectedLookbacks = TIMEFRAMES.filter((tf) => lookbacks.has(tf));
   const allSelected = lookbacks.size === TIMEFRAMES.length;
-  const canReorder = tickers.length > 1;
-  const hasAnyReturns = tickers.some((t) => returnsMap[t]);
-  const canCopyTable = tickers.length > 0 && selectedLookbacks.length > 0;
+  const canReorder = tableTickers.length > 1;
+  const hasAnyReturns = tableTickers.some((t) => returnsMap[t]);
+  const canCopyTable = tableTickers.length > 0 && selectedLookbacks.length > 0;
 
   function copyTableToClipboard() {
     if (!canCopyTable) return;
     const headerRow = ["Ticker", "Price", ...selectedLookbacks].join("\t");
-    const dataRows = tickers.map((ticker) => {
+    const dataRows = tableTickers.map((ticker) => {
       const returns = returnsMap[ticker];
       const priceCell =
         returns?.price != null && Number.isFinite(returns.price)
@@ -361,6 +385,21 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
 
   function applyPreset(preset: Preset) {
     setTickers([...preset.tickers]);
+  }
+
+  function toggleBenchmark(symbol: string) {
+    setSelectedBenchmarks((prev) => {
+      const next = new Set(prev);
+      if (next.has(symbol)) next.delete(symbol);
+      else next.add(symbol);
+      return next;
+    });
+  }
+
+  function setAllBenchmarks(checked: boolean) {
+    setSelectedBenchmarks(
+      checked ? new Set(BENCHMARKS.map((b) => b.symbol)) : new Set()
+    );
   }
 
   return (
@@ -427,9 +466,23 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
                   onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addTicker())}
                   aria-label="Add ticker symbol"
                 />
-                <button type="button" style={{ ...buttonStyle, display: "inline-flex", alignItems: "center", gap: t.spacing(1.5) }} onClick={addTicker}>
-                  <span className="material-symbols-outlined" style={{ fontSize: 20 }} aria-hidden>add</span>
-                  Add
+                <button
+                  type="button"
+                  style={{
+                    ...buttonStyle,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: t.spacing(1.5),
+                    backgroundColor: "transparent",
+                    color: t.colors.textMuted,
+                    border: `1px solid ${t.colors.border}`,
+                  }}
+                  onClick={addTicker}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 20 }} aria-hidden>
+                    add
+                  </span>
+                  Add ticker
                 </button>
               </div>
               {tickers.length > 0 && (
@@ -460,7 +513,14 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
               )}
             </div>
 
-            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: t.spacing(5) }}>
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                gap: t.spacing(4),
+              }}
+            >
               <label style={checkboxRowStyle}>
                 <input
                   type="checkbox"
@@ -482,32 +542,101 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
                 </label>
               ))}
             </div>
+
+            <div
+              style={{
+                marginTop: "auto",
+                paddingTop: t.spacing(2),
+                display: "flex",
+                justifyContent: "flex-start",
+              }}
+            >
+              <button
+                type="button"
+                style={{
+                  ...actionButtonStyle,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  whiteSpace: "nowrap",
+                }}
+                onClick={refreshReturns}
+                disabled={loading || allTickersForFetch.length === 0}
+              >
+                {loading ? (
+                  <span
+                    className="options-pricing-fetch-spinner"
+                    aria-hidden
+                    style={{ marginRight: t.spacing(1) }}
+                  />
+                ) : null}
+                {loading ? "Fetching" : "Fetch from Schwab"}
+              </button>
+            </div>
           </div>
         </div>
 
         <div className="page-card" style={presetsCardStyle}>
-          <h3 style={{ ...cardTitleStyleNoMargin, marginBottom: t.spacing(2) }}>Benchmarks</h3>
-          <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(1.5) }}>
-            {BENCHMARK_GROUPS.map((preset) => (
-              <button
-                key={preset.name}
-                type="button"
-                onClick={() => applyPreset(preset)}
-                style={{
-                  padding: `${t.spacing(1.5)} ${t.spacing(2)}`,
-                  fontSize: "0.85rem",
-                  color: t.colors.text,
-                  backgroundColor: t.colors.background,
-                  border: `1px solid ${t.colors.border}`,
-                  borderRadius: t.radius.sm,
-                  cursor: "pointer",
-                  fontFamily: t.typography.fontFamily,
-                  textAlign: "left",
-                }}
-              >
-                {preset.name}
-              </button>
-            ))}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: t.spacing(2),
+            }}
+          >
+            <h3 style={{ ...cardTitleStyleNoMargin, marginBottom: 0 }}>Benchmarks</h3>
+            <input
+              type="checkbox"
+              checked={selectedBenchmarks.size === BENCHMARKS.length}
+              onChange={(e) => setAllBenchmarks(e.target.checked)}
+              style={checkboxInputStyle}
+              aria-label="Select all benchmarks"
+            />
+          </div>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: t.spacing(1.5),
+              maxHeight: 260,
+              overflowY: "auto",
+              paddingRight: t.spacing(1),
+              marginRight: -t.spacing(1),
+            }}
+          >
+            {BENCHMARKS.map((bm) => {
+              const checked = selectedBenchmarks.has(bm.symbol);
+              return (
+                <label
+                  key={bm.symbol}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: t.spacing(2),
+                    padding: `${t.spacing(1.5)} ${t.spacing(2)}`,
+                    borderRadius: t.radius.sm,
+                    border: `1px solid ${t.colors.border}`,
+                    backgroundColor: t.colors.background,
+                    cursor: "pointer",
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: t.typography.headingWeight, fontSize: "0.9rem" }}>
+                      {bm.label}
+                    </div>
+                    <div style={{ fontSize: "0.8rem", color: t.colors.textMuted }}>{bm.description}</div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleBenchmark(bm.symbol)}
+                    style={checkboxInputStyle}
+                  />
+                </label>
+              );
+            })}
           </div>
         </div>
 
@@ -543,7 +672,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: t.spacing(3) }}>
           <h3 style={cardTitleStyle}>Performance</h3>
           <div style={{ display: "flex", alignItems: "center", gap: t.spacing(2) }}>
-            {tickers.length > 0 && (
+            {tableTickers.length > 0 && (
               <button
                 type="button"
                 onClick={refreshReturns}
@@ -619,7 +748,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
             )}
           </div>
         </div>
-        {tickers.length === 0 ? (
+        {tableTickers.length === 0 ? (
           <div style={{ padding: t.spacing(6), textAlign: "center" as const, color: t.colors.textMuted, fontSize: "0.9rem", border: `1px dashed ${t.colors.border}`, borderRadius: t.radius.md, backgroundColor: t.colors.background }}>
             Add tickers above to see returns.
           </div>
@@ -638,7 +767,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
                 {error} (showing partial data.)
               </p>
             )}
-            {!loading && !hasAnyReturns && tickers.length > 0 && (
+            {!loading && !hasAnyReturns && tableTickers.length > 0 && (
               <p style={{ marginBottom: t.spacing(2), fontSize: "0.875rem", color: t.colors.textMuted }}>
                 {apiHint || "No return data for these symbols. This can happen when the market is closed, the Schwab token has expired, or the API returned no candles."}
                 {" "}
@@ -666,7 +795,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
                 </tr>
               </thead>
               <tbody>
-                {tickers.map((ticker, i) => {
+                {tableTickers.map((ticker, i) => {
                   const returns = returnsMap[ticker];
                   const isLoadingRow = loadingTickers.has(ticker);
                   const isDragging = draggedIndex === i;

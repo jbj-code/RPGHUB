@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { lightTheme, darkTheme, type ThemeMode, type Theme } from "./theme";
 import { NavBar, SIDEBAR_WIDTH } from "./components/NavBar";
 import { PasswordGate, getIsUnlocked } from "./components/PasswordGate";
-import { Home, OptionsOptimizer, StockComparison, Rankinator, RaiseAi } from "./pages";
+import { Home, OptionsOptimizer, StockComparison, OptionsBuilder, Rankinator, RaiseAi } from "./pages";
 import { OptionsPricing } from "./pages/OptionsPricing";
 
 export type Page =
@@ -10,10 +10,11 @@ export type Page =
   | "put-optimizer"
   | "stock-comparison"
   | "options-pricing"
+  | "options-builder"
   | "rankinator"
   | "raise-ai";
 
-const PAGE_PADDING_H = 9;
+const PAGE_PADDING_H = 6;
 
 function App() {
   const [unlocked, setUnlocked] = useState(false);
@@ -66,6 +67,7 @@ function App() {
           {page === "put-optimizer" && <OptionsOptimizer theme={t} />}
           {page === "stock-comparison" && <StockComparison theme={t} />}
           {page === "options-pricing" && <OptionsPricing theme={t} />}
+          {page === "options-builder" && <OptionsBuilder theme={t} />}
           {page === "rankinator" && <Rankinator theme={t} />}
           {page === "raise-ai" && <RaiseAi theme={t} />}
         </div>

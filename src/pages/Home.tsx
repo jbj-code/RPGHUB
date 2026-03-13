@@ -6,6 +6,11 @@ const GOOGLE_DRIVE_FOLDER =
 const ADDEPAR_LOGIN =
   "https://id.addepar.com/login?continue=%7B%22targetName%22%3A%22oauth2.authorize%22%2C%22queryParams%22%3A%7B%22response_type%22%3A%22code%22%2C%22scope%22%3A%22session%22%2C%22client_id%22%3A%22iverson%22%2C%22state%22%3A%22%7B%7D%22%2C%22code_challenge%22%3A%22cd3ad6e1e27ec9851864f1c65b0da1f1ffc8bab28ecc6fde1e479839fad28cb8%22%2C%22redirect_uri%22%3A%22https%3A%2F%2Fresolute.addepar.com%2Foauth2%2Fcb%22%2C%22firm%22%3A%22resolute%22%7D%7D&firm=resolute";
 const SCHWAB_LOGIN = "https://client.schwab.com/";
+const PERSHING_LOGIN = "https://www2.netx360.com/plus/login";
+const TRINET_LOGIN =
+  "https://identity.trinet.com/oauth2/aus590q9hSMIGGWxx4x6/v1/authorize?client_id=0oa590aagPaPtb3JL4x6&response_type=code&scope=profile%20email%20openid%20offline_access&redirect_uri=https://trinet.hrpassport.com/api-trinet-auth/authorization&message=Success_ui-home&state=ui-home";
+const EMPOWER_LOGIN =
+  "https://trinet401k.empower-retirement.com/participant/home/#/dashboard/retirement-income";
 
 /** Favicon URL for a domain (Google S2 favicon service). */
 function faviconUrl(domain: string, size = 64): string {
@@ -50,9 +55,9 @@ export function Home({ theme: t }: HomeProps) {
 
   const cardsGridStyle: React.CSSProperties = {
     display: "grid",
-    gridTemplateColumns: "repeat(3, 1fr)",
+    gridTemplateColumns: "repeat(5, 1fr)",
     gap: t.spacing(3),
-    maxWidth: 520,
+    maxWidth: 900,
     marginLeft: "auto",
     marginRight: "auto",
   };
@@ -93,6 +98,21 @@ export function Home({ theme: t }: HomeProps) {
       title: "Schwab",
       href: SCHWAB_LOGIN,
       faviconDomain: "schwab.com",
+    },
+    {
+      title: "Pershing",
+      href: PERSHING_LOGIN,
+      faviconDomain: "netx360.com",
+    },
+    {
+      title: "TriNet",
+      href: TRINET_LOGIN,
+      faviconDomain: "trinet.com",
+    },
+    {
+      title: "Empower",
+      href: EMPOWER_LOGIN,
+      faviconDomain: "empower-retirement.com",
     },
   ];
 

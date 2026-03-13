@@ -182,9 +182,9 @@ export function RaiseAi({ theme: t }: RaiseAiProps) {
     textAlign: "left",
     fontWeight: t.typography.headingWeight,
     padding: `${t.spacing(2)} ${t.spacing(3)}`,
-    backgroundColor: t.colors.background,
+    backgroundColor: t.colors.secondary,
     borderBottom: `1px solid ${t.colors.border}`,
-    color: t.colors.textMuted,
+    color: "#FFFFFF",
     fontSize: "0.8rem",
   };
 

@@ -19,7 +19,7 @@ import type { CSSProperties } from "react";
 
 /** Standard page layout: same max-width and spacing for every tool page. */
 export const PAGE_LAYOUT = {
-  maxWidth: 1040,
+  maxWidth: 1200,
   titleMarginBottom: 1,
   descMarginBottom: 5,
   /** Top margin when the first element is not an h2 (e.g. a wrapper div). Matches browser default h2 margin-top (0.83em of 1.5rem title font). */
@@ -75,6 +75,14 @@ export function getPrimaryButtonStyle(t: Theme): CSSProperties {
     border: "none",
     borderRadius: t.radius.md,
     cursor: "pointer",
+  };
+}
+
+/** Primary action button: slightly taller for main CTAs (Fetch, Optimize, Build, etc.). */
+export function getPrimaryActionButtonStyle(t: Theme): CSSProperties {
+  return {
+    ...getPrimaryButtonStyle(t),
+    padding: `${t.spacing(2.5)} ${t.spacing(4.5)}`,
   };
 }
 

@@ -100,6 +100,7 @@ export function NavBar({ page, onNavigate, mode, onToggleMode, theme: t }: NavBa
     { page: "stock-comparison", label: "Stock Comparison", icon: "compare_arrows" },
     { page: "put-optimizer", label: "Options Optimizer", icon: "tune" },
     { page: "options-pricing", label: "Options Pricing", icon: "paid" },
+    { page: "options-builder", label: "Options Builder", icon: "table_chart" },
     {
       page: "rankinator",
       label: "Rankinator",

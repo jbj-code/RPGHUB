@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import type { Theme } from "../theme";
-import { getPrimaryButtonStyle, PAGE_LAYOUT } from "../theme";
+import { getPrimaryActionButtonStyle, getPrimaryButtonStyle, PAGE_LAYOUT } from "../theme";
 
 type OptionsOptimizerProps = { theme: Theme };
 
@@ -260,9 +260,9 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
     color: t.colors.text,
   };
 
-  const primaryBtn = getPrimaryButtonStyle(t);
+  const primaryBtn = getPrimaryActionButtonStyle(t);
   const secondaryBtnStyle: React.CSSProperties = {
-    padding: `${t.spacing(1.5)} ${t.spacing(3)}`,
+    padding: `${t.spacing(2.5)} ${t.spacing(3)}`,
     fontSize: "0.875rem",
     fontWeight: 600,
     color: t.colors.textMuted,
@@ -530,9 +530,6 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
           ))}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: t.spacing(3), marginTop: t.spacing(3), flexWrap: "wrap" }}>
-          <button type="button" style={secondaryBtnStyle} onClick={addPortfolioRow}>
-            + Add contract
-          </button>
           <button
             type="button"
             style={primaryBtn}
@@ -548,6 +545,9 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
               bolt
             </span>
             {optimizeLoading ? "Optimizing…" : "Optimize portfolio"}
+          </button>
+          <button type="button" style={secondaryBtnStyle} onClick={addPortfolioRow}>
+            + Add contract
           </button>
         </div>
         {optimizeMessage && (
@@ -572,17 +572,17 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.875rem" }}>
               <thead>
-                <tr style={{ borderBottom: `2px solid ${t.colors.border}` }}>
-                  <th style={{ textAlign: "left", padding: t.spacing(2), color: t.colors.textMuted, fontWeight: 600 }}>Rank</th>
-                  <th style={{ textAlign: "left", padding: t.spacing(2), color: t.colors.textMuted, fontWeight: 600 }}>Ticker</th>
-                  <th style={{ textAlign: "left", padding: t.spacing(2), color: t.colors.textMuted, fontWeight: 600 }}>Schwab symbol</th>
-                  <th style={{ textAlign: "left", padding: t.spacing(2), color: t.colors.textMuted, fontWeight: 600 }}>Company</th>
-                  <th style={{ textAlign: "right", padding: t.spacing(2), color: t.colors.textMuted, fontWeight: 600 }}>1M Upside %</th>
-                  <th style={{ textAlign: "right", padding: t.spacing(2), color: t.colors.textMuted, fontWeight: 600 }}>Strike</th>
-                  <th style={{ textAlign: "right", padding: t.spacing(2), color: t.colors.textMuted, fontWeight: 600 }}>Bid</th>
-                  <th style={{ textAlign: "right", padding: t.spacing(2), color: t.colors.textMuted, fontWeight: 600 }}>Ann. Yield</th>
-                  <th style={{ textAlign: "right", padding: t.spacing(2), color: t.colors.textMuted, fontWeight: 600 }}>Premium (1)</th>
-                  <th style={{ textAlign: "right", padding: t.spacing(2), color: t.colors.textMuted, fontWeight: 600 }}>Action</th>
+                <tr style={{ borderBottom: `2px solid ${t.colors.border}`, backgroundColor: t.colors.secondary }}>
+                  <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Rank</th>
+                  <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Ticker</th>
+                  <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Schwab symbol</th>
+                  <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Company</th>
+                  <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>1M Upside %</th>
+                  <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Strike</th>
+                  <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Bid</th>
+                  <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Ann. Yield</th>
+                  <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Premium (1)</th>
+                  <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Action</th>
                 </tr>
               </thead>
               <tbody>
