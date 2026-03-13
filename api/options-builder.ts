@@ -218,6 +218,15 @@ export default async function handler(req: any, res: any) {
       });
     });
 
+    if (out.length === 0) {
+      res.status(422).json({
+        error:
+          "No valid option rows could be built. Check that the tickers, dates, strikes, and contracts are correct and that Schwab is returning quotes for these options.",
+        rows: [],
+      });
+      return;
+    }
+
     res.status(200).json({ rows: out });
   } catch (err) {
     console.error("options-builder error", err);
