@@ -329,12 +329,10 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
                 aria-label={showPassword ? "Hide password" : "Show password"}
               >
                 <span
-                  className="material-symbols-outlined"
-                  style={{ fontSize: 22 }}
+                  className="password-gate-visibility-icon"
+                  data-icon={showPassword ? "visibility_off" : "visibility"}
                   aria-hidden
-                >
-                  {showPassword ? "visibility_off" : "visibility"}
-                </span>
+                />
               </button>
             </div>
             <button type="submit" style={enterBtnStyle} disabled={submitting}>

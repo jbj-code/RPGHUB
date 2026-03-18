@@ -172,6 +172,7 @@ export function NavBar({
     { page: "put-optimizer", label: "Options Optimizer", icon: "tune" },
     { page: "options-pricing", label: "Options Pricing", icon: "paid" },
     { page: "options-builder", label: "Options Builder", icon: "table_chart" },
+    { page: "graph-tool", label: "Graph Tool", icon: "show_chart" },
     { page: "todos", label: "To-Dos", icon: "checklist" },
     {
       page: "rankinator",

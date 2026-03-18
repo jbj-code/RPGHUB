@@ -12,6 +12,7 @@ import {
   Rankinator,
   RaiseAi,
   ClientDetail,
+  GraphTool,
 } from "./pages";
 import { OptionsPricing } from "./pages/OptionsPricing";
 
@@ -24,6 +25,7 @@ export type Page =
   | "todos"
   | "clients"
   | "client-detail"
+  | "graph-tool"
   | "rankinator"
   | "raise-ai";
 
@@ -96,6 +98,7 @@ function App() {
             {page === "client-detail" && (
               <ClientDetail theme={t} clientName={selectedClient ?? "Client"} />
             )}
+            {page === "graph-tool" && <GraphTool theme={t} />}
             {page === "rankinator" && <Rankinator theme={t} />}
             {page === "raise-ai" && <RaiseAi theme={t} />}
           </div>

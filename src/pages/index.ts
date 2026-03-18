@@ -7,3 +7,4 @@ export { Clients } from "./Clients";
 export { Rankinator } from "./Rankinator";
 export { RaiseAi } from "./RaiseAi";
 export { ClientDetail } from "./ClientDetail";
+export { GraphTool } from "./GraphTool";

@@ -28,6 +28,18 @@ body {
   word-wrap: normal;
 }
 
+/* Password gate: avoid flashing "visibility" text before icon font loads */
+.password-gate-visibility-icon {
+  font-size: 0;
+  position: relative;
+}
+.password-gate-visibility-icon::before {
+  content: attr(data-icon);
+  font-family: "Material Symbols Outlined";
+  font-size: 22px;
+  line-height: 1;
+}
+
 /* Stock Comparison: checkboxes with primary fill and white checkmark */
 .stock-comparison-page input[type="checkbox"] {
   appearance: none;

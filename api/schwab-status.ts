@@ -40,7 +40,9 @@ export default async function handler(req: any, res: any) {
 
     const expiresAt =
       tokenRow.expires_at != null ? new Date(tokenRow.expires_at).getTime() : null;
-    const expired = expiresAt != null && Date.now() >= expiresAt;
+    const bufferMs = 5 * 60 * 1000; // 5 minutes: treat near-expiry as expired
+    const expired =
+      expiresAt != null && Date.now() >= expiresAt - bufferMs;
     const hasRefresh = !!tokenRow.refresh_token;
 
     res.status(200).json({
