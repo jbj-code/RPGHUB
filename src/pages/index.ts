@@ -6,3 +6,4 @@ export { Todos } from "./Todos";
 export { Clients } from "./Clients";
 export { Rankinator } from "./Rankinator";
 export { RaiseAi } from "./RaiseAi";
+export { ClientDetail } from "./ClientDetail";

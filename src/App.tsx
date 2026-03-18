@@ -2,7 +2,17 @@ import { useState, useEffect } from "react";
 import { lightTheme, darkTheme, type ThemeMode, type Theme } from "./theme";
 import { NavBar, SIDEBAR_WIDTH, SIDEBAR_WIDTH_COMPACT } from "./components/NavBar";
 import { PasswordGate, getIsUnlocked } from "./components/PasswordGate";
-import { Home, OptionsOptimizer, StockComparison, OptionsBuilder, Todos, Clients, Rankinator, RaiseAi } from "./pages";
+import {
+  Home,
+  OptionsOptimizer,
+  StockComparison,
+  OptionsBuilder,
+  Todos,
+  Clients,
+  Rankinator,
+  RaiseAi,
+  ClientDetail,
+} from "./pages";
 import { OptionsPricing } from "./pages/OptionsPricing";
 
 export type Page =
@@ -13,6 +23,7 @@ export type Page =
   | "options-builder"
   | "todos"
   | "clients"
+  | "client-detail"
   | "rankinator"
   | "raise-ai";
 
@@ -23,6 +34,7 @@ function App() {
   const [page, setPage] = useState<Page>("home");
   const [mode, setMode] = useState<ThemeMode>("light");
   const [sidebarCompact, setSidebarCompact] = useState(false);
+  const [selectedClient, setSelectedClient] = useState<string | null>(null);
   const sidebarWidth = sidebarCompact ? SIDEBAR_WIDTH_COMPACT : SIDEBAR_WIDTH;
 
   useEffect(() => {
@@ -62,6 +74,8 @@ function App() {
       <NavBar
         page={page}
         onNavigate={setPage}
+        onSelectClient={setSelectedClient}
+        selectedClient={selectedClient}
         mode={mode}
         onToggleMode={() => setMode(mode === "light" ? "dark" : "light")}
         theme={t}
@@ -79,6 +93,9 @@ function App() {
             {page === "options-pricing" && <OptionsPricing theme={t} />}
             {page === "options-builder" && <OptionsBuilder theme={t} />}
             {page === "clients" && <Clients theme={t} />}
+            {page === "client-detail" && (
+              <ClientDetail theme={t} clientName={selectedClient ?? "Client"} />
+            )}
             {page === "rankinator" && <Rankinator theme={t} />}
             {page === "raise-ai" && <RaiseAi theme={t} />}
           </div>

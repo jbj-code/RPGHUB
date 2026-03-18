@@ -239,6 +239,8 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
   const [trades, setTrades] = useState<OptionsTrade[]>([]);
   const [showOptimizeForModal, setShowOptimizeForModal] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [lastAddedTradeId, setLastAddedTradeId] = useState<string | null>(null);
+  const [lastCopiedTradeId, setLastCopiedTradeId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!showOptimizeForModal) return;
@@ -308,6 +310,10 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
   const addToTradeList = useCallback((result: RankedResult) => {
     const trade = { ...result.trade, id: makeId() };
     setTrades((prev) => [...prev, trade]);
+    setLastAddedTradeId(result.trade.id);
+    window.setTimeout(() => {
+      setLastAddedTradeId((prev) => (prev === result.trade.id ? null : prev));
+    }, 1200);
   }, []);
 
   const removeTrade = useCallback((id: string) => {
@@ -316,6 +322,11 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
 
   const summaryPremium = trades.reduce((sum, tr) => sum + tr.premiumReceived, 0);
   const summaryTotal = trades.reduce((sum, tr) => sum + tr.valueOfSharesAtStrike, 0);
+
+  const showSchwabAuthHint =
+    !!optimizeMessage &&
+    (optimizeMessage.includes("Schwab token expired") ||
+      optimizeMessage.includes("Not authorized with Schwab"));
 
   const pageStyle: React.CSSProperties = {
     maxWidth: PAGE_LAYOUT.maxWidth,
@@ -387,6 +398,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
     width: "100%",
     maxWidth: 120,
     padding: `${t.spacing(2)} ${t.spacing(3)}`,
+    height: 40,
     fontSize: t.typography.baseFontSize,
     border: `1px solid ${t.colors.border}`,
     borderRadius: t.radius.md,
@@ -522,7 +534,14 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                 border: `1px solid ${t.colors.border}`,
               }}
             >
-              <div>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-start",
+                  gap: t.spacing(1),
+                }}
+              >
                 <HelpTooltip
                   theme={t}
                   text="Underlying symbol for the option, e.g. SPY, AAPL, NVDA."
@@ -538,7 +557,14 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                   aria-label="Ticker"
                 />
               </div>
-              <div>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-start",
+                  gap: t.spacing(1),
+                }}
+              >
                 <label style={labelStyle}>Put / Call</label>
                 <OptimizerThemeSelect
                   theme={t}
@@ -554,7 +580,14 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                   minWidth={100}
                 />
               </div>
-              <div>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-start",
+                  gap: t.spacing(1),
+                }}
+              >
                 <label style={labelStyle}>Action</label>
                 <OptimizerThemeSelect
                   theme={t}
@@ -570,7 +603,14 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                   minWidth={130}
                 />
               </div>
-              <div>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-start",
+                  gap: t.spacing(1),
+                }}
+              >
                 <HelpTooltip
                   theme={t}
                   text="Qty = number of contracts. Notional = target dollar amount of underlying shares at strike."
@@ -591,7 +631,14 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                   minWidth={90}
                 />
               </div>
-              <div>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-start",
+                  gap: t.spacing(1),
+                }}
+              >
                 <HelpTooltip
                   theme={t}
                   text="If Type is Qty, this is contracts. If Notional, this is target notional of underlying at strike."
@@ -608,7 +655,14 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                   aria-label="Value"
                 />
               </div>
-              <div>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-start",
+                  gap: t.spacing(1),
+                }}
+              >
                 <HelpTooltip
                   theme={t}
                   text="Target days to expiration for this leg. Optimizer will look near this DTE."
@@ -625,7 +679,14 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                   aria-label="Days to expiration"
                 />
               </div>
-              <div>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-start",
+                  gap: t.spacing(1),
+                }}
+              >
                 <HelpTooltip
                   theme={t}
                   text="Whether you want strikes out of the money (OTM) or in the money (ITM) relative to current price."
@@ -646,7 +707,14 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                   minWidth={90}
                 />
               </div>
-              <div>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-start",
+                  gap: t.spacing(1),
+                }}
+              >
                 <HelpTooltip
                   theme={t}
                   text="How far OTM or ITM you want the strike, as a percent of current price."
@@ -664,14 +732,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                   aria-label={`${row.moneyness} percent`}
                 />
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: t.spacing(2) }}>
-                <input
-                  type="checkbox"
-                  id={`monthly-${row.id}`}
-                  checked={row.monthly}
-                  onChange={(e) => updatePortfolioRow(row.id, "monthly", e.target.checked)}
-                  aria-label="Monthly expiration only"
-                />
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
                 <HelpTooltip
                   theme={t}
                   text="If checked, only monthly expirations are considered instead of all weeklys."
@@ -683,6 +744,13 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                     Monthly
                   </label>
                 </HelpTooltip>
+                <input
+                  type="checkbox"
+                  id={`monthly-${row.id}`}
+                  checked={row.monthly}
+                  onChange={(e) => updatePortfolioRow(row.id, "monthly", e.target.checked)}
+                  aria-label="Monthly expiration only"
+                />
               </div>
               {portfolioRows.length > 1 && (
                 <button
@@ -721,7 +789,17 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
         </div>
         {optimizeMessage && (
           <p style={{ marginTop: t.spacing(3), fontSize: "0.875rem", color: t.colors.danger }}>
-            {optimizeMessage}
+            {optimizeMessage}{" "}
+            {showSchwabAuthHint && (
+              <a
+                href={`${SCHWAB_API_BASE}/api/schwab-auth`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: t.colors.primary, fontWeight: t.typography.headingWeight }}
+              >
+                Click here to reauthorize Schwab and refresh the token.
+              </a>
+            )}
           </p>
         )}
       </div>
@@ -738,20 +816,28 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
             {" · "}
             <strong>Avg yield:</strong> {(rankedResults.reduce((s, r) => s + r.annYield, 0) / rankedResults.length).toFixed(1)}%
           </p>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.875rem" }}>
+          <div style={{ overflowX: "auto", borderRadius: t.radius.md, border: `1px solid ${t.colors.border}` }}>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                fontSize: "0.875rem",
+                overflow: "hidden",
+                borderRadius: t.radius.md,
+              }}
+            >
               <thead>
                 <tr style={{ borderBottom: `2px solid ${t.colors.border}`, backgroundColor: t.colors.secondary }}>
-                  <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Rank</th>
+                  <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600, borderTopLeftRadius: t.radius.md }}>Rank</th>
                   <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Ticker</th>
-                  <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Schwab symbol</th>
-                  <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Company</th>
-                  <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>1M Upside %</th>
+                  <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Maturity</th>
+                  <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Type</th>
+                  <th style={{ textAlign: "center", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>1M Upside %</th>
                   <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Strike</th>
                   <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Bid</th>
                   <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Ann. Yield</th>
-                  <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Premium (1)</th>
-                  <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Action</th>
+                  <th style={{ textAlign: "center", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Premium / contract</th>
+                  <th style={{ textAlign: "center", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600, borderTopRightRadius: t.radius.md }}>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -760,16 +846,33 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                     key={r.trade.id}
                     style={{ borderBottom: `1px solid ${t.colors.border}` }}
                   >
-                    <td style={{ padding: t.spacing(2), fontWeight: 600, color: t.colors.text }}>#{r.rank}</td>
-                    <td style={{ padding: t.spacing(2), fontWeight: 600, color: t.colors.text }}>{r.ticker}</td>
-                    <td style={{ padding: t.spacing(2), fontFamily: "monospace", fontSize: "0.8rem", color: t.colors.text }}>
-                      {formatSchwabSymbol(r.trade)}
-                    </td>
-                    <td style={{ padding: t.spacing(2), color: t.colors.text }}>{TICKER_TO_COMPANY[r.ticker] ?? r.company}</td>
                     <td
                       style={{
                         padding: t.spacing(2),
-                        textAlign: "right",
+                        fontWeight: 600,
+                        color:
+                          r.rank === 1
+                            ? "#D4AF37" // gold
+                            : r.rank === 2
+                              ? "#C0C0C0" // silver
+                              : r.rank === 3
+                                ? "#CD7F32" // bronze
+                                : t.colors.text,
+                      }}
+                    >
+                      #{r.rank}
+                    </td>
+                    <td style={{ padding: t.spacing(2), fontWeight: 600, color: t.colors.text }}>{r.ticker}</td>
+                    <td style={{ padding: t.spacing(2), fontSize: "0.8rem", color: t.colors.text }}>
+                      {r.trade.maturity}
+                    </td>
+                    <td style={{ padding: t.spacing(2), color: t.colors.text }}>
+                      {r.trade.optionSide.startsWith("PUT") ? "Put" : "Call"}
+                    </td>
+                    <td
+                      style={{
+                        padding: t.spacing(2),
+                        textAlign: "center",
                         color: r.upsidePct >= 0 ? t.colors.success : t.colors.danger,
                       }}
                     >
@@ -780,15 +883,116 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                     <td style={{ padding: t.spacing(2), textAlign: "right", color: t.colors.success, fontWeight: 600 }}>
                       {r.annYield}%
                     </td>
-                    <td style={{ padding: t.spacing(2), textAlign: "right" }}>${r.premiumPerContract.toFixed(0)}</td>
-                    <td style={{ padding: t.spacing(2), textAlign: "right" }}>
-                      <button
-                        type="button"
-                        style={{ ...primaryBtn, padding: `${t.spacing(1)} ${t.spacing(2)}`, fontSize: "0.8rem" }}
-                        onClick={() => addToTradeList(r)}
-                      >
-                        Add to list
-                      </button>
+                    <td style={{ padding: t.spacing(2), textAlign: "center" }}>${r.premiumPerContract.toFixed(0)}</td>
+                    <td style={{ padding: t.spacing(2), textAlign: "center" }}>
+                      <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: t.spacing(3) }}>
+                        <button
+                          type="button"
+                          onClick={() => addToTradeList(r)}
+                          title="Add to trade list"
+                          aria-label="Add to trade list"
+                          className="options-optimizer-add-trade"
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            width: 34,
+                            height: 34,
+                            padding: 0,
+                            border: "none",
+                            background: "none",
+                            cursor: "pointer",
+                            color: t.colors.primary,
+                            borderRadius: "50%",
+                          }}
+                        >
+                          <span
+                            className="material-symbols-outlined"
+                            style={{
+                              fontSize: 24,
+                              position: "absolute",
+                              opacity: lastAddedTradeId === r.trade.id ? 0 : 1,
+                              transition: "opacity 0.2s ease",
+                              pointerEvents: "none",
+                            }}
+                            aria-hidden
+                          >
+                            add_circle
+                          </span>
+                          <span
+                            className="material-symbols-outlined"
+                            style={{
+                              fontSize: 24,
+                              position: "absolute",
+                              opacity: lastAddedTradeId === r.trade.id ? 1 : 0,
+                              transition: "opacity 0.2s ease",
+                              pointerEvents: "none",
+                            }}
+                            aria-hidden
+                          >
+                            check_circle
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const text = formatSchwabSymbol(r.trade);
+                            void navigator.clipboard.writeText(text);
+                            setLastCopiedTradeId(r.trade.id);
+                            window.setTimeout(
+                              () =>
+                                setLastCopiedTradeId((prev) =>
+                                  prev === r.trade.id ? null : prev
+                                ),
+                              1200
+                            );
+                          }}
+                          title="Copy Schwab symbol"
+                          aria-label="Copy Schwab symbol"
+                          className="options-optimizer-copy-symbol"
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            width: 34,
+                            height: 34,
+                            padding: 0,
+                            border: "none",
+                            background: "none",
+                            cursor: "pointer",
+                            color: t.colors.textMuted,
+                            borderRadius: t.radius.sm,
+                            position: "relative",
+                          }}
+                        >
+                          <span
+                            className="material-symbols-outlined"
+                            style={{
+                              fontSize: 22,
+                              position: "absolute",
+                              opacity: lastCopiedTradeId === r.trade.id ? 0 : 1,
+                              transition: "opacity 0.2s ease",
+                              pointerEvents: "none",
+                            }}
+                            aria-hidden
+                          >
+                            content_copy
+                          </span>
+                          <span
+                            className="material-symbols-outlined"
+                            style={{
+                              fontSize: 22,
+                              position: "absolute",
+                              opacity: lastCopiedTradeId === r.trade.id ? 1 : 0,
+                              transition: "opacity 0.2s ease",
+                              pointerEvents: "none",
+                            }}
+                            aria-hidden
+                          >
+                            check
+                          </span>
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -838,14 +1042,23 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: t.spacing(2) }}>
-              <div style={{ display: "flex", alignItems: "center", gap: t.spacing(2), flexWrap: "wrap" }}>
-                <span style={{ fontSize: "1.125rem", fontWeight: 600, color: t.colors.text }}>{tr.ticker}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: t.spacing(3), flexWrap: "wrap" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(0.5) }}>
+                  <span style={{ fontSize: "1.125rem", fontWeight: 600, color: t.colors.text }}>{tr.ticker}</span>
+                  <span style={{ fontSize: "0.8rem", color: t.colors.textMuted }}>
+                    {TICKER_TO_COMPANY[tr.ticker] ?? tr.ticker}
+                  </span>
+                </div>
                 <span
                   style={{
                     fontSize: "0.8rem",
                     padding: `${t.spacing(0.5)} ${t.spacing(2)}`,
                     borderRadius: t.radius.sm,
-                    backgroundColor: tr.optionSide.includes("PUT") ? "rgba(68, 193, 193, 0.12)" : "rgba(15, 42, 54, 0.08)",
+                    backgroundColor: tr.optionSide.includes("PUT")
+                      ? "rgba(34, 197, 94, 0.12)" // green-ish for puts
+                      : tr.optionSide.includes("SELL")
+                        ? "rgba(234, 179, 8, 0.14)" // amber for call writes
+                        : "rgba(59, 130, 246, 0.14)", // blue for call buys
                     color: t.colors.text,
                   }}
                 >
@@ -864,16 +1077,56 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
             <div style={{ marginBottom: t.spacing(3), fontSize: "0.8rem" }}>
               <div style={labelStyle}>Schwab symbol</div>
               <div style={{ fontFamily: "monospace", color: t.colors.text }}>{formatSchwabSymbol(tr)}</div>
-              <div style={{ ...labelStyle, marginTop: t.spacing(1) }}>Bloomberg key</div>
-              <div style={{ fontFamily: "monospace", color: t.colors.textMuted, fontSize: "0.75rem" }}>{formatOptionKey(tr)}</div>
             </div>
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
+                gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
                 gap: t.spacing(4),
               }}
             >
+              {/* Economics first */}
+              <div>
+                <div style={labelStyle}>Premium</div>
+                <div
+                  style={{
+                    ...valueStyle,
+                    fontSize: "1.05rem",
+                    fontWeight: 600,
+                    color: tr.premiumReceived >= 0 ? t.colors.success : t.colors.danger,
+                  }}
+                >
+                  {formatMoney(tr.premiumReceived)}
+                </div>
+              </div>
+              <div>
+                <div style={labelStyle}>Annualized yield</div>
+                <div
+                  style={{
+                    ...valueStyle,
+                    fontSize: "1.05rem",
+                    fontWeight: 600,
+                    color:
+                      tr.annualizedYieldPct >= 15
+                        ? t.colors.success
+                        : tr.annualizedYieldPct < 10
+                          ? t.colors.danger
+                          : t.colors.text,
+                  }}
+                >
+                  {tr.annualizedYieldPct}%
+                </div>
+              </div>
+              <div>
+                <div style={labelStyle}>Yield</div>
+                <div style={valueStyle}>{tr.yieldAtCurrentPrice}%</div>
+              </div>
+              <div>
+                <div style={labelStyle}>Contracts</div>
+                <div style={valueStyle}>{tr.contracts}</div>
+              </div>
+
+              {/* Structure and risk */}
               <div>
                 <div style={labelStyle}>Maturity</div>
                 <div style={valueStyle}>{tr.maturity}</div>
@@ -895,6 +1148,12 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                 <div style={valueStyle}>{tr.moneynessPct}%</div>
               </div>
               <div>
+                <div style={labelStyle}>Value of shares at strike</div>
+                <div style={valueStyle}>{formatMoney(tr.valueOfSharesAtStrike)}</div>
+              </div>
+
+              {/* Execution details */}
+              <div>
                 <div style={labelStyle}>Limit price</div>
                 <div style={{ ...valueStyle, color: t.colors.primary }}>${tr.optionLimitPrice.toFixed(2)}</div>
               </div>
@@ -905,40 +1164,6 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
               <div>
                 <div style={labelStyle}>% off bid</div>
                 <div style={valueStyle}>{tr.pctOffBid > 0 ? "+" : ""}{tr.pctOffBid}%</div>
-              </div>
-              <div>
-                <div style={labelStyle}>Contracts</div>
-                <div style={valueStyle}>{tr.contracts}</div>
-              </div>
-              <div>
-                <div style={labelStyle}>Premium</div>
-                <div style={{ ...valueStyle, color: tr.premiumReceived >= 0 ? t.colors.success : t.colors.danger }}>
-                  {formatMoney(tr.premiumReceived)}
-                </div>
-              </div>
-              <div>
-                <div style={labelStyle}>Yield</div>
-                <div style={valueStyle}>{tr.yieldAtCurrentPrice}%</div>
-              </div>
-              <div>
-                <div style={labelStyle}>Annualized yield</div>
-                <div
-                  style={{
-                    ...valueStyle,
-                    color:
-                      tr.annualizedYieldPct >= 15
-                        ? t.colors.success
-                        : tr.annualizedYieldPct < 10
-                          ? t.colors.danger
-                          : t.colors.text,
-                  }}
-                >
-                  {tr.annualizedYieldPct}%
-                </div>
-              </div>
-              <div>
-                <div style={labelStyle}>Value of shares at strike</div>
-                <div style={valueStyle}>{formatMoney(tr.valueOfSharesAtStrike)}</div>
               </div>
             </div>
           </div>

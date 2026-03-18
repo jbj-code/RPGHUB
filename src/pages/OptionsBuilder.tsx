@@ -1,6 +1,14 @@
 import { useState } from "react";
 import type { Theme } from "../theme";
-import { getPrimaryActionButtonStyle, getPrimaryButtonStyle, PAGE_LAYOUT } from "../theme";
+import {
+  getPrimaryActionButtonStyle,
+  getPrimaryButtonStyle,
+  PAGE_LAYOUT,
+  getDropdownTriggerStyle,
+  getDropdownPanelStyle,
+  getDropdownOptionStyle,
+  THEME_DROPDOWN_OPTION_CLASS,
+} from "../theme";
 
 type OptionsBuilderProps = { theme: Theme };
 
@@ -77,12 +85,11 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
     backgroundColor: t.colors.secondary,
     color: "#FFFFFF",
     fontSize: "0.8rem",
-    textAlign: "left",
+    textAlign: "center",
   };
 
   const tableHeaderNumStyle: React.CSSProperties = {
     ...tableHeaderStyle,
-    textAlign: "right",
   };
 
   const sectionTitleStyle: React.CSSProperties = {
@@ -104,12 +111,13 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
   const inputStyle: React.CSSProperties = {
     width: "100%",
     maxWidth: 140,
-    padding: `${t.spacing(1.5)} ${t.spacing(2)}`,
+    padding: `${t.spacing(2)} ${t.spacing(3)}`,
     fontSize: t.typography.baseFontSize,
     border: `1px solid ${t.colors.border}`,
-    borderRadius: t.radius.sm,
+    borderRadius: t.radius.md,
     backgroundColor: t.colors.surface,
     color: t.colors.text,
+    height: 40,
   };
 
   const primaryBtn = getPrimaryActionButtonStyle(t);
@@ -150,6 +158,7 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
   const [error, setError] = useState<string | null>(null);
   const [copyJustPressed, setCopyJustPressed] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [rowDropdownId, setRowDropdownId] = useState<string | null>(null);
 
   return (
     <section className="options-builder-page" style={pageStyle}>
@@ -229,38 +238,164 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
                   }}
                 />
               </div>
-              <div>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-start",
+                  gap: t.spacing(1),
+                }}
+              >
                 <div style={labelStyle}>Put / Call</div>
-                <select
-                  style={{ ...inputStyle, maxWidth: 110 }}
-                  value={row.putCall}
-                  onChange={(e) => {
-                    const next = [...rows];
-                    next[index] = { ...row, putCall: e.target.value as "Put" | "Call" };
-                    setRows(next);
-                  }}
-                >
-                  <option value="Put">Put</option>
-                  <option value="Call">Call</option>
-                </select>
+                <div style={{ position: "relative", minWidth: 0 }}>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setRowDropdownId(
+                        rowDropdownId === `${row.id}-putCall` ? null : `${row.id}-putCall`
+                      )
+                    }
+                    style={{
+                      ...getDropdownTriggerStyle(t),
+                      minWidth: 110,
+                      margin: 0,
+                    }}
+                    aria-haspopup="listbox"
+                    aria-expanded={rowDropdownId === `${row.id}-putCall`}
+                  >
+                    <span
+                      style={{
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        flex: 1,
+                        textAlign: "left",
+                      }}
+                    >
+                      {row.putCall}
+                    </span>
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: 18, flexShrink: 0 }}
+                    >
+                      expand_more
+                    </span>
+                  </button>
+                  {rowDropdownId === `${row.id}-putCall` && (
+                    <>
+                      <div
+                        role="presentation"
+                        style={{ position: "fixed", inset: 0, zIndex: 98 }}
+                        onClick={() => setRowDropdownId(null)}
+                      />
+                      <div
+                        style={{
+                          ...getDropdownPanelStyle(t, "down"),
+                          zIndex: 101,
+                          minWidth: "100%",
+                        }}
+                      >
+                        {["Put", "Call"].map((opt) => (
+                          <button
+                            key={opt}
+                            type="button"
+                            className={THEME_DROPDOWN_OPTION_CLASS}
+                            onClick={() => {
+                              const next = [...rows];
+                              next[index] = { ...row, putCall: opt as "Put" | "Call" };
+                              setRows(next);
+                              setRowDropdownId(null);
+                            }}
+                            style={getDropdownOptionStyle(t, row.putCall === opt)}
+                          >
+                            {opt}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
-              <div>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-start",
+                  gap: t.spacing(1),
+                }}
+              >
                 <div style={labelStyle}>Action</div>
-                <select
-                  style={{ ...inputStyle, maxWidth: 150 }}
-                  value={row.action}
-                  onChange={(e) => {
-                    const next = [...rows];
-                    next[index] = {
-                      ...row,
-                      action: e.target.value as "Sell to Open" | "Buy to Open",
-                    };
-                    setRows(next);
-                  }}
-                >
-                  <option value="Sell to Open">Sell to Open</option>
-                  <option value="Buy to Open">Buy to Open</option>
-                </select>
+                <div style={{ position: "relative", minWidth: 0 }}>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setRowDropdownId(
+                        rowDropdownId === `${row.id}-action` ? null : `${row.id}-action`
+                      )
+                    }
+                    style={{
+                      ...getDropdownTriggerStyle(t),
+                      minWidth: 150,
+                      margin: 0,
+                    }}
+                    aria-haspopup="listbox"
+                    aria-expanded={rowDropdownId === `${row.id}-action`}
+                  >
+                    <span
+                      style={{
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        flex: 1,
+                        textAlign: "left",
+                      }}
+                    >
+                      {row.action}
+                    </span>
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: 18, flexShrink: 0 }}
+                    >
+                      expand_more
+                    </span>
+                  </button>
+                  {rowDropdownId === `${row.id}-action` && (
+                    <>
+                      <div
+                        role="presentation"
+                        style={{ position: "fixed", inset: 0, zIndex: 98 }}
+                        onClick={() => setRowDropdownId(null)}
+                      />
+                      <div
+                        style={{
+                          ...getDropdownPanelStyle(t, "down"),
+                          zIndex: 101,
+                          minWidth: "100%",
+                        }}
+                      >
+                        {["Sell to Open", "Buy to Open"].map((opt) => (
+                          <button
+                            key={opt}
+                            type="button"
+                            className={THEME_DROPDOWN_OPTION_CLASS}
+                            onClick={() => {
+                              const next = [...rows];
+                              next[index] = {
+                                ...row,
+                                action: opt as "Sell to Open" | "Buy to Open",
+                              };
+                              setRows(next);
+                              setRowDropdownId(null);
+                            }}
+                            style={getDropdownOptionStyle(t, row.action === opt)}
+                          >
+                            {opt}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
               <div>
                 <div style={labelStyle}>Contracts</div>
@@ -277,23 +412,92 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
                   }}
                 />
               </div>
-              <div>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-start",
+                  gap: t.spacing(1),
+                }}
+              >
                 <div style={labelStyle}>Limit price method</div>
-                <select
-                  style={{ ...inputStyle, maxWidth: 160 }}
-                  value={row.limitPriceMethod}
-                  onChange={(e) => {
-                    const next = [...rows];
-                    next[index] = {
-                      ...row,
-                      limitPriceMethod: e.target.value as "bid" | "mid",
-                    };
-                    setRows(next);
-                  }}
-                >
-                  <option value="bid">Use bid</option>
-                  <option value="mid">Use midpoint</option>
-                </select>
+                <div style={{ position: "relative", minWidth: 0 }}>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setRowDropdownId(
+                        rowDropdownId === `${row.id}-limit` ? null : `${row.id}-limit`
+                      )
+                    }
+                    style={{
+                      ...getDropdownTriggerStyle(t),
+                      minWidth: 160,
+                      margin: 0,
+                    }}
+                    aria-haspopup="listbox"
+                    aria-expanded={rowDropdownId === `${row.id}-limit`}
+                  >
+                    <span
+                      style={{
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        flex: 1,
+                        textAlign: "left",
+                      }}
+                    >
+                      {row.limitPriceMethod === "bid" ? "Use bid" : "Use midpoint"}
+                    </span>
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: 18, flexShrink: 0 }}
+                    >
+                      expand_more
+                    </span>
+                  </button>
+                  {rowDropdownId === `${row.id}-limit` && (
+                    <>
+                      <div
+                        role="presentation"
+                        style={{ position: "fixed", inset: 0, zIndex: 98 }}
+                        onClick={() => setRowDropdownId(null)}
+                      />
+                      <div
+                        style={{
+                          ...getDropdownPanelStyle(t, "down"),
+                          zIndex: 101,
+                          minWidth: "100%",
+                        }}
+                      >
+                        {[
+                          { value: "bid", label: "Use bid" },
+                          { value: "mid", label: "Use midpoint" },
+                        ].map((opt) => (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            className={THEME_DROPDOWN_OPTION_CLASS}
+                            onClick={() => {
+                              const next = [...rows];
+                              next[index] = {
+                                ...row,
+                                limitPriceMethod: opt.value as "bid" | "mid",
+                              };
+                              setRows(next);
+                              setRowDropdownId(null);
+                            }}
+                            style={getDropdownOptionStyle(
+                              t,
+                              row.limitPriceMethod === opt.value
+                            )}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
             </div>
           ))}
@@ -301,7 +505,14 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
         <div style={{ display: "flex", gap: t.spacing(2), flexWrap: "wrap" }}>
           <button
             type="button"
-            style={{ ...primaryBtn, paddingLeft: t.spacing(3), paddingRight: t.spacing(3) }}
+            style={{
+              ...primaryBtn,
+              paddingLeft: t.spacing(3),
+              paddingRight: t.spacing(3),
+              display: "inline-flex",
+              alignItems: "center",
+              gap: t.spacing(2),
+            }}
             onClick={async () => {
               setError(null);
               setBuiltRows([]);
@@ -350,6 +561,13 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
             disabled={loading}
           >
             {loading ? "Building…" : "Build sheet"}
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: 20 }}
+              aria-hidden
+            >
+              auto_fix_high
+            </span>
           </button>
           <button
             type="button"
@@ -607,101 +825,73 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
           >
             <thead>
               <tr>
-                <th style={tableHeaderStyle}>
-                  Ticker
-                </th>
-                <th style={tableHeaderStyle}>
-                  Maturity
-                </th>
-                <th style={tableHeaderNumStyle}>
-                  Days to Maturity
-                </th>
-                <th style={tableHeaderNumStyle}>
-                  Strike Price
-                </th>
-                <th style={tableHeaderNumStyle}>
-                  Current Price
-                </th>
-                <th style={tableHeaderNumStyle}>
-                  Moneyness
-                </th>
-                <th style={tableHeaderStyle}>
-                  Option Side
-                </th>
-                <th style={tableHeaderNumStyle}>
-                  % off current bid
-                </th>
-                <th style={tableHeaderNumStyle}>
-                  Option Limit Price
-                </th>
-                <th style={tableHeaderNumStyle}>
-                  Current Bid
-                </th>
-                <th style={tableHeaderNumStyle}>
-                  Current Ask
-                </th>
-                <th style={tableHeaderNumStyle}>
-                  Contracts
-                </th>
-                <th style={tableHeaderNumStyle}>
-                  Premium Received
-                </th>
-                <th style={tableHeaderNumStyle}>
-                  Yield at Current Price
-                </th>
-                <th style={tableHeaderNumStyle}>
-                  Annualized Yield %
-                </th>
-                <th style={tableHeaderNumStyle}>
-                  Value of Shares at Strike
-                </th>
+                <th style={tableHeaderStyle}>Ticker</th>
+                <th style={tableHeaderStyle}>Maturity</th>
+                <th style={tableHeaderNumStyle}>Days to Maturity</th>
+                <th style={tableHeaderNumStyle}>Strike Price</th>
+                <th style={tableHeaderNumStyle}>Current Price</th>
+                <th style={tableHeaderNumStyle}>Moneyness</th>
+                <th style={tableHeaderStyle}>Option Side</th>
+                <th style={tableHeaderNumStyle}>% off current bid</th>
+                <th style={tableHeaderNumStyle}>Option Limit Price</th>
+                <th style={tableHeaderNumStyle}>Current Bid</th>
+                <th style={tableHeaderNumStyle}>Current Ask</th>
+                <th style={tableHeaderNumStyle}>Contracts</th>
+                <th style={tableHeaderNumStyle}>Premium Received</th>
+                <th style={tableHeaderNumStyle}>Yield at Current Price</th>
+                <th style={tableHeaderNumStyle}>Annualized Yield %</th>
+                <th style={tableHeaderNumStyle}>Value of Shares at Strike</th>
               </tr>
             </thead>
             <tbody>
               {builtRows.map((r) => (
                 <tr key={`${r.ticker}-${r.maturity}-${r.strikePrice}-${r.optionSide}`}>
-                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}` }}>{r.ticker}</td>
-                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}` }}>{r.maturity}</td>
-                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "right" }}>
+                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "center" }}>
+                    {r.ticker}
+                  </td>
+                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "center" }}>
+                    {r.maturity}
+                  </td>
+                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "center" }}>
                     {r.daysToMaturity}
                   </td>
-                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "right" }}>
+                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "center" }}>
                     ${r.strikePrice.toFixed(2)}
                   </td>
-                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "right" }}>
+                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "center" }}>
                     ${r.currentPrice.toFixed(2)}
                   </td>
-                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "right" }}>
+                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "center" }}>
                     {r.moneynessPct.toFixed(2)}%
                   </td>
-                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}` }}>
+                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "center" }}>
                     {r.optionSide}
                   </td>
-                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "right" }}>
+                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "center" }}>
                     {formatPctSigned(r.pctOffBid)}
                   </td>
-                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "right" }}>
+                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "center" }}>
                     ${r.optionLimitPrice.toFixed(2)}
                   </td>
-                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "right" }}>
+                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "center" }}>
                     ${r.currentBid.toFixed(2)}
                   </td>
-                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "right" }}>
+                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "center" }}>
                     ${r.currentAsk.toFixed(2)}
                   </td>
-                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "right" }}>
+                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "center" }}>
                     {r.contracts}
                   </td>
-                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "right" }}>
+                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "center" }}>
                     ${formatCurrencySmart(r.premiumReceived)}
                   </td>
-                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "right" }}>
+                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "center" }}>
                     {r.yieldAtCurrentPrice.toFixed(2)}%
                   </td>
-                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "right" }}>
+                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "center" }}>
                     {r.annualizedYieldPct.toFixed(2)}%
                   </td>
-                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "right" }}>
+                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "center" }}>
                     ${formatCurrencySmart(r.valueOfSharesAtStrike)}
                   </td>
                 </tr>

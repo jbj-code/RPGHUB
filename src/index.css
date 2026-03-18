@@ -75,6 +75,39 @@ body {
   background: rgba(68, 193, 193, 0.2) !important;
 }
 
+/* Options Optimizer: icon buttons (add + copy) — same hover/active treatment */
+.options-optimizer-page .options-optimizer-copy-symbol,
+.options-optimizer-page .options-optimizer-add-trade {
+  transition: color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+.options-optimizer-page .options-optimizer-copy-symbol:hover,
+.options-optimizer-page .options-optimizer-add-trade:hover {
+  color: var(--checkbox-primary, #44c1c1) !important;
+  background: rgba(68, 193, 193, 0.1) !important;
+}
+.options-optimizer-page .options-optimizer-copy-symbol:active,
+.options-optimizer-page .options-optimizer-add-trade:active {
+  transform: scale(0.92);
+  background: rgba(68, 193, 193, 0.2) !important;
+}
+
+/* Options Builder: input hover/focus to match Optimizer */
+.options-builder-page input[type="text"],
+.options-builder-page input[type="number"],
+.options-builder-page input[type="date"] {
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+.options-builder-page input[type="text"]:hover,
+.options-builder-page input[type="number"]:hover,
+.options-builder-page input[type="date"]:hover,
+.options-builder-page input[type="text"]:focus,
+.options-builder-page input[type="number"]:focus,
+.options-builder-page input[type="date"]:focus {
+  border-color: rgba(68, 193, 193, 0.8);
+  box-shadow: 0 0 0 1px rgba(68, 193, 193, 0.25);
+  outline: none;
+}
+
 /* Clear tickers button: hover and active */
 .stock-comparison-page .stock-comparison-clear-tickers {
   transition: color 0.15s ease, background 0.15s ease, transform 0.1s ease;

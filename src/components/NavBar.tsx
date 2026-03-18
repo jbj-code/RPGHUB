@@ -12,6 +12,8 @@ export const SIDEBAR_WIDTH_COMPACT = 72;
 export type NavBarProps = {
   page: Page;
   onNavigate: (page: Page) => void;
+  onSelectClient: (name: string) => void;
+  selectedClient: string | null;
   mode: ThemeMode;
   onToggleMode: () => void;
   theme: Theme;
@@ -21,7 +23,17 @@ export type NavBarProps = {
 
 const CLIENT_IDS = Array.from({ length: 10 }, (_, i) => i + 1);
 
-export function NavBar({ page, onNavigate, mode, onToggleMode, theme: t, compact, onToggleCompact }: NavBarProps) {
+export function NavBar({
+  page,
+  onNavigate,
+  onSelectClient,
+  selectedClient,
+  mode,
+  onToggleMode,
+  theme: t,
+  compact,
+  onToggleCompact,
+}: NavBarProps) {
   const [segment, setSegment] = useState<NavSegment>("tools");
   const width = compact ? SIDEBAR_WIDTH_COMPACT : SIDEBAR_WIDTH;
 
@@ -217,7 +229,10 @@ export function NavBar({ page, onNavigate, mode, onToggleMode, theme: t, compact
           </button>
           <button
             type="button"
-            onClick={() => setSegment("clients")}
+            onClick={() => {
+              setSegment("clients");
+              onNavigate("clients");
+            }}
             style={pillOptionStyle(segment === "clients")}
             aria-pressed={segment === "clients"}
             aria-label="Clients"
@@ -256,28 +271,34 @@ export function NavBar({ page, onNavigate, mode, onToggleMode, theme: t, compact
             </span>
           </a>
         ))}
-        {segment === "clients" && CLIENT_IDS.map((n) => (
-          <a
-            key={n}
-            href="#"
-            onClick={(e) => {
-              e.preventDefault();
-              onNavigate("clients");
-            }}
-            style={linkStyle(page === "clients")}
-            title={compact ? `Client ${n}` : undefined}
-          >
-            <span className="material-symbols-outlined" style={linkIconStyle} aria-hidden>
-              person
-            </span>
-            <span
-              className={`app-nav-label${compact ? " app-nav-label--compact" : ""}`}
-              aria-hidden={compact}
-            >
-              Client {n}
-            </span>
-          </a>
-        ))}
+        {segment === "clients" &&
+          CLIENT_IDS.map((n) => {
+            const label = `Client ${n}`;
+            const isActive = page === "client-detail" && selectedClient === label;
+            return (
+              <a
+                key={n}
+                href="#"
+                onClick={(e) => {
+                  e.preventDefault();
+                  onSelectClient(label);
+                  onNavigate("client-detail");
+                }}
+                style={linkStyle(isActive)}
+                title={compact ? label : undefined}
+              >
+                <span className="material-symbols-outlined" style={linkIconStyle} aria-hidden>
+                  person
+                </span>
+                <span
+                  className={`app-nav-label${compact ? " app-nav-label--compact" : ""}`}
+                  aria-hidden={compact}
+                >
+                  {label}
+                </span>
+              </a>
+            );
+          })}
       </div>
       <div className="app-nav-footer" style={footerStyle}>
         <button

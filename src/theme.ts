@@ -106,6 +106,7 @@ export function getDropdownTriggerStyle(t: Theme): CSSProperties {
     justifyContent: "space-between",
     gap: t.spacing(1),
     minWidth: 120,
+    height: 40,
     cursor: "pointer",
     fontFamily: t.typography.fontFamily,
   };
