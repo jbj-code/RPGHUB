@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 import { lightTheme, darkTheme, type ThemeMode, type Theme } from "./theme";
-import { NavBar, SIDEBAR_WIDTH } from "./components/NavBar";
+import { NavBar, SIDEBAR_WIDTH, SIDEBAR_WIDTH_COMPACT } from "./components/NavBar";
 import { PasswordGate, getIsUnlocked } from "./components/PasswordGate";
-import { Home, OptionsOptimizer, StockComparison, OptionsBuilder, Rankinator, RaiseAi } from "./pages";
+import { Home, OptionsOptimizer, StockComparison, OptionsBuilder, Todos, Clients, Rankinator, RaiseAi } from "./pages";
 import { OptionsPricing } from "./pages/OptionsPricing";
 
 export type Page =
@@ -11,6 +11,8 @@ export type Page =
   | "stock-comparison"
   | "options-pricing"
   | "options-builder"
+  | "todos"
+  | "clients"
   | "rankinator"
   | "raise-ai";
 
@@ -20,6 +22,8 @@ function App() {
   const [unlocked, setUnlocked] = useState(false);
   const [page, setPage] = useState<Page>("home");
   const [mode, setMode] = useState<ThemeMode>("light");
+  const [sidebarCompact, setSidebarCompact] = useState(false);
+  const sidebarWidth = sidebarCompact ? SIDEBAR_WIDTH_COMPACT : SIDEBAR_WIDTH;
 
   useEffect(() => {
     setUnlocked(getIsUnlocked());
@@ -39,11 +43,12 @@ function App() {
   const mainStyle: React.CSSProperties = {
     flex: 1,
     minWidth: 0,
-    marginLeft: SIDEBAR_WIDTH,
+    marginLeft: sidebarWidth,
     backgroundColor: t.colors.background,
     fontFamily: t.typography.fontFamily,
     color: t.colors.text,
     fontSize: t.typography.baseFontSize,
+    transition: "margin-left 0.25s ease",
   };
 
   const mainInnerStyle: React.CSSProperties = {
@@ -60,17 +65,24 @@ function App() {
         mode={mode}
         onToggleMode={() => setMode(mode === "light" ? "dark" : "light")}
         theme={t}
+        compact={sidebarCompact}
+        onToggleCompact={() => setSidebarCompact((c) => !c)}
       />
       <main className="app-main" style={mainStyle}>
-        <div className="app-main-inner" style={mainInnerStyle}>
-          {page === "home" && <Home theme={t} />}
-          {page === "put-optimizer" && <OptionsOptimizer theme={t} />}
-          {page === "stock-comparison" && <StockComparison theme={t} />}
-          {page === "options-pricing" && <OptionsPricing theme={t} />}
-          {page === "options-builder" && <OptionsBuilder theme={t} />}
-          {page === "rankinator" && <Rankinator theme={t} />}
-          {page === "raise-ai" && <RaiseAi theme={t} />}
-        </div>
+        {page === "todos" ? (
+          <Todos theme={t} sidebarWidth={sidebarWidth} />
+        ) : (
+          <div className="app-main-inner" style={mainInnerStyle}>
+            {page === "home" && <Home theme={t} />}
+            {page === "put-optimizer" && <OptionsOptimizer theme={t} />}
+            {page === "stock-comparison" && <StockComparison theme={t} />}
+            {page === "options-pricing" && <OptionsPricing theme={t} />}
+            {page === "options-builder" && <OptionsBuilder theme={t} />}
+            {page === "clients" && <Clients theme={t} />}
+            {page === "rankinator" && <Rankinator theme={t} />}
+            {page === "raise-ai" && <RaiseAi theme={t} />}
+          </div>
+        )}
       </main>
     </div>
   );

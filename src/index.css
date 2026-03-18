@@ -315,6 +315,87 @@ body {
   margin-right: 0.5rem;
 }
 
+/* ---- Options Builder: copy/download hover same as Options Pricing ---- */
+.options-builder-page .options-builder-copy-table,
+.options-builder-page .options-builder-download-csv {
+  transition: color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+.options-builder-page .options-builder-copy-table:hover,
+.options-builder-page .options-builder-download-csv:hover {
+  color: var(--checkbox-primary, #44c1c1) !important;
+  background: rgba(68, 193, 193, 0.1) !important;
+}
+.options-builder-page .options-builder-copy-table:active,
+.options-builder-page .options-builder-download-csv:active {
+  transform: scale(0.92);
+  background: rgba(68, 193, 193, 0.2) !important;
+}
+
+/* ---- To-Dos: month arrows (icon only, hover) ---- */
+.todos-page .todos-month-arrow {
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+.todos-page .todos-month-arrow:hover {
+  background-color: rgba(68, 193, 193, 0.12) !important;
+  color: #44c1c1 !important;
+}
+
+/* To-Dos: task card white background and link text not colored */
+.todos-page .todos-task-card {
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+.todos-page .todos-task-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+.todos-page .todos-task-link:hover {
+  text-decoration: underline;
+}
+
+.todos-page table tbody tr.todos-task-row:hover {
+  background-color: rgba(68, 193, 193, 0.04);
+}
+
+/* Theme: reusable custom dropdown option hover */
+.theme-dropdown-option:hover {
+  background-color: rgba(68, 193, 193, 0.12) !important;
+}
+
+/* Nav: smooth label fade/slide when collapsing sidebar; clip instead of wrap */
+.app-nav-label {
+  display: inline-block;
+  max-width: 160px;
+  overflow: hidden;
+  white-space: nowrap;
+  opacity: 1;
+  transform: translateX(0);
+  transition: opacity 0.2s ease, transform 0.2s ease, max-width 0.2s ease;
+}
+.app-nav-label--compact {
+  position: absolute;
+  left: 0;
+  top: 0;
+  max-width: 0;
+  min-width: 0;
+  width: 0;
+  padding: 0;
+  margin: 0;
+  opacity: 0;
+  transform: translateX(-8px);
+  overflow: hidden;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* To-Dos: client list items — hover with ease and primary border */
+.todos-page .todos-client-list-item {
+  transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  border: 1px solid transparent;
+}
+.todos-page .todos-client-list-item:hover {
+  border-color: var(--checkbox-primary, #44c1c1);
+  box-shadow: 0 0 0 1px var(--checkbox-primary, #44c1c1);
+}
+
 /* ---- Stock Comparison: row loading shimmer ---- */
 @keyframes stock-comparison-shimmer {
   0% { background-position: -200% 0; }

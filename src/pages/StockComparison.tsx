@@ -229,6 +229,8 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
     }
   }, [allTickersForFetch.length]);
 
+  const [hasFetched, setHasFetched] = useState(false);
+
   useEffect(() => {
     // Only run the fetch logic when fetchKey actually changes (manual Fetch).
     if (fetchKey === lastFetchKeyRef.current) {
@@ -381,6 +383,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
 
   function refreshReturns() {
     setFetchKey((k) => k + 1);
+    setHasFetched(true);
   }
 
   function applyPreset(preset: Preset) {
@@ -756,7 +759,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
           <div style={{ padding: t.spacing(6), textAlign: "center" as const, color: t.colors.textMuted, fontSize: "0.9rem", border: `1px dashed ${t.colors.border}`, borderRadius: t.radius.md, backgroundColor: t.colors.background }}>
             Select at least one timeframe.
           </div>
-        ) : error && !hasAnyReturns ? (
+        ) : error && !hasAnyReturns && hasFetched ? (
           <div style={{ padding: t.spacing(6), textAlign: "center" as const, color: t.colors.danger, fontSize: "0.9rem", border: `1px dashed ${t.colors.border}`, borderRadius: t.radius.md, backgroundColor: t.colors.background }}>
             {error}
           </div>
@@ -767,7 +770,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
                 {error} (showing partial data.)
               </p>
             )}
-            {!loading && !hasAnyReturns && tableTickers.length > 0 && (
+            {!loading && !hasAnyReturns && tableTickers.length > 0 && hasFetched && (
               <p style={{ marginBottom: t.spacing(2), fontSize: "0.875rem", color: t.colors.textMuted }}>
                 {apiHint || "No return data for these symbols. This can happen when the market is closed, the Schwab token has expired, or the API returned no candles."}
                 {" "}

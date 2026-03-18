@@ -1,6 +1,16 @@
 import { useState, useCallback, useEffect } from "react";
 import type { Theme } from "../theme";
-import { getPrimaryActionButtonStyle, getPrimaryButtonStyle, PAGE_LAYOUT } from "../theme";
+import {
+  getPrimaryActionButtonStyle,
+  getPrimaryButtonStyle,
+  PAGE_LAYOUT,
+  getDropdownTriggerStyle,
+  getDropdownPanelStyle,
+  getDropdownOptionStyle,
+  THEME_DROPDOWN_OPTION_CLASS,
+  getTooltipIconStyle,
+  getTooltipBubbleStyle,
+} from "../theme";
 
 type OptionsOptimizerProps = { theme: Theme };
 
@@ -119,8 +129,109 @@ const defaultPortfolioRow = (): PortfolioRow => ({
   monthly: false,
 });
 
+type HelpTooltipProps = { theme: Theme; text: string; children: React.ReactNode };
+
+function HelpTooltip({ theme: t, text, children }: HelpTooltipProps) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span
+      style={{ position: "relative", display: "inline-flex" }}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+    >
+      {children}
+      {open && (
+        <div style={getTooltipBubbleStyle(t)} role="tooltip">
+          {text}
+        </div>
+      )}
+    </span>
+  );
+}
+
+type ThemeSelectOption = { value: string; label: string };
+
+type ThemeSelectProps = {
+  theme: Theme;
+  value: string;
+  options: ThemeSelectOption[];
+  onChange: (v: string) => void;
+  dropdownKey: string;
+  openId: string | null;
+  setOpenId: (id: string | null) => void;
+  minWidth?: number;
+};
+
+function OptimizerThemeSelect({
+  theme: t,
+  value,
+  options,
+  onChange,
+  dropdownKey,
+  openId,
+  setOpenId,
+  minWidth,
+}: ThemeSelectProps) {
+  const open = openId === dropdownKey;
+  const display = options.find((o) => o.value === value)?.label ?? value;
+  return (
+    <div style={{ position: "relative", minWidth: minWidth ?? 0 }}>
+      <button
+        type="button"
+        onClick={() => setOpenId(open ? null : dropdownKey)}
+        style={{ ...getDropdownTriggerStyle(t), minWidth: minWidth ?? 120, margin: 0 }}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+      >
+        <span
+          style={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            flex: 1,
+            textAlign: "left",
+          }}
+        >
+          {display}
+        </span>
+        <span className="material-symbols-outlined" style={{ fontSize: 18, flexShrink: 0 }}>
+          expand_more
+        </span>
+      </button>
+      {open && (
+        <>
+          <div
+            role="presentation"
+            style={{ position: "fixed", inset: 0, zIndex: 98 }}
+            onClick={() => setOpenId(null)}
+          />
+          <div style={{ ...getDropdownPanelStyle(t, "down"), zIndex: 101, minWidth: "100%" }}>
+            {options.map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                className={THEME_DROPDOWN_OPTION_CLASS}
+                onClick={() => {
+                  onChange(o.value);
+                  setOpenId(null);
+                }}
+                style={getDropdownOptionStyle(t, value === o.value)}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
   const [portfolioRows, setPortfolioRows] = useState<PortfolioRow[]>([defaultPortfolioRow()]);
+  const [portfolioDropdownId, setPortfolioDropdownId] = useState<string | null>(null);
   const [otmVariancePct, setOtmVariancePct] = useState(5);
   const [rankedResults, setRankedResults] = useState<RankedResult[] | null>(null);
   const [optimizeMessage, setOptimizeMessage] = useState<string | null>(null);
@@ -275,10 +386,10 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
   const inputStyle: React.CSSProperties = {
     width: "100%",
     maxWidth: 120,
-    padding: `${t.spacing(1.5)} ${t.spacing(2)}`,
+    padding: `${t.spacing(2)} ${t.spacing(3)}`,
     fontSize: t.typography.baseFontSize,
     border: `1px solid ${t.colors.border}`,
-    borderRadius: t.radius.sm,
+    borderRadius: t.radius.md,
     backgroundColor: t.colors.surface,
     color: t.colors.text,
   };
@@ -378,7 +489,12 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
           Enter ticker, type (Qty or Notional), value, target days to maturity, and OTM or ITM %. Optionally set variance to consider a strike range. Then run Optimize.
         </p>
         <div style={{ display: "flex", alignItems: "center", gap: t.spacing(2), marginBottom: t.spacing(3) }}>
-          <label style={{ ...labelStyle, marginBottom: 0 }}>Variance % (strike range)</label>
+          <HelpTooltip
+            theme={t}
+            text="How wide a strike range to consider around your target OTM/ITM %. For example 5% with 10% target = 5–15% strikes."
+          >
+            <label style={{ ...labelStyle, marginBottom: 0 }}>Variance % (strike range)</label>
+          </HelpTooltip>
           <input
             type="number"
             min={0}
@@ -407,7 +523,12 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
               }}
             >
               <div>
-                <label style={labelStyle}>Ticker</label>
+                <HelpTooltip
+                  theme={t}
+                  text="Underlying symbol for the option, e.g. SPY, AAPL, NVDA."
+                >
+                  <label style={labelStyle}>Ticker</label>
+                </HelpTooltip>
                 <input
                   type="text"
                   placeholder="e.g. SPY"
@@ -419,44 +540,64 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
               </div>
               <div>
                 <label style={labelStyle}>Put / Call</label>
-                <select
-                  style={{ ...inputStyle, maxWidth: 100 }}
+                <OptimizerThemeSelect
+                  theme={t}
                   value={row.putCall}
-                  onChange={(e) => updatePortfolioRow(row.id, "putCall", e.target.value as "Put" | "Call")}
-                  aria-label="Put or Call"
-                >
-                  <option value="Put">Put</option>
-                  <option value="Call">Call</option>
-                </select>
+                  options={[
+                    { value: "Put", label: "Put" },
+                    { value: "Call", label: "Call" },
+                  ]}
+                  onChange={(v) => updatePortfolioRow(row.id, "putCall", v as "Put" | "Call")}
+                  dropdownKey={`${row.id}-putCall`}
+                  openId={portfolioDropdownId}
+                  setOpenId={setPortfolioDropdownId}
+                  minWidth={100}
+                />
               </div>
               <div>
                 <label style={labelStyle}>Action</label>
-                <select
-                  style={{ ...inputStyle, maxWidth: 130 }}
+                <OptimizerThemeSelect
+                  theme={t}
                   value={row.action}
-                  onChange={(e) =>
-                    updatePortfolioRow(row.id, "action", e.target.value as "Sell to Open" | "Buy to Open")
-                  }
-                  aria-label="Action"
-                >
-                  <option value="Sell to Open">Sell to Open</option>
-                  <option value="Buy to Open">Buy to Open</option>
-                </select>
+                  options={[
+                    { value: "Sell to Open", label: "Sell to Open" },
+                    { value: "Buy to Open", label: "Buy to Open" },
+                  ]}
+                  onChange={(v) => updatePortfolioRow(row.id, "action", v as "Sell to Open" | "Buy to Open")}
+                  dropdownKey={`${row.id}-action`}
+                  openId={portfolioDropdownId}
+                  setOpenId={setPortfolioDropdownId}
+                  minWidth={130}
+                />
               </div>
               <div>
-                <label style={labelStyle}>Type</label>
-                <select
-                  style={{ ...inputStyle, maxWidth: 90 }}
+                <HelpTooltip
+                  theme={t}
+                  text="Qty = number of contracts. Notional = target dollar amount of underlying shares at strike."
+                >
+                  <label style={labelStyle}>Type</label>
+                </HelpTooltip>
+                <OptimizerThemeSelect
+                  theme={t}
                   value={row.type}
-                  onChange={(e) => updatePortfolioRow(row.id, "type", e.target.value as "Qty" | "Notional")}
-                  aria-label="Qty or Notional"
-                >
-                  <option value="Qty">Qty</option>
-                  <option value="Notional">Notional</option>
-                </select>
+                  options={[
+                    { value: "Qty", label: "Qty" },
+                    { value: "Notional", label: "Notional" },
+                  ]}
+                  onChange={(v) => updatePortfolioRow(row.id, "type", v as "Qty" | "Notional")}
+                  dropdownKey={`${row.id}-type`}
+                  openId={portfolioDropdownId}
+                  setOpenId={setPortfolioDropdownId}
+                  minWidth={90}
+                />
               </div>
               <div>
-                <label style={labelStyle}>Value</label>
+                <HelpTooltip
+                  theme={t}
+                  text="If Type is Qty, this is contracts. If Notional, this is target notional of underlying at strike."
+                >
+                  <label style={labelStyle}>Value</label>
+                </HelpTooltip>
                 <input
                   type="number"
                   min={0}
@@ -468,7 +609,12 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                 />
               </div>
               <div>
-                <label style={labelStyle}>Days (DTE)</label>
+                <HelpTooltip
+                  theme={t}
+                  text="Target days to expiration for this leg. Optimizer will look near this DTE."
+                >
+                  <label style={labelStyle}>Days (DTE)</label>
+                </HelpTooltip>
                 <input
                   type="number"
                   min={1}
@@ -480,19 +626,33 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                 />
               </div>
               <div>
-                <label style={labelStyle}>OTM / ITM</label>
-                <select
-                  style={{ ...inputStyle, maxWidth: 90 }}
-                  value={row.moneyness ?? "OTM"}
-                  onChange={(e) => updatePortfolioRow(row.id, "moneyness", e.target.value as "OTM" | "ITM")}
-                  aria-label="Out of the money or in the money"
+                <HelpTooltip
+                  theme={t}
+                  text="Whether you want strikes out of the money (OTM) or in the money (ITM) relative to current price."
                 >
-                  <option value="OTM">OTM</option>
-                  <option value="ITM">ITM</option>
-                </select>
+                  <label style={labelStyle}>OTM / ITM</label>
+                </HelpTooltip>
+                <OptimizerThemeSelect
+                  theme={t}
+                  value={row.moneyness ?? "OTM"}
+                  options={[
+                    { value: "OTM", label: "OTM" },
+                    { value: "ITM", label: "ITM" },
+                  ]}
+                  onChange={(v) => updatePortfolioRow(row.id, "moneyness", v as "OTM" | "ITM")}
+                  dropdownKey={`${row.id}-moneyness`}
+                  openId={portfolioDropdownId}
+                  setOpenId={setPortfolioDropdownId}
+                  minWidth={90}
+                />
               </div>
               <div>
-                <label style={labelStyle}>{row.moneyness ?? "OTM"} %</label>
+                <HelpTooltip
+                  theme={t}
+                  text="How far OTM or ITM you want the strike, as a percent of current price."
+                >
+                  <label style={labelStyle}>{row.moneyness ?? "OTM"} %</label>
+                </HelpTooltip>
                 <input
                   type="number"
                   min={0}
@@ -512,9 +672,17 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                   onChange={(e) => updatePortfolioRow(row.id, "monthly", e.target.checked)}
                   aria-label="Monthly expiration only"
                 />
-                <label htmlFor={`monthly-${row.id}`} style={{ ...labelStyle, marginBottom: 0, textTransform: "none" }}>
-                  Monthly
-                </label>
+                <HelpTooltip
+                  theme={t}
+                  text="If checked, only monthly expirations are considered instead of all weeklys."
+                >
+                  <label
+                    htmlFor={`monthly-${row.id}`}
+                    style={{ ...labelStyle, marginBottom: 0, textTransform: "none" }}
+                  >
+                    Monthly
+                  </label>
+                </HelpTooltip>
               </div>
               {portfolioRows.length > 1 && (
                 <button
@@ -532,19 +700,20 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
         <div style={{ display: "flex", alignItems: "center", gap: t.spacing(3), marginTop: t.spacing(3), flexWrap: "wrap" }}>
           <button
             type="button"
-            style={primaryBtn}
+            style={{
+              ...primaryBtn,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: t.spacing(2),
+            }}
             onClick={runOptimize}
             disabled={optimizeLoading}
             aria-label="Optimize portfolio"
           >
-            <span
-              className="material-symbols-outlined"
-              style={{ fontSize: 20, marginRight: t.spacing(2), verticalAlign: "middle" }}
-              aria-hidden
-            >
-              bolt
-            </span>
             {optimizeLoading ? "Optimizing…" : "Optimize portfolio"}
+            <span className="material-symbols-outlined" style={{ fontSize: 20 }} aria-hidden>
+              auto_fix_high
+            </span>
           </button>
           <button type="button" style={secondaryBtnStyle} onClick={addPortfolioRow}>
             + Add contract

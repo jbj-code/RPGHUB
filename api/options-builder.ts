@@ -18,6 +18,7 @@ type BuilderRowOutput = {
   currentPrice: number;
   moneynessPct: number;
   optionSide: string;
+  pctOffBid: number;
   optionLimitPrice: number;
   currentBid: number;
   currentAsk: number;
@@ -233,10 +234,13 @@ export default async function handler(req: any, res: any) {
         notional !== 0 ? (premium / notional) * 100 : 0;
       const annualizedYieldPct =
         dte > 0 ? yieldAtCurrentPrice * (365 / dte) : 0;
-      const moneynessPct =
-        row.putCall === "Put"
-          ? ((currentPrice - strike) / currentPrice) * 100
-          : ((strike - currentPrice) / currentPrice) * 100;
+      // Match boss's sheet: moneyness = Strike / Current Price (as %)
+      const moneynessPct = (strike / currentPrice) * 100;
+
+      const effectiveBid =
+        typeof bid === "number" && bid > 0 ? bid : limitPrice;
+      const pctOffBid =
+        effectiveBid > 0 ? ((limitPrice / effectiveBid - 1) * 100) : 0;
 
       out.push({
         ticker,
@@ -246,6 +250,7 @@ export default async function handler(req: any, res: any) {
         currentPrice,
         moneynessPct,
         optionSide: `${row.putCall.toUpperCase()} - ${row.action.toUpperCase()}`,
+        pctOffBid,
         optionLimitPrice: limitPrice,
         currentBid: typeof bid === "number" && bid > 0 ? bid : limitPrice,
         currentAsk: typeof ask === "number" && ask > 0 ? ask : limitPrice,

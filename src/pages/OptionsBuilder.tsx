@@ -23,6 +23,7 @@ type BuiltRow = {
   currentPrice: number;
   moneynessPct: number;
   optionSide: string;
+  pctOffBid: number;
   optionLimitPrice: number;
   currentBid: number;
   currentAsk: number;
@@ -113,6 +114,25 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
 
   const primaryBtn = getPrimaryActionButtonStyle(t);
 
+  function formatCurrencySmart(n: number): string {
+    if (!Number.isFinite(n)) return "";
+    const cents = Math.round(n * 100);
+    const hasDecimals = cents % 100 !== 0;
+    if (hasDecimals) {
+      return n.toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+    }
+    return n.toLocaleString();
+  }
+
+  function formatPctSigned(n: number): string {
+    if (!Number.isFinite(n)) return "";
+    const sign = n >= 0 ? "+" : "";
+    return `${sign}${n.toFixed(2)}%`;
+  }
+
   const [rows, setRows] = useState<BuilderRow[]>([
     {
       id: "row-1",
@@ -129,6 +149,7 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copyJustPressed, setCopyJustPressed] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   return (
     <section className="options-builder-page" style={pageStyle}>
@@ -311,7 +332,11 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
                 if (!res.ok) {
                   throw new Error(data?.error || `Request failed with ${res.status}`);
                 }
-                setBuiltRows(Array.isArray(data.rows) ? data.rows : []);
+                const rowsFromApi = Array.isArray(data.rows) ? data.rows : [];
+                setBuiltRows(rowsFromApi);
+                if (rowsFromApi.length > 0) {
+                  setLastUpdated(new Date());
+                }
               } catch (e: unknown) {
                 setError(
                   e instanceof Error
@@ -390,6 +415,7 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
                   "Current Price",
                   "Moneyness",
                   "Option Side",
+                  "% Off Current Bid",
                   "Option Limit Price",
                   "Current Bid",
                   "Current Ask",
@@ -408,6 +434,7 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
                     r.currentPrice.toFixed(2),
                     `${r.moneynessPct.toFixed(2)}%`,
                     r.optionSide,
+                    r.pctOffBid.toFixed(2),
                     r.optionLimitPrice.toFixed(2),
                     r.currentBid.toFixed(2),
                     r.currentAsk.toFixed(2),
@@ -423,6 +450,7 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
                 setCopyJustPressed(true);
                 window.setTimeout(() => setCopyJustPressed(false), 2000);
               }}
+              className="options-builder-copy-table"
               style={{
                 width: 34,
                 height: 34,
@@ -443,6 +471,9 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
                 style={{
                   fontSize: 22,
                   position: "absolute",
+                  left: "50%",
+                  top: "50%",
+                  transform: "translate(-50%, -50%)",
                   opacity: copyJustPressed ? 0 : 1,
                   transition: "opacity 0.2s ease",
                   pointerEvents: "none",
@@ -456,6 +487,9 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
                 style={{
                   fontSize: 22,
                   position: "absolute",
+                  left: "50%",
+                  top: "50%",
+                  transform: "translate(-50%, -50%)",
                   opacity: copyJustPressed ? 1 : 0,
                   transition: "opacity 0.2s ease",
                   pointerEvents: "none",
@@ -478,6 +512,7 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
                   "Current Price",
                   "Moneyness",
                   "Option Side",
+                  "% Off Current Bid",
                   "Option Limit Price",
                   "Current Bid",
                   "Current Ask",
@@ -496,6 +531,7 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
                     r.currentPrice.toFixed(2),
                     `${r.moneynessPct.toFixed(2)}%`,
                     r.optionSide,
+                    r.pctOffBid.toFixed(2),
                     r.optionLimitPrice.toFixed(2),
                     r.currentBid.toFixed(2),
                     r.currentAsk.toFixed(2),
@@ -519,6 +555,7 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
                 document.body.removeChild(link);
                 URL.revokeObjectURL(url);
               }}
+              className="options-builder-download-csv"
               style={{
                 width: 34,
                 height: 34,
@@ -539,6 +576,9 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
                 style={{
                   fontSize: 22,
                   position: "absolute",
+                  left: "50%",
+                  top: "50%",
+                  transform: "translate(-50%, -50%)",
                   opacity: 1,
                   pointerEvents: "none",
                 }}
@@ -559,6 +599,7 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
           <table
             style={{
               width: "100%",
+              minWidth: 1200,
               borderCollapse: "collapse",
               fontSize: "0.8rem",
               fontFamily: t.typography.fontFamily,
@@ -586,6 +627,9 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
                 </th>
                 <th style={tableHeaderStyle}>
                   Option Side
+                </th>
+                <th style={tableHeaderNumStyle}>
+                  % off current bid
                 </th>
                 <th style={tableHeaderNumStyle}>
                   Option Limit Price
@@ -634,6 +678,9 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
                     {r.optionSide}
                   </td>
                   <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "right" }}>
+                    {formatPctSigned(r.pctOffBid)}
+                  </td>
+                  <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "right" }}>
                     ${r.optionLimitPrice.toFixed(2)}
                   </td>
                   <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "right" }}>
@@ -646,7 +693,7 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
                     {r.contracts}
                   </td>
                   <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "right" }}>
-                    ${r.premiumReceived.toFixed(2)}
+                    ${formatCurrencySmart(r.premiumReceived)}
                   </td>
                   <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "right" }}>
                     {r.yieldAtCurrentPrice.toFixed(2)}%
@@ -655,7 +702,7 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
                     {r.annualizedYieldPct.toFixed(2)}%
                   </td>
                   <td style={{ padding: t.spacing(1.5), borderBottom: `1px solid ${t.colors.border}`, textAlign: "right" }}>
-                    ${r.valueOfSharesAtStrike.toFixed(2)}
+                    ${formatCurrencySmart(r.valueOfSharesAtStrike)}
                   </td>
                 </tr>
               ))}
@@ -670,9 +717,25 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
           borderTop: `1px solid ${t.colors.border}`,
           fontSize: "0.75rem",
           color: t.colors.textMuted,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: t.spacing(2),
         }}
       >
-        Market data provided by Charles Schwab.
+        <span>Market data provided by Charles Schwab.</span>
+        {lastUpdated && (
+          <span>
+            Data as of{" "}
+            {lastUpdated.toLocaleString(undefined, {
+              year: "numeric",
+              month: "short",
+              day: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </span>
+        )}
       </footer>
     </section>
   );

@@ -89,6 +89,99 @@ export function getPrimaryActionButtonStyle(t: Theme): CSSProperties {
 /** Universal hover for tappable cards: add this class for subtle lift + teal glow (same as Optimize portfolio button). */
 export const INTERACTIVE_CARD_CLASS = "interactive-card";
 
+/** Add this class to custom dropdown option buttons so they get consistent hover (see index.css). */
+export const THEME_DROPDOWN_OPTION_CLASS = "theme-dropdown-option";
+
+/** Trigger button for the reusable custom dropdown (same look as select inputs). */
+export function getDropdownTriggerStyle(t: Theme): CSSProperties {
+  return {
+    padding: `${t.spacing(2)} ${t.spacing(3)}`,
+    fontSize: t.typography.baseFontSize,
+    border: `1px solid ${t.colors.border}`,
+    borderRadius: t.radius.md,
+    backgroundColor: t.colors.surface,
+    color: t.colors.text,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: t.spacing(1),
+    minWidth: 120,
+    cursor: "pointer",
+    fontFamily: t.typography.fontFamily,
+  };
+}
+
+/** Panel that contains dropdown options. Use position absolute; placement sets bottom/top so it opens up or down. */
+export function getDropdownPanelStyle(t: Theme, placement: "up" | "down"): CSSProperties {
+  return {
+    position: "absolute",
+    left: 0,
+    ...(placement === "up"
+      ? { bottom: "100%", marginBottom: t.spacing(1) }
+      : { top: "100%", marginTop: t.spacing(1) }),
+    minWidth: "100%",
+    backgroundColor: t.mode === "light" ? "#ffffff" : t.colors.surface,
+    border: `1px solid ${t.colors.border}`,
+    borderRadius: t.radius.md,
+    boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+    zIndex: 101,
+    overflow: "hidden",
+  };
+}
+
+/** Base style for each dropdown option button. Add THEME_DROPDOWN_OPTION_CLASS for hover. */
+export function getDropdownOptionStyle(t: Theme, isSelected: boolean): CSSProperties {
+  return {
+    display: "block",
+    width: "100%",
+    padding: `${t.spacing(2)} ${t.spacing(3)}`,
+    border: "none",
+    background: isSelected ? t.colors.background : "transparent",
+    color: t.colors.text,
+    fontFamily: t.typography.fontFamily,
+    fontSize: "0.875rem",
+    textAlign: "left",
+    cursor: "pointer",
+  };
+}
+
+/** Small tooltip icon (i) used across tools. */
+export function getTooltipIconStyle(t: Theme): CSSProperties {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 18,
+    height: 18,
+    borderRadius: "50%",
+    border: `1px solid ${t.colors.border}`,
+    fontSize: 11,
+    fontWeight: 600,
+    cursor: "default",
+    color: t.colors.textMuted,
+    backgroundColor: t.colors.surface,
+  };
+}
+
+/** Tooltip bubble surface; position handled by caller. */
+export function getTooltipBubbleStyle(t: Theme): CSSProperties {
+  return {
+    position: "absolute",
+    top: "100%",
+    left: 0,
+    marginTop: t.spacing(1),
+    maxWidth: 420,
+    padding: `${t.spacing(1.5)} ${t.spacing(2)}`,
+    borderRadius: t.radius.md,
+    backgroundColor: t.colors.secondary,
+    color: t.colors.secondaryText,
+    fontSize: "0.75rem",
+    lineHeight: 1.4,
+    boxShadow: "0 8px 24px rgba(15,42,54,0.25)",
+    zIndex: 2000,
+  };
+}
+
 // DM Sans: geometric, clean, friendly (free, Google Fonts)
 const baseTheme = {
   typography: {
