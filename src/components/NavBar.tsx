@@ -201,16 +201,17 @@ export function NavBar({
           onClick={() => onNavigate("home")}
           aria-label="Go to home"
         >
-          {compact ? (
-            <img src={assets.favicon} alt="RPG H.U.B" style={faviconStyle} />
-          ) : (
-            <img
-              src={mode === "light" ? assets.logo : assets.logoWhite}
-              alt="RPG H.U.B"
-              className="app-nav-logo"
-              style={logoStyle}
-            />
-          )}
+          <img
+            src={compact ? assets.favicon : mode === "light" ? assets.logo : assets.logoWhite}
+            alt="RPG H.U.B"
+            className="app-nav-logo"
+            style={{
+              ...logoStyle,
+              height: compact ? 32 : logoStyle.height,
+              width: compact ? 32 : logoStyle.width,
+              minWidth: compact ? 32 : logoStyle.minWidth,
+            }}
+          />
         </button>
       </div>
       <div style={pillWrapStyle}>

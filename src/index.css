@@ -448,6 +448,25 @@ body {
   object-position: left center;
 }
 
+/* Nav: sidebar links hover/active */
+.app-nav-sidebar .app-nav-menu a {
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    transform 0.12s ease,
+    box-shadow 0.12s ease;
+}
+.app-nav-sidebar .app-nav-menu a:hover {
+  transform: translateY(-1px) scale(1.02);
+  background-color: rgba(68, 193, 193, 0.06) !important;
+  color: #44c1c1 !important;
+  box-shadow: 0 4px 10px rgba(15, 42, 54, 0.08);
+}
+.app-nav-sidebar .app-nav-menu a:active {
+  transform: translateY(0) scale(0.99);
+  box-shadow: 0 2px 6px rgba(15, 42, 54, 0.06);
+}
+
 .app-main-inner {
   /* padding set inline; overridden per breakpoint below */
 }
