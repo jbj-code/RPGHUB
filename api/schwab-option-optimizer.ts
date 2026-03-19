@@ -534,8 +534,10 @@ export default async function handler(req: any, res: any) {
           : Math.max(1, Math.round(row.value / (spec.strike * 100)));
       const notional = spec.strike * contracts * 100;
       const premiumReceived = (isSell ? 1 : -1) * optionLimitPrice * contracts * 100;
+      // Boss-sheet aligned: yield at current underlying price (not strike).
+      const currentUnderlyingNotional = spec.currentPrice * contracts * 100;
       const yieldAtCurrentPrice =
-        notional !== 0 ? (premiumReceived / notional) * 100 : 0;
+        currentUnderlyingNotional !== 0 ? (premiumReceived / currentUnderlyingNotional) * 100 : 0;
       const annualizedYieldPct =
         spec.daysToMaturity > 0
           ? yieldAtCurrentPrice * (365 / spec.daysToMaturity)

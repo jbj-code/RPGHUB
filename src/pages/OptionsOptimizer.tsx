@@ -1031,15 +1031,36 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                   <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Ticker</th>
                   <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Maturity</th>
                   <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Type</th>
-                  <th style={{ textAlign: "center", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>1M Upside %</th>
+                  <th style={{ textAlign: "center", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
+                    <HelpTooltip
+                      theme={t}
+                      text="1M Upside % is the underlying ticker's trailing 1-month price performance from Schwab price history. It is used as a directional context signal in ranking."
+                    >
+                      <span style={{ cursor: "help" }}>1M Upside %</span>
+                    </HelpTooltip>
+                  </th>
                   <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Strike</th>
-                  <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Limit Px</th>
+                  <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
+                    <HelpTooltip
+                      theme={t}
+                      text="Limit Px uses the desk model: midpoint × 92%, where midpoint = (bid + ask) / 2. This modeled execution price drives premium and yield calculations."
+                    >
+                      <span style={{ cursor: "help" }}>Limit Px</span>
+                    </HelpTooltip>
+                  </th>
                   {rollMode && (
                     <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
                       BTC Px
                     </th>
                   )}
-                  <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Ann. Yield</th>
+                  <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
+                    <HelpTooltip
+                      theme={t}
+                      text="Ann. Yield is annualized from yield at current underlying price (not strike): (modeled premium / current underlying value) × (365 / days to maturity)."
+                    >
+                      <span style={{ cursor: "help" }}>Ann. Yield</span>
+                    </HelpTooltip>
+                  </th>
                   {rollMode && (
                     <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
                       Net Roll / c
