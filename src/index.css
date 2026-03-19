@@ -344,6 +344,24 @@ body {
   border-color: rgba(15, 42, 54, 0.3);
 }
 
+/* ---- Options Roll: premium feel ---- */
+.options-roll-page .options-roll-card {
+  transition: box-shadow 0.25s ease, border-color 0.25s ease, opacity 0.3s ease, transform 0.3s ease;
+  animation: page-card-in 0.45s ease-out both;
+}
+.options-roll-page .options-roll-card:hover {
+  box-shadow: 0 4px 16px rgba(15, 42, 54, 0.08);
+}
+.options-roll-page input,
+.options-roll-page select {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.options-roll-page input:focus,
+.options-roll-page select:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(68, 193, 193, 0.25);
+}
+
 /* ---- Options Opportunities: premium feel ---- */
 .options-opportunities-page .options-opportunities-card {
   position: relative;

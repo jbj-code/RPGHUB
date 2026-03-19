@@ -9,6 +9,7 @@ import {
   OptionsBuilder,
   Todos,
   OptionsOpportunities,
+  OptionsRoll,
   Rankinator,
   RaiseAi,
   GraphTool,
@@ -27,6 +28,7 @@ export type Page =
   | "options-builder"
   | "todos"
   | "options-opportunities"
+  | "options-roll"
   | "graph-tool"
   | "rankinator"
   | "raise-ai"
@@ -96,6 +98,7 @@ function App() {
             {page === "options-builder" && <OptionsBuilder theme={t} />}
             {page === "graph-tool" && <GraphTool theme={t} />}
             {page === "options-opportunities" && <OptionsOpportunities theme={t} />}
+            {page === "options-roll" && <OptionsRoll theme={t} />}
             {page === "rankinator" && <Rankinator theme={t} />}
             {page === "raise-ai" && <RaiseAi theme={t} />}
             {page === "email-crm" && (

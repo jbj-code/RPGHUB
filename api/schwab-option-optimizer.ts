@@ -88,6 +88,23 @@ function daysBetween(from: Date, to: Date): number {
   return Math.round((to.getTime() - from.getTime()) / (24 * 60 * 60 * 1000));
 }
 
+/** Standard monthly equity options: 3rd Friday of the month (UTC date from chain YYYY-MM-DD). */
+function isThirdFridayMonthlyExpiry(expiry: string): boolean {
+  const parts = expiry.split("-");
+  if (parts.length !== 3) return false;
+  const y = Number(parts[0]);
+  const m = Number(parts[1]);
+  const d = Number(parts[2]);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return false;
+  const date = new Date(Date.UTC(y, m - 1, d));
+  if (date.getUTCDay() !== 5) return false;
+  let fridayCount = 0;
+  for (let day = 1; day <= d; day++) {
+    if (new Date(Date.UTC(y, m - 1, day)).getUTCDay() === 5) fridayCount++;
+  }
+  return fridayCount === 3;
+}
+
 // Desk model requested by user: limit price = midpoint * 92%.
 function modeledLimitPrice(bid?: number, ask?: number): number | null {
   const b = typeof bid === "number" && Number.isFinite(bid) && bid > 0 ? bid : null;
@@ -187,6 +204,10 @@ export default async function handler(req: any, res: any) {
   const otmVariancePct = Number(body.otmVariancePct) || 0;
   const rollMode = Boolean(body.rollMode);
   const rollCreditOnly = Boolean(body.rollCreditOnly);
+  const rollObjective =
+    body.rollObjective === "cashflow" || body.rollObjective === "yield" || body.rollObjective === "balanced"
+      ? body.rollObjective
+      : "balanced";
 
   const tickers = [
     ...new Set(
@@ -350,6 +371,7 @@ export default async function handler(req: any, res: any) {
 
       for (const [expKey, strikesObj] of Object.entries<any>(expMap)) {
         const expiry = toExpiryYYYYMMDD(expKey);
+        if (row.monthly && !isThirdFridayMonthlyExpiry(expiry)) continue;
         const expDate = new Date(expiry + "Z");
         const dte = daysBetween(today, expDate);
         if (dte < Math.max(1, row.days - 14) || dte > row.days + 35) continue;
@@ -628,6 +650,8 @@ export default async function handler(req: any, res: any) {
       if (rollMode) {
         const netAnn = r.netRollAnnualizedPct ?? -9999;
         const netPerC = r.netRollPerContract ?? -9999;
+        if (rollObjective === "cashflow") return netPerC;
+        if (rollObjective === "yield") return netAnn;
         return netAnn * 0.8 + netPerC * 0.2;
       }
       return r.annYield * 0.5 + (r.upsidePct + 50) * 0.5;

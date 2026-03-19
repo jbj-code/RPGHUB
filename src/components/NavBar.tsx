@@ -135,6 +135,11 @@ export function NavBar({
       label: "Options Opportunities",
       icon: "search",
     },
+    {
+      page: "options-roll",
+      label: "Options Roll",
+      icon: "auto_mode",
+    },
     { page: "graph-tool", label: "Graph Tool", icon: "show_chart" },
     { page: "email-crm", label: "Email CRM", icon: "contacts" },
     { page: "todos", label: "To-Dos", icon: "checklist" },

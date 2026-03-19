@@ -4,6 +4,7 @@ export { StockComparison } from "./StockComparison";
 export { OptionsBuilder } from "./OptionsBuilder";
 export { Todos } from "./Todos";
 export { OptionsOpportunities } from "./OptionsOpportunities";
+export { OptionsRoll } from "./OptionsRoll";
 export { Rankinator } from "./Rankinator";
 export { RaiseAi } from "./RaiseAi";
 export { GraphTool } from "./GraphTool";
