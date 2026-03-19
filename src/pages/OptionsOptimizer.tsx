@@ -130,6 +130,36 @@ function formatOptionKey(tr: OptionsTrade): string {
   return `${tr.ticker} US ${mm}/${dd}/${yy} ${type}${strike} Equity`;
 }
 
+function formatRankedRowForCopy(r: RankedResult, rollMode: boolean): string {
+  const values: string[] = [
+    String(r.rank),
+    r.ticker,
+    r.trade.maturity,
+    r.trade.optionSide.startsWith("PUT") ? "Put" : "Call",
+    `${r.upsidePct}`,
+    r.strike.toFixed(2),
+    r.limitPrice.toFixed(2),
+  ];
+
+  if (rollMode) {
+    values.push(
+      r.btcAsk != null ? r.btcAsk.toFixed(2) : "",
+      r.netRollPerContract != null ? r.netRollPerContract.toFixed(2) : "",
+      r.netRollTotal != null ? r.netRollTotal.toFixed(2) : ""
+    );
+  }
+
+  values.push(
+    r.annYield.toFixed(2),
+    r.premiumPerContract.toFixed(2),
+    formatSchwabSymbol(r.trade),
+    formatOptionKey(r.trade)
+  );
+
+  // Tab-separated row for direct paste across spreadsheet cells.
+  return values.join("\t");
+}
+
 
 
 const defaultPortfolioRow = (): PortfolioRow => ({
@@ -1006,7 +1036,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                   <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Limit Px</th>
                   {rollMode && (
                     <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
-                      BTC Ask
+                      BTC Px
                     </th>
                   )}
                   <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Ann. Yield</th>
@@ -1159,7 +1189,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                         <button
                           type="button"
                           onClick={() => {
-                            const text = formatSchwabSymbol(r.trade);
+                            const text = formatRankedRowForCopy(r, rollMode);
                             void navigator.clipboard.writeText(text);
                             setLastCopiedTradeId(r.trade.id);
                             window.setTimeout(
@@ -1170,8 +1200,8 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                               1200
                             );
                           }}
-                          title="Copy Schwab symbol"
-                          aria-label="Copy Schwab symbol"
+                          title="Copy row details"
+                          aria-label="Copy row details"
                           className="options-optimizer-copy-symbol"
                           style={{
                             display: "inline-flex",

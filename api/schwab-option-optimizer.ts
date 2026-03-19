@@ -88,6 +88,16 @@ function daysBetween(from: Date, to: Date): number {
   return Math.round((to.getTime() - from.getTime()) / (24 * 60 * 60 * 1000));
 }
 
+// Desk model requested by user: limit price = midpoint * 92%.
+function modeledLimitPrice(bid?: number, ask?: number): number | null {
+  const b = typeof bid === "number" && Number.isFinite(bid) && bid > 0 ? bid : null;
+  const a = typeof ask === "number" && Number.isFinite(ask) && ask > 0 ? ask : null;
+  if (b != null && a != null) return ((b + a) / 2) * 0.92;
+  if (b != null) return b * 0.92;
+  if (a != null) return a * 0.92;
+  return null;
+}
+
 /** Build OCC option symbol */
 function toOCCSymbol(
   underlying: string,
@@ -433,7 +443,7 @@ export default async function handler(req: any, res: any) {
     }
 
     // 4b) Optional roll-mode BTC quote lookup for each row's current short leg.
-    const closeAskByRowId: Record<string, number> = {};
+    const closePriceByRowId: Record<string, number> = {};
     if (rollMode) {
       const btcRows = portfolioRows
         .map((row) => ({
@@ -472,14 +482,21 @@ export default async function handler(req: any, res: any) {
           const q = qBody[item.occ] ?? qBody[item.occ.replace(/\s+/g, "")];
           const src = q?.quote ?? q?.optionContract ?? q;
           if (!src || typeof src !== "object") continue;
+          const bid =
+            typeof src.bidPrice === "number"
+              ? src.bidPrice
+              : typeof src.bid === "number"
+                ? src.bid
+                : undefined;
           const ask =
             typeof src.askPrice === "number"
               ? src.askPrice
               : typeof src.ask === "number"
                 ? src.ask
                 : undefined;
-          if (typeof ask === "number" && Number.isFinite(ask) && ask > 0) {
-            closeAskByRowId[item.rowId] = ask;
+          const modeled = modeledLimitPrice(bid, ask);
+          if (modeled != null) {
+            closePriceByRowId[item.rowId] = modeled;
           }
         }
       }
@@ -508,7 +525,9 @@ export default async function handler(req: any, res: any) {
       const row = spec.row;
       // In roll mode we always evaluate replacement candidates as SELL TO OPEN.
       const isSell = rollMode ? true : row.action.startsWith("Sell");
-      const optionLimitPrice = isSell ? bid : ask;
+      const modeled = modeledLimitPrice(bid, ask);
+      if (modeled == null || modeled <= 0) continue;
+      const optionLimitPrice = modeled;
       const contracts =
         row.type === "Qty"
           ? Math.max(1, Math.round(row.value))
@@ -553,9 +572,9 @@ export default async function handler(req: any, res: any) {
         Math.round(Number(row.currentContracts) > 0 ? Number(row.currentContracts) : contracts)
       );
       const netRollPerContract =
-        rollMode && closeAskByRowId[row.id] != null
+        rollMode && closePriceByRowId[row.id] != null
           ? Math.round(
-              ((isSell ? 1 : -1) * optionLimitPrice * 100 - closeAskByRowId[row.id] * 100) *
+              ((isSell ? 1 : -1) * optionLimitPrice * 100 - closePriceByRowId[row.id] * 100) *
                 100
             ) / 100
           : null;
@@ -569,12 +588,12 @@ export default async function handler(req: any, res: any) {
         annYield: trade.annualizedYieldPct,
         // Signed per-contract premium/cost so buy actions display as negative cash flow.
         premiumPerContract: Math.round((isSell ? 1 : -1) * optionLimitPrice * 100),
-        btcAsk: rollMode ? closeAskByRowId[row.id] ?? null : null,
+        btcAsk: rollMode ? closePriceByRowId[row.id] ?? null : null,
         netRollPerContract,
         netRollAnnualizedPct: rollMode
-          ? closeAskByRowId[row.id] != null && spec.daysToMaturity > 0
+          ? closePriceByRowId[row.id] != null && spec.daysToMaturity > 0
             ? Math.round(
-                ((((isSell ? 1 : -1) * optionLimitPrice * 100 - closeAskByRowId[row.id] * 100) / (spec.strike * 100)) *
+                ((((isSell ? 1 : -1) * optionLimitPrice * 100 - closePriceByRowId[row.id] * 100) / (spec.strike * 100)) *
                   100 *
                   (365 / spec.daysToMaturity)) *
                   100
