@@ -162,7 +162,15 @@ function HelpTooltip({ theme: t, text, children }: HelpTooltipProps) {
     >
       {children}
       {open && (
-        <div style={getTooltipBubbleStyle(t)} role="tooltip">
+        <div
+          style={{
+            ...getTooltipBubbleStyle(t),
+            maxWidth: 560,
+            minWidth: 280,
+            whiteSpace: "normal",
+          }}
+          role="tooltip"
+        >
           {text}
         </div>
       )}
@@ -712,15 +720,30 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                 >
                   <label style={labelStyle}>Value</label>
                 </HelpTooltip>
-                <input
-                  type="number"
-                  min={0}
-                  style={inputStyle}
-                  value={row.value || ""}
-                  onChange={(e) => updatePortfolioRow(row.id, "value", Number(e.target.value) || 0)}
-                  placeholder="0"
-                  aria-label="Value"
-                />
+                {row.type === "Notional" ? (
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    style={inputStyle}
+                    value={row.value > 0 ? Math.round(row.value).toLocaleString("en-US") : ""}
+                    onChange={(e) => {
+                      const digits = e.target.value.replace(/[^\d]/g, "");
+                      updatePortfolioRow(row.id, "value", digits ? Number(digits) : 0);
+                    }}
+                    placeholder="0"
+                    aria-label="Value"
+                  />
+                ) : (
+                  <input
+                    type="number"
+                    min={0}
+                    style={inputStyle}
+                    value={row.value || ""}
+                    onChange={(e) => updatePortfolioRow(row.id, "value", Number(e.target.value) || 0)}
+                    placeholder="0"
+                    aria-label="Value"
+                  />
+                )}
               </div>
               <div
                 style={{
@@ -931,7 +954,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
       </div>
 
       {/* —— Ranked results —— */}
-      {rankedResults && rankedResults.length > 0 && (
+      {rankedResults && (
         <div
           className="options-optimizer-card"
           style={{
@@ -946,12 +969,23 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
               ? "Best roll candidates ranked by net annualized roll value and net roll credit/debit."
               : "Best options by combined yield and underlying upside. Add any row to your trade list below."}
           </p>
-          <p style={{ fontSize: "0.85rem", color: t.colors.text, marginBottom: t.spacing(3) }}>
-            <strong>Top yield:</strong> {Math.max(...rankedResults.map((r) => r.annYield)).toFixed(1)}%
-            {" · "}
-            <strong>Avg yield:</strong> {(rankedResults.reduce((s, r) => s + r.annYield, 0) / rankedResults.length).toFixed(1)}%
-          </p>
-          <div style={{ overflowX: "auto", borderRadius: t.radius.md, border: `1px solid ${t.colors.border}` }}>
+          {rankedResults.length > 0 && (
+            <p style={{ fontSize: "0.85rem", color: t.colors.text, marginBottom: t.spacing(3) }}>
+              <strong>Top yield:</strong> {Math.max(...rankedResults.map((r) => r.annYield)).toFixed(1)}%
+              {" · "}
+              <strong>Avg yield:</strong> {(rankedResults.reduce((s, r) => s + r.annYield, 0) / rankedResults.length).toFixed(1)}%
+            </p>
+          )}
+          {rankedResults.length === 0 && (
+            <p style={{ fontSize: "0.9rem", color: t.colors.danger, marginBottom: t.spacing(3), fontWeight: 600 }}>
+              {optimizeMessage ??
+                (rollMode
+                  ? "No roll candidates matched your settings."
+                  : "No candidates matched your settings.")}
+            </p>
+          )}
+          {rankedResults.length > 0 && (
+            <div style={{ overflowX: "auto", borderRadius: t.radius.md, border: `1px solid ${t.colors.border}` }}>
             <table
               style={{
                 width: "100%",
@@ -1187,7 +1221,8 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                 ))}
               </tbody>
             </table>
-          </div>
+            </div>
+          )}
         </div>
       )}
 

@@ -506,7 +506,8 @@ export default async function handler(req: any, res: any) {
       if (bid <= 0 && ask <= 0) continue;
 
       const row = spec.row;
-      const isSell = row.action.startsWith("Sell");
+      // In roll mode we always evaluate replacement candidates as SELL TO OPEN.
+      const isSell = rollMode ? true : row.action.startsWith("Sell");
       const optionLimitPrice = isSell ? bid : ask;
       const contracts =
         row.type === "Qty"
@@ -530,7 +531,11 @@ export default async function handler(req: any, res: any) {
         strikePrice: spec.strike,
         currentPrice: spec.currentPrice,
         moneynessPct: Math.round(moneynessPct * 100) / 100,
-        optionSide: optionSideFromRow(row),
+        optionSide: rollMode
+          ? row.putCall === "Put"
+            ? "PUT - SELL to OPEN"
+            : "CALL - SELL to OPEN"
+          : optionSideFromRow(row),
         pctOffBid: 0,
         optionLimitPrice,
         currentBid: bid,
@@ -586,8 +591,16 @@ export default async function handler(req: any, res: any) {
     }
 
     let ranked = raw;
+    let message: string | null = null;
     if (rollMode && rollCreditOnly) {
       ranked = ranked.filter((r) => (r.netRollPerContract ?? -Infinity) > 0);
+      if (ranked.length === 0) {
+        message =
+          "No credit roll candidates found for these settings. Try turning off Credit only, widening OTM variance, or increasing DTE.";
+      }
+    } else if (rollMode && ranked.length === 0) {
+      message =
+        "No roll candidates found for these settings. Try widening OTM variance or adjusting DTE.";
     }
 
     const score = (r: RankedResult) => {
@@ -603,7 +616,7 @@ export default async function handler(req: any, res: any) {
       r.rank = i + 1;
     });
 
-    res.status(200).json({ results: ranked, message: null });
+    res.status(200).json({ results: ranked, message });
   } catch (err) {
     console.error("schwab-option-optimizer error", err);
     res.status(500).json({
