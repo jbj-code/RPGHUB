@@ -8,3 +8,4 @@ export { Rankinator } from "./Rankinator";
 export { RaiseAi } from "./RaiseAi";
 export { ClientDetail } from "./ClientDetail";
 export { GraphTool } from "./GraphTool";
+export { EmailCrm } from "./EmailCrm";

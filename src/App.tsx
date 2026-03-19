@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, lazy, Suspense } from "react";
 import { lightTheme, darkTheme, type ThemeMode, type Theme } from "./theme";
 import { NavBar, SIDEBAR_WIDTH, SIDEBAR_WIDTH_COMPACT } from "./components/NavBar";
 import { PasswordGate, getIsUnlocked } from "./components/PasswordGate";
@@ -16,6 +16,10 @@ import {
 } from "./pages";
 import { OptionsPricing } from "./pages/OptionsPricing";
 
+const EmailCrm = lazy(() =>
+  import("./pages/EmailCrm").then((m) => ({ default: m.EmailCrm }))
+);
+
 export type Page =
   | "home"
   | "put-optimizer"
@@ -27,7 +31,8 @@ export type Page =
   | "client-detail"
   | "graph-tool"
   | "rankinator"
-  | "raise-ai";
+  | "raise-ai"
+  | "email-crm";
 
 const PAGE_PADDING_H = 6;
 
@@ -101,6 +106,17 @@ function App() {
             {page === "graph-tool" && <GraphTool theme={t} />}
             {page === "rankinator" && <Rankinator theme={t} />}
             {page === "raise-ai" && <RaiseAi theme={t} />}
+            {page === "email-crm" && (
+              <Suspense
+                fallback={
+                  <p style={{ color: t.colors.textMuted, padding: t.spacing(4) }}>
+                    Loading Email CRM…
+                  </p>
+                }
+              >
+                <EmailCrm theme={t} />
+              </Suspense>
+            )}
           </div>
         )}
       </main>
