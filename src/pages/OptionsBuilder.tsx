@@ -571,14 +571,23 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
             }}
             disabled={loading}
           >
-            {loading ? "Building…" : "Build sheet"}
-            <span
-              className="material-symbols-outlined"
-              style={{ fontSize: 20 }}
-              aria-hidden
-            >
-              auto_fix_high
-            </span>
+            {loading ? (
+              <>
+                <span className="options-pricing-fetch-spinner" aria-hidden />
+                Building…
+              </>
+            ) : (
+              <>
+                Build sheet
+                <span
+                  className="material-symbols-outlined"
+                  style={{ fontSize: 20 }}
+                  aria-hidden
+                >
+                  auto_fix_high
+                </span>
+              </>
+            )}
           </button>
           <button
             type="button"

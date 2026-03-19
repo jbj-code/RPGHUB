@@ -80,57 +80,18 @@ function getMonthlyThirdFridayExpirations(maxMonthsAhead: number): { value: stri
     if (thirdFriday.getTime() < start.getTime()) continue;
 
     const value = toISODateUTC(thirdFriday);
+    // Expiry is stored as UTC calendar date; format label in UTC too — otherwise US timezones
+    // show the previous local day (e.g. Mar 20 expiry displays as "Mar 19").
     const label = thirdFriday.toLocaleDateString(undefined, {
       year: "numeric",
       month: "short",
       day: "2-digit",
+      timeZone: "UTC",
     });
     out.push({ value, label });
   }
 
   return out;
-}
-
-function CopyButton({ value, label }: { value: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      type="button"
-      style={{
-        padding: "8px 10px",
-        borderRadius: 8,
-        border: "1px solid rgba(226,232,240,1)",
-        background: "transparent",
-        cursor: "pointer",
-        fontSize: "0.85rem",
-        fontWeight: 700,
-        color: copied ? "#44c1c1" : "inherit",
-        whiteSpace: "nowrap",
-      }}
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(value);
-          setCopied(true);
-          window.setTimeout(() => setCopied(false), 900);
-        } catch {
-          // Best-effort fallback
-          const el = document.createElement("textarea");
-          el.value = value;
-          el.style.position = "fixed";
-          el.style.left = "-9999px";
-          document.body.appendChild(el);
-          el.select();
-          document.execCommand("copy");
-          document.body.removeChild(el);
-          setCopied(true);
-          window.setTimeout(() => setCopied(false), 900);
-        }
-      }}
-      aria-label={`Copy ${label}`}
-    >
-      {copied ? "Copied" : label}
-    </button>
-  );
 }
 
 type DropdownOption = { value: string; label: string };
@@ -337,11 +298,14 @@ export function OptionsOpportunities({ theme: t }: OptionsOpportunitiesProps) {
 
   const [minMarketCap, setMinMarketCap] = useState<number>(500_000_000);
   const minMarketCapText = useMemo(() => minMarketCap.toLocaleString("en-US"), [minMarketCap]);
+  /** How many underlyings to pull chains for after market-cap filter (API / timeout tradeoff). */
+  const [maxUnderlyingsToScan, setMaxUnderlyingsToScan] = useState(50);
 
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [resultsByOtmPct, setResultsByOtmPct] = useState<Record<number, RankedOption[]>>({});
+  const [lastCopiedOpportunityKey, setLastCopiedOpportunityKey] = useState<string | null>(null);
 
   async function onScan() {
     if (!expiration) return;
@@ -357,6 +321,7 @@ export function OptionsOpportunities({ theme: t }: OptionsOpportunitiesProps) {
         otmLevels: Array.from(OTM_LEVELS),
         topN: 5,
         minMarketCap,
+        maxUnderlyingsToScan,
         strikeTolerancePct: 1.25,
         monthlyOnly,
       };
@@ -367,13 +332,25 @@ export function OptionsOpportunities({ theme: t }: OptionsOpportunitiesProps) {
         body: JSON.stringify(payload),
       });
 
-      if (!res.ok) {
-        const text = await res.text();
-        setScanError(text || `Scan failed (${res.status})`);
-        return;
+      let json: ScreenerResponse & { error?: string } = {
+        resultsByOtmPct: {},
+        message: null,
+        warnings: [],
+      };
+      try {
+        json = await res.json();
+      } catch {
+        /* non-JSON body */
       }
 
-      const json: ScreenerResponse = await res.json();
+      if (!res.ok) {
+        setScanError(
+          (typeof json.error === "string" && json.error) ||
+            (json.message != null ? String(json.message) : null) ||
+            `Scan failed (${res.status})`
+        );
+        return;
+      }
       setWarnings(json.warnings ?? []);
       setScanError(json.message ? String(json.message) : null);
       setResultsByOtmPct(json.resultsByOtmPct ?? {});
@@ -419,7 +396,13 @@ export function OptionsOpportunities({ theme: t }: OptionsOpportunitiesProps) {
       </div>
 
       <p style={descStyle}>
-        Scan options chains for the highest annualized yields at different OTM levels using live Schwab data.
+        Scan options chains for the highest annualized yields at different OTM levels using live Schwab data.{" "}
+        <strong>Universe:</strong> constituents are loaded from a public{" "}
+        <strong>S&amp;P 500–style CSV</strong> at scan time (URL overridable server-side with{" "}
+        <code style={{ fontSize: "0.85em" }}>SCREENER_UNIVERSE_CSV_URL</code>), then filtered by your{" "}
+        <strong>minimum market cap</strong> using Schwab quotes. Only the largest names (by market cap) are
+        chain-scanned per run so we stay within Schwab rate limits and server timeouts—raise{" "}
+        <strong>Max symbols to scan</strong> for broader coverage if needed.
       </p>
 
       <div
@@ -573,6 +556,43 @@ export function OptionsOpportunities({ theme: t }: OptionsOpportunitiesProps) {
               />
             </div>
           </div>
+
+          <div style={{ minWidth: 200, flex: 1 }}>
+            <div
+              style={{
+                fontSize: "0.85rem",
+                fontWeight: 700,
+                color: t.colors.secondary,
+                marginBottom: t.spacing(1.5),
+              }}
+            >
+              <HelpTooltip
+                theme={t}
+                text="After filtering by market cap, we only request option chains for this many symbols (highest market cap first). Lower = faster and gentler on Schwab rate limits; higher = wider scan but may time out or hit 429."
+              >
+                <span style={{ cursor: "help", borderBottom: `1px dotted ${t.colors.textMuted}` }}>
+                  Max symbols to scan
+                </span>
+              </HelpTooltip>
+            </div>
+            <input
+              type="number"
+              min={10}
+              max={150}
+              step={5}
+              value={maxUnderlyingsToScan}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                if (!Number.isFinite(n)) return;
+                setMaxUnderlyingsToScan(Math.min(150, Math.max(10, Math.round(n))));
+              }}
+              style={{ ...inputStyle, maxWidth: 120 }}
+              aria-label="Max symbols to scan"
+            />
+            <div style={{ marginTop: t.spacing(1), fontSize: "0.8rem", color: t.colors.textMuted }}>
+              10–150 (default 50)
+            </div>
+          </div>
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: t.spacing(3), marginTop: t.spacing(4) }}>
@@ -584,7 +604,7 @@ export function OptionsOpportunities({ theme: t }: OptionsOpportunitiesProps) {
             aria-disabled={scanning}
           >
             {scanning ? (
-              <span style={{ display: "inline-flex", alignItems: "center" }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
                 <span className="options-pricing-fetch-spinner" aria-hidden />
                 Scanning…
               </span>
@@ -635,7 +655,14 @@ export function OptionsOpportunities({ theme: t }: OptionsOpportunitiesProps) {
               <table style={tableStyle}>
                 <thead>
                   <tr>
-                    <th style={thNumStyle}>Rank</th>
+                    <th
+                      style={{
+                        ...thStyle,
+                        borderTopLeftRadius: t.radius.md,
+                      }}
+                    >
+                      Rank
+                    </th>
                     <th style={thStyle}>Ticker</th>
                     <th style={thStyle}>Company</th>
                     <th style={thNumStyle}>1M Perf</th>
@@ -643,7 +670,14 @@ export function OptionsOpportunities({ theme: t }: OptionsOpportunitiesProps) {
                     <th style={thNumStyle}>Bid</th>
                     <th style={thNumStyle}>Ann. Yield</th>
                     <th style={thNumStyle}>Premium (1 contract)</th>
-                    <th style={thStyle}>Action</th>
+                    <th
+                      style={{
+                        ...thStyle,
+                        borderTopRightRadius: t.radius.md,
+                      }}
+                    >
+                      Action
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -654,36 +688,113 @@ export function OptionsOpportunities({ theme: t }: OptionsOpportunitiesProps) {
                       </td>
                     </tr>
                   ) : (
-                    arr.map((r) => (
+                    arr.map((r) => {
+                      const copyKey = `${otmPct}-${r.ticker}-${r.strike}`;
+                      return (
                       <tr key={`${r.ticker}-${r.strike}-${r.otmPct}`}>
                         <td
                           style={{
-                            ...tdNumStyle,
-                            fontWeight: 800,
+                            ...tdStyle,
+                            textAlign: "left",
+                            fontWeight: 600,
                             color:
                               r.rank === 1
-                                ? "#D4AF37" // gold
+                                ? "#D4AF37"
                                 : r.rank === 2
-                                  ? "#C0C0C0" // silver
+                                  ? "#C0C0C0"
                                   : r.rank === 3
-                                    ? "#CD7F32" // bronze
+                                    ? "#CD7F32"
                                     : t.colors.text,
                           }}
                         >
-                          {r.rank}
+                          #{r.rank}
                         </td>
-                        <td style={tdStyle}>{r.ticker}</td>
+                        <td style={{ ...tdStyle, fontWeight: 600 }}>{r.ticker}</td>
                         <td style={tdStyle}>{r.company}</td>
                         <td style={tdNumStyle}>{formatPct(r.oneMonthPerfPct)}</td>
                         <td style={tdNumStyle}>{r.strike.toFixed(2)}</td>
                         <td style={tdNumStyle}>${r.bid.toFixed(2)}</td>
-                        <td style={{ ...tdNumStyle, color: t.colors.primary }}>{r.annYieldPct.toFixed(2)}%</td>
+                        <td
+                          style={{
+                            ...tdNumStyle,
+                            color: r.annYieldPct >= 0 ? t.colors.success : t.colors.danger,
+                            fontWeight: 600,
+                          }}
+                        >
+                          {r.annYieldPct.toFixed(2)}%
+                        </td>
                         <td style={tdNumStyle}>{formatMoney(r.premiumPerContract)}</td>
-                        <td style={tdStyle}>
-                          <CopyButton value={r.schwabSymbol} label="Copy order" />
+                        <td style={{ ...tdStyle, textAlign: "center" }}>
+                          <div
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void navigator.clipboard.writeText(r.schwabSymbol);
+                                setLastCopiedOpportunityKey(copyKey);
+                                window.setTimeout(
+                                  () =>
+                                    setLastCopiedOpportunityKey((prev) =>
+                                      prev === copyKey ? null : prev
+                                    ),
+                                  1200
+                                );
+                              }}
+                              title="Copy Schwab order symbol"
+                              aria-label="Copy Schwab order symbol"
+                              className="options-optimizer-copy-symbol"
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                width: 34,
+                                height: 34,
+                                padding: 0,
+                                border: "none",
+                                background: "none",
+                                cursor: "pointer",
+                                color: t.colors.textMuted,
+                                borderRadius: t.radius.sm,
+                                position: "relative",
+                              }}
+                            >
+                              <span
+                                className="material-symbols-outlined"
+                                style={{
+                                  fontSize: 22,
+                                  position: "absolute",
+                                  opacity: lastCopiedOpportunityKey === copyKey ? 0 : 1,
+                                  transition: "opacity 0.2s ease",
+                                  pointerEvents: "none",
+                                }}
+                                aria-hidden
+                              >
+                                content_copy
+                              </span>
+                              <span
+                                className="material-symbols-outlined"
+                                style={{
+                                  fontSize: 22,
+                                  position: "absolute",
+                                  opacity: lastCopiedOpportunityKey === copyKey ? 1 : 0,
+                                  transition: "opacity 0.2s ease",
+                                  pointerEvents: "none",
+                                }}
+                                aria-hidden
+                              >
+                                check
+                              </span>
+                            </button>
+                          </div>
                         </td>
                       </tr>
-                    ))
+                      );
+                    })
                   )}
                 </tbody>
               </table>

@@ -1,9 +1,99 @@
 // Options Opportunity Screener:
-// Given tickers + a target expiration (monthly 3rd Friday date) and an option type,
-// fetch Schwab option chains + quotes, compute annualized yield, and return the top
-// results for OTM levels (5/10/15/20%).
+// Loads a broad US large-cap universe (default: S&P 500 constituents CSV, overridable via env),
+// filters by Schwab quote + minimum market cap, scans up to N underlyings, then ranks yields.
 
 import { createClient } from "@supabase/supabase-js";
+
+const RATE_LIMIT_ERR = "SCHWAB_RATE_LIMIT";
+
+function throwIfRateLimited(resp: Response, _context: string): void {
+  if (resp.status === 429) {
+    const err = new Error(RATE_LIMIT_ERR);
+    throw err;
+  }
+}
+
+/** CSV URL — not a ticker list in code; fetched at runtime. Override with SCREENER_UNIVERSE_CSV_URL. */
+const DEFAULT_UNIVERSE_CSV_URL =
+  process.env.SCREENER_UNIVERSE_CSV_URL ||
+  "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv";
+
+type UniverseRow = { symbol: string; company: string };
+
+let universeCache: { rows: UniverseRow[]; fetchedAt: number } | null = null;
+const UNIVERSE_CACHE_MS = 6 * 60 * 60 * 1000;
+
+function parseCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]!;
+    if (c === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (!inQuotes && c === ",") {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += c;
+  }
+  out.push(cur);
+  return out;
+}
+
+async function fetchUniverseRows(): Promise<UniverseRow[]> {
+  const now = Date.now();
+  if (universeCache && now - universeCache.fetchedAt < UNIVERSE_CACHE_MS) {
+    return universeCache.rows;
+  }
+  const resp = await fetch(DEFAULT_UNIVERSE_CSV_URL, {
+    headers: { Accept: "text/csv", "User-Agent": "RPG-HUB-Screener/1" },
+  });
+  if (!resp.ok) {
+    throw new Error(`UNIVERSE_FETCH_${resp.status}`);
+  }
+  const text = await resp.text();
+  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (lines.length < 2) throw new Error("UNIVERSE_EMPTY");
+  const header = parseCsvLine(lines[0]!).map((h) => h.trim().toLowerCase());
+  const symIdx = header.indexOf("symbol");
+  const secIdx = header.indexOf("security");
+  if (symIdx < 0) throw new Error("UNIVERSE_BAD_CSV");
+  const rows: UniverseRow[] = [];
+  for (let li = 1; li < lines.length; li++) {
+    const parts = parseCsvLine(lines[li]!);
+    const symbol = (parts[symIdx] ?? "").trim().toUpperCase();
+    if (!symbol) continue;
+    const company = secIdx >= 0 ? (parts[secIdx] ?? "").trim() : symbol;
+    rows.push({ symbol, company });
+  }
+  if (rows.length === 0) throw new Error("UNIVERSE_EMPTY");
+  universeCache = { rows, fetchedAt: now };
+  return rows;
+}
+
+async function fetchEquityQuotesBatched(symbols: string[], accessToken: string): Promise<Record<string, unknown>> {
+  const QUOTE_BATCH = 45;
+  const merged: Record<string, unknown> = {};
+  for (let i = 0; i < symbols.length; i += QUOTE_BATCH) {
+    const batch = symbols.slice(i, i + QUOTE_BATCH);
+    const url =
+      "https://api.schwabapi.com/marketdata/v1/quotes?" +
+      new URLSearchParams({ symbols: batch.join(",") }).toString();
+    const quotesResp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    throwIfRateLimited(quotesResp, "equity_quotes");
+    if (!quotesResp.ok) {
+      const t = await quotesResp.text();
+      throw new Error(`SCHWAB_QUOTES_${quotesResp.status}:${t.slice(0, 240)}`);
+    }
+    const quotesBody = (await quotesResp.json()) as Record<string, unknown>;
+    Object.assign(merged, quotesBody);
+  }
+  return merged;
+}
 
 type RankedOption = {
   rank: number;
@@ -18,37 +108,6 @@ type RankedOption = {
   schwabSymbol: string;
   occSymbol: string;
 };
-
-const TICKER_TO_COMPANY: Record<string, string> = {
-  OIH: "Oil Services ETF",
-  SPY: "S&P 500 ETF",
-  QQQ: "Nasdaq 100 ETF",
-  IWM: "Russell 2000 ETF",
-  XLE: "Energy Select Sector",
-  XLF: "Financial Select Sector",
-  AAPL: "Apple Inc.",
-  MSFT: "Microsoft Corp.",
-  NVDA: "NVIDIA Corp.",
-  GOOGL: "Alphabet Inc.",
-};
-
-// If the client does not provide tickers, we still need a universe to scan.
-// This is intentionally small for now (API + chain fetching is expensive).
-// You can expand this list or add a universe selector later.
-const DEFAULT_UNIVERSE_TICKERS = [
-  "SPY",
-  "QQQ",
-  "IWM",
-  // Keep this small so the endpoint finishes before Vercel timeouts.
-  // If you want to scan a larger universe later, we should add batching/progress.
-  "DIA",
-  "XLK",
-  "XLF",
-  "XLE",
-  "XLV",
-  "XLY",
-  "XLI",
-] as const;
 
 function toExpiryYYYYMMDD(expKey: string): string {
   const datePart = expKey.split(":")[0].trim();
@@ -151,14 +210,6 @@ export default async function handler(req: any, res: any) {
   }
 
   const body = req.body ?? {};
-  const tickersRaw: unknown = body.tickers;
-  const providedTickers =
-    Array.isArray(tickersRaw) && tickersRaw.length > 0
-      ? tickersRaw.map((t) => String(t).trim().toUpperCase()).filter(Boolean)
-      : [];
-
-  const tickers =
-    providedTickers.length > 0 ? providedTickers : Array.from(DEFAULT_UNIVERSE_TICKERS);
 
   const optionTypeRaw = body.optionType ?? "puts";
   const optionType = String(optionTypeRaw).toLowerCase();
@@ -180,15 +231,10 @@ export default async function handler(req: any, res: any) {
   const topN = Number(body.topN) || 5;
   const strikeTolerancePct = Number(body.strikeTolerancePct) || 1.25;
   const minMarketCap = body.minMarketCap != null ? Number(body.minMarketCap) : null;
-
-  if (tickers.length === 0) {
-    res.status(200).json({
-      resultsByOtmPct: {},
-      message: "No tickers available to scan.",
-      warnings: [],
-    });
-    return;
-  }
+  const maxUnderlyingsRaw = Number(body.maxUnderlyingsToScan);
+  const maxUnderlyingsToScan = Number.isFinite(maxUnderlyingsRaw)
+    ? Math.min(150, Math.max(10, Math.round(maxUnderlyingsRaw)))
+    : 50;
 
   try {
     const supabaseUrl = process.env.SUPABASE_URL;
@@ -220,6 +266,15 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
+    const universeRows = await fetchUniverseRows();
+    const companyBySymbol: Record<string, string> = {};
+    const tickers: string[] = [];
+    for (const row of universeRows) {
+      if (!row.symbol) continue;
+      companyBySymbol[row.symbol] = row.company;
+      tickers.push(row.symbol);
+    }
+
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
     const dte = Math.max(1, daysBetween(today, expiryDate));
@@ -229,13 +284,8 @@ export default async function handler(req: any, res: any) {
     const fromStr = expiration;
     const toStr = expiration;
 
-    // 1) Underlying quotes (current price + optional market cap)
-    const symbolsParam = tickers.join(",");
-    const quotesResp = await fetch(
-      "https://api.schwabapi.com/marketdata/v1/quotes?" + new URLSearchParams({ symbols: symbolsParam }).toString(),
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-    const quotesBody: any = quotesResp.ok ? await quotesResp.json() : {};
+    // 1) Underlying quotes (current price + market cap), batched for large universes
+    const quotesBody: any = await fetchEquityQuotesBatched(tickers, accessToken);
 
     const currentPriceByTicker: Record<string, number> = {};
     const marketCapByTicker: Record<string, number | null> = {};
@@ -270,6 +320,20 @@ export default async function handler(req: any, res: any) {
       }
     }
 
+    effectiveTickers.sort((a, b) => {
+      const ma = marketCapByTicker[a] ?? -1;
+      const mb = marketCapByTicker[b] ?? -1;
+      return mb - ma;
+    });
+
+    const beforeCap = effectiveTickers.length;
+    if (beforeCap > maxUnderlyingsToScan) {
+      warnings.push(
+        `Scanning the top ${maxUnderlyingsToScan} names by market cap (${beforeCap} passed filters) to stay within API/time limits. Increase "Max symbols to scan" for a wider pass (may time out).`
+      );
+      effectiveTickers = effectiveTickers.slice(0, maxUnderlyingsToScan);
+    }
+
     if (effectiveTickers.length === 0) {
       res.status(200).json({
         resultsByOtmPct: {},
@@ -295,6 +359,7 @@ export default async function handler(req: any, res: any) {
           `https://api.schwabapi.com/marketdata/v1/pricehistory?${params}`,
           { headers: { Authorization: `Bearer ${accessToken}` } }
         );
+        throwIfRateLimited(histResp, "pricehistory");
         if (!histResp.ok) {
           upsideByTicker[symbol] = null;
           continue;
@@ -390,6 +455,7 @@ export default async function handler(req: any, res: any) {
         `https://api.schwabapi.com/marketdata/v1/chains?${params}`,
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
+      throwIfRateLimited(chainResp, "chains");
       if (!chainResp.ok) continue;
       const chainBody: any = await chainResp.json();
       const expMap = type === "C" ? chainBody?.callExpDateMap : chainBody?.putExpDateMap;
@@ -483,6 +549,7 @@ export default async function handler(req: any, res: any) {
       const qResp = await fetch(qUrl, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
+      throwIfRateLimited(qResp, "option_quotes");
       if (!qResp.ok) continue;
       const qBody: any = await qResp.json();
 
@@ -526,7 +593,7 @@ export default async function handler(req: any, res: any) {
       const annYieldPct = yieldAtCurrentPricePct * (365 / dte);
 
       const oneMonthPerfPct = upsideByTicker[spec.ticker] ?? null;
-      const company = TICKER_TO_COMPANY[spec.ticker] ?? spec.ticker;
+      const company = companyBySymbol[spec.ticker] ?? spec.ticker;
 
       const occSymbol = toOCCSymbol(spec.ticker, spec.expiry, spec.type, spec.strike);
       const schwabSymbol = formatSchwabSymbol({
@@ -567,7 +634,37 @@ export default async function handler(req: any, res: any) {
       optionType: type,
       dte,
     });
-  } catch (err) {
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg === RATE_LIMIT_ERR) {
+      res.status(503).json({
+        error:
+          "Schwab rate limit (HTTP 429). Wait a short time and try again, or reduce “Max symbols to scan” on the Opportunities page.",
+        resultsByOtmPct: {},
+        message: null,
+        warnings: [],
+      });
+      return;
+    }
+    if (msg.startsWith("UNIVERSE_")) {
+      res.status(503).json({
+        error:
+          "Could not load the stock universe CSV (S&P 500 list). Check SCREENER_UNIVERSE_CSV_URL or try again later.",
+        resultsByOtmPct: {},
+        message: msg,
+        warnings: [],
+      });
+      return;
+    }
+    if (msg.startsWith("SCHWAB_QUOTES_")) {
+      res.status(502).json({
+        error: "Schwab equity quotes request failed while building the scan universe.",
+        resultsByOtmPct: {},
+        message: msg,
+        warnings: [],
+      });
+      return;
+    }
     console.error("schwab-options-opportunity-screener error", err);
     res.status(500).json({
       error: "Unexpected error running opportunity screener",

@@ -331,10 +331,10 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
             disabled={loading}
           >
             {loading ? (
-              <>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
                 <span className="options-pricing-fetch-spinner" aria-hidden />
                 Fetching
-              </>
+              </span>
             ) : (
               "Fetch prices"
             )}

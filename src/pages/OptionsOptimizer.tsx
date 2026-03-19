@@ -79,7 +79,7 @@ export type RankedResult = {
   trade: OptionsTrade;
 };
 
-const TICKER_TO_COMPANY: Record<string, string> = {
+export const TICKER_TO_COMPANY: Record<string, string> = {
   OIH: "Oil Services ETF",
   SPY: "S&P 500 ETF",
   QQQ: "Nasdaq 100 ETF",
@@ -96,7 +96,7 @@ const SCHWAB_API_BASE =
   (import.meta.env.VITE_SCHWAB_API_BASE as string) ||
   "https://therpghub.vercel.app";
 
-function makeId(): string {
+export function makeId(): string {
   return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 }
 
@@ -109,7 +109,7 @@ function formatMoney(n: number): string {
 }
 
 /** Schwab-style symbol: TICKER MM/DD/YYYY Strike C|P */
-function formatSchwabSymbol(tr: OptionsTrade): string {
+export function formatSchwabSymbol(tr: OptionsTrade): string {
   const d = new Date(tr.maturity + "Z");
   const mm = (d.getUTCMonth() + 1).toString().padStart(2, "0");
   const dd = d.getUTCDate().toString().padStart(2, "0");
@@ -120,7 +120,7 @@ function formatSchwabSymbol(tr: OptionsTrade): string {
 }
 
 /** Bloomberg-style option key: TICKER US MM/DD/YY C|P Strike Equity */
-function formatOptionKey(tr: OptionsTrade): string {
+export function formatOptionKey(tr: OptionsTrade): string {
   const d = new Date(tr.maturity + "Z");
   const mm = (d.getUTCMonth() + 1).toString().padStart(2, "0");
   const dd = d.getUTCDate().toString().padStart(2, "0");
@@ -130,7 +130,7 @@ function formatOptionKey(tr: OptionsTrade): string {
   return `${tr.ticker} US ${mm}/${dd}/${yy} ${type}${strike} Equity`;
 }
 
-function formatRankedRowForCopy(r: RankedResult, rollMode: boolean): string {
+export function formatRankedRowForCopy(r: RankedResult, rollMode: boolean): string {
   const values: string[] = [
     String(r.rank),
     r.ticker,
@@ -957,10 +957,19 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
             disabled={optimizeLoading}
             aria-label="Optimize portfolio"
           >
-            {optimizeLoading ? "Optimizing…" : "Optimize portfolio"}
-            <span className="material-symbols-outlined" style={{ fontSize: 20 }} aria-hidden>
-              auto_fix_high
-            </span>
+            {optimizeLoading ? (
+              <>
+                <span className="options-pricing-fetch-spinner" aria-hidden />
+                Optimizing…
+              </>
+            ) : (
+              <>
+                Optimize portfolio
+                <span className="material-symbols-outlined" style={{ fontSize: 20 }} aria-hidden>
+                  auto_fix_high
+                </span>
+              </>
+            )}
           </button>
           <button type="button" style={secondaryBtnStyle} onClick={addPortfolioRow}>
             + Add contract

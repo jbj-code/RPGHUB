@@ -115,6 +115,53 @@ function modeledLimitPrice(bid?: number, ask?: number): number | null {
   return null;
 }
 
+/** Accept YYYY-MM-DD from date inputs or leading slice of ISO datetimes (fixes roll BTC lookup). */
+function normalizeExpiryYMD(raw: string): string | null {
+  const t = raw.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  const m = t.match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1]! : null;
+}
+
+/**
+ * Desk-modeled executable price from a Schwab option quote.
+ * Near expiry, bid/ask are often missing; fall back to last or mark * 92% (same discount as midpoint model).
+ */
+function modeledPriceFromOptionQuote(src: any): number | null {
+  if (!src || typeof src !== "object") return null;
+  const bidRaw =
+    typeof src.bidPrice === "number" && Number.isFinite(src.bidPrice)
+      ? src.bidPrice
+      : typeof src.bid === "number" && Number.isFinite(src.bid)
+        ? src.bid
+        : undefined;
+  const askRaw =
+    typeof src.askPrice === "number" && Number.isFinite(src.askPrice)
+      ? src.askPrice
+      : typeof src.ask === "number" && Number.isFinite(src.ask)
+        ? src.ask
+        : undefined;
+  const bid = bidRaw != null && bidRaw > 0 ? bidRaw : undefined;
+  const ask = askRaw != null && askRaw > 0 ? askRaw : undefined;
+  const mid = modeledLimitPrice(bid, ask);
+  if (mid != null && mid > 0) return mid;
+  const last =
+    typeof src.lastPrice === "number" && Number.isFinite(src.lastPrice) && src.lastPrice > 0
+      ? src.lastPrice
+      : typeof src.last === "number" && Number.isFinite(src.last) && src.last > 0
+        ? src.last
+        : undefined;
+  if (last != null) return last * 0.92;
+  const mark =
+    typeof src.markPrice === "number" && Number.isFinite(src.markPrice) && src.markPrice > 0
+      ? src.markPrice
+      : typeof src.mark === "number" && Number.isFinite(src.mark) && src.mark > 0
+        ? src.mark
+        : undefined;
+  if (mark != null) return mark * 0.92;
+  return null;
+}
+
 /** Build OCC option symbol */
 function toOCCSymbol(
   underlying: string,
@@ -427,7 +474,14 @@ export default async function handler(req: any, res: any) {
 
     // 4) Option quotes (OCC batch)
     const BATCH = 30;
-    const optionQuotes: Record<string, { bid?: number; ask?: number }> = {};
+    const optionQuoteSrc = (q: any): any => {
+      if (!q || typeof q !== "object") return null;
+      if (q.quote && typeof q.quote === "object") return q.quote;
+      if (q.optionContract && typeof q.optionContract === "object") return q.optionContract;
+      if (q.option && typeof q.option === "object") return q.option;
+      return q.quote ?? q.optionContract ?? q;
+    };
+    const optionQuotes: Record<string, { bid: number; ask: number; modeled: number }> = {};
     for (let i = 0; i < optionSpecs.length; i += BATCH) {
       const batch = optionSpecs.slice(i, i + BATCH);
       const occSymbols = batch.map((o) =>
@@ -445,22 +499,24 @@ export default async function handler(req: any, res: any) {
         const spec = batch[j];
         const occ = occSymbols[j];
         const q = qBody[occ] ?? qBody[occ.replace(/\s+/g, "")];
-        const src = q?.quote ?? q?.optionContract ?? q;
+        const src = optionQuoteSrc(q);
         if (!src || typeof src !== "object") continue;
+        const modeled = modeledPriceFromOptionQuote(src);
+        if (modeled == null || modeled <= 0) continue;
         const bid =
-          typeof src.bidPrice === "number"
+          typeof src.bidPrice === "number" && Number.isFinite(src.bidPrice)
             ? src.bidPrice
-            : typeof src.bid === "number"
+            : typeof src.bid === "number" && Number.isFinite(src.bid)
               ? src.bid
-              : undefined;
+              : 0;
         const ask =
-          typeof src.askPrice === "number"
+          typeof src.askPrice === "number" && Number.isFinite(src.askPrice)
             ? src.askPrice
-            : typeof src.ask === "number"
+            : typeof src.ask === "number" && Number.isFinite(src.ask)
               ? src.ask
-              : undefined;
+              : 0;
         const key = `${spec.underlying} ${spec.expiry} ${spec.strike} ${spec.type}`;
-        optionQuotes[key] = { bid, ask };
+        optionQuotes[key] = { bid, ask, modeled };
       }
     }
 
@@ -468,13 +524,16 @@ export default async function handler(req: any, res: any) {
     const closePriceByRowId: Record<string, number> = {};
     if (rollMode) {
       const btcRows = portfolioRows
-        .map((row) => ({
-          rowId: row.id,
-          ticker: row.ticker.trim().toUpperCase(),
-          type: row.putCall === "Call" ? "C" : ("P" as "C" | "P"),
-          expiry: (row.currentExpiry ?? "").trim(),
-          strike: Number(row.currentStrike),
-        }))
+        .map((row) => {
+          const expiryNorm = normalizeExpiryYMD(row.currentExpiry ?? "");
+          return {
+            rowId: row.id,
+            ticker: row.ticker.trim().toUpperCase(),
+            type: row.putCall === "Call" ? "C" : ("P" as "C" | "P"),
+            expiry: expiryNorm ?? "",
+            strike: Number(row.currentStrike),
+          };
+        })
         .filter(
           (r) =>
             Boolean(r.rowId) &&
@@ -502,22 +561,10 @@ export default async function handler(req: any, res: any) {
         const qBody: any = await qResp.json();
         for (const item of batch) {
           const q = qBody[item.occ] ?? qBody[item.occ.replace(/\s+/g, "")];
-          const src = q?.quote ?? q?.optionContract ?? q;
+          const src = optionQuoteSrc(q);
           if (!src || typeof src !== "object") continue;
-          const bid =
-            typeof src.bidPrice === "number"
-              ? src.bidPrice
-              : typeof src.bid === "number"
-                ? src.bid
-                : undefined;
-          const ask =
-            typeof src.askPrice === "number"
-              ? src.askPrice
-              : typeof src.ask === "number"
-                ? src.ask
-                : undefined;
-          const modeled = modeledLimitPrice(bid, ask);
-          if (modeled != null) {
+          const modeled = modeledPriceFromOptionQuote(src);
+          if (modeled != null && modeled > 0) {
             closePriceByRowId[item.rowId] = modeled;
           }
         }
@@ -644,6 +691,11 @@ export default async function handler(req: any, res: any) {
     } else if (rollMode && ranked.length === 0) {
       message =
         "No roll candidates found for these settings. Try widening OTM variance or adjusting DTE.";
+    }
+    if (rollMode && raw.length > 0 && raw.every((r) => r.btcAsk == null)) {
+      const warn =
+        "Current-leg (BTC) modeled price missing: Net Roll and Roll metrics need a Schwab quote on your closing contract (bid/ask, last, or mark). Confirm Current expiry and strike match the option you hold.";
+      message = message ? `${message} ${warn}` : warn;
     }
 
     const score = (r: RankedResult) => {

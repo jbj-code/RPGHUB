@@ -103,6 +103,35 @@ body {
   background: rgba(68, 193, 193, 0.2) !important;
 }
 
+/* Options Roll: same add/copy icon treatment as Optimizer */
+.options-roll-page .options-optimizer-copy-symbol,
+.options-roll-page .options-optimizer-add-trade {
+  transition: color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+.options-roll-page .options-optimizer-copy-symbol:hover,
+.options-roll-page .options-optimizer-add-trade:hover {
+  color: var(--checkbox-primary, #44c1c1) !important;
+  background: rgba(68, 193, 193, 0.1) !important;
+}
+.options-roll-page .options-optimizer-copy-symbol:active,
+.options-roll-page .options-optimizer-add-trade:active {
+  transform: scale(0.92);
+  background: rgba(68, 193, 193, 0.2) !important;
+}
+
+/* Options Opportunities: copy icon same hover/active as Optimizer */
+.options-opportunities-page .options-optimizer-copy-symbol {
+  transition: color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+.options-opportunities-page .options-optimizer-copy-symbol:hover {
+  color: var(--checkbox-primary, #44c1c1) !important;
+  background: rgba(68, 193, 193, 0.1) !important;
+}
+.options-opportunities-page .options-optimizer-copy-symbol:active {
+  transform: scale(0.92);
+  background: rgba(68, 193, 193, 0.2) !important;
+}
+
 /* Options Builder: input hover/focus to match Optimizer */
 .options-builder-page input[type="text"],
 .options-builder-page input[type="number"],
@@ -345,6 +374,16 @@ body {
 }
 
 /* ---- Options Roll: premium feel ---- */
+.options-roll-page .options-roll-header-row button {
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+.options-roll-page .options-roll-header-row button:hover {
+  transform: scale(1.08);
+  opacity: 0.9;
+}
+.options-roll-header-row .options-roll-info-icon {
+  line-height: 1;
+}
 .options-roll-page .options-roll-card {
   transition: box-shadow 0.25s ease, border-color 0.25s ease, opacity 0.3s ease, transform 0.3s ease;
   animation: page-card-in 0.45s ease-out both;

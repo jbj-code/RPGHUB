@@ -578,13 +578,13 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
                 disabled={loading || allTickersForFetch.length === 0}
               >
                 {loading ? (
-                  <span
-                    className="options-pricing-fetch-spinner"
-                    aria-hidden
-                    style={{ marginRight: t.spacing(1) }}
-                  />
-                ) : null}
-                {loading ? "Fetching" : "Fetch from Schwab"}
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
+                    <span className="options-pricing-fetch-spinner" aria-hidden />
+                    Fetching
+                  </span>
+                ) : (
+                  "Fetch from Schwab"
+                )}
               </button>
             </div>
           </div>
