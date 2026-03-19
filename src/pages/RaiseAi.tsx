@@ -271,7 +271,18 @@ export function RaiseAi({ theme: t }: RaiseAiProps) {
 
   return (
     <section className="raise-ai-page" style={pageStyle}>
-      <h2 style={titleStyle}>Raise.ai</h2>
+      <h2 style={titleStyle}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
+          <span
+            className="material-symbols-outlined"
+            style={{ fontSize: "1.5rem", color: t.colors.secondary, lineHeight: 1, display: "inline-flex" }}
+            aria-hidden
+          >
+            rocket_launch
+          </span>
+          Raise.ai
+        </span>
+      </h2>
       <p style={descStyle}>
         Our personal fund — fund of funds plus direct investments. Summary below; expand a fund to see its holdings.
       </p>

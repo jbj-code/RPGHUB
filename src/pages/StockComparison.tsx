@@ -414,7 +414,18 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
         ["--input-border" as string]: t.colors.border,
       }}
     >
-      <h2 style={titleStyle}>Stock Comparison</h2>
+      <h2 style={titleStyle}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
+          <span
+            className="material-symbols-outlined"
+            style={{ fontSize: "1.5rem", color: t.colors.secondary, lineHeight: 1, display: "inline-flex" }}
+            aria-hidden
+          >
+            compare_arrows
+          </span>
+          Stock Comparison
+        </span>
+      </h2>
       <p style={descStyle}>
         Compare returns across multiple tickers using live Schwab market data. Add symbols to see returns and choose which timeframes to show.
       </p>

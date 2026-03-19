@@ -162,7 +162,18 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
 
   return (
     <section className="options-builder-page" style={pageStyle}>
-      <h2 style={titleStyle}>Options Builder</h2>
+      <h2 style={titleStyle}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
+          <span
+            className="material-symbols-outlined"
+            style={{ fontSize: "1.5rem", color: t.colors.secondary, lineHeight: 1, display: "inline-flex" }}
+            aria-hidden
+          >
+            table_chart
+          </span>
+          Options Builder
+        </span>
+      </h2>
       <p style={descStyle}>
         Draft trade tickets for individual options and bundles, then copy the fully formatted rows
         into Excel. This page mirrors the structure of your existing spreadsheet so you can move

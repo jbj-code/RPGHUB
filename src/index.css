@@ -344,6 +344,20 @@ body {
   border-color: rgba(15, 42, 54, 0.3);
 }
 
+/* ---- Options Opportunities: premium feel ---- */
+.options-opportunities-page .options-opportunities-card {
+  position: relative;
+  z-index: 1;
+  transition: box-shadow 0.25s ease, border-color 0.25s ease, opacity 0.3s ease, transform 0.3s ease;
+  animation: page-card-in 0.45s ease-out both;
+}
+.options-opportunities-page .options-opportunities-scan-card {
+  z-index: 5;
+}
+.options-opportunities-page .options-opportunities-card:hover {
+  box-shadow: 0 4px 16px rgba(15, 42, 54, 0.08);
+}
+
 /* ---- Options Pricing: fetch button spinner ---- */
 @keyframes options-pricing-spin {
   to { transform: rotate(360deg); }
@@ -408,7 +422,7 @@ body {
 /* Nav: smooth label fade/slide when collapsing sidebar; clip instead of wrap */
 .app-nav-label {
   display: inline-block;
-  max-width: 160px;
+  max-width: 190px;
   overflow: hidden;
   white-space: nowrap;
   opacity: 1;

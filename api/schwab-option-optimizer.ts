@@ -7,7 +7,7 @@ type PortfolioRow = {
   id: string;
   ticker: string;
   putCall: "Put" | "Call";
-  action: "Sell to Open" | "Buy to Open";
+  action: "Sell to Open" | "Buy to Open" | "Sell to Close" | "Buy to Close";
   type: "Qty" | "Notional";
   value: number;
   days: number;
@@ -19,8 +19,12 @@ type PortfolioRow = {
 type OptionSide =
   | "PUT - SELL to OPEN"
   | "PUT - BUY to OPEN"
+  | "PUT - SELL to CLOSE"
+  | "PUT - BUY to CLOSE"
   | "CALL - SELL to OPEN"
-  | "CALL - BUY to OPEN";
+  | "CALL - BUY to OPEN"
+  | "CALL - SELL to CLOSE"
+  | "CALL - BUY to CLOSE";
 
 export type OptionsTrade = {
   id: string;
@@ -420,8 +424,12 @@ export default async function handler(req: any, res: any) {
     const optionSideFromRow = (r: PortfolioRow): OptionSide => {
       if (r.putCall === "Put" && r.action === "Sell to Open") return "PUT - SELL to OPEN";
       if (r.putCall === "Put" && r.action === "Buy to Open") return "PUT - BUY to OPEN";
+      if (r.putCall === "Put" && r.action === "Sell to Close") return "PUT - SELL to CLOSE";
+      if (r.putCall === "Put" && r.action === "Buy to Close") return "PUT - BUY to CLOSE";
       if (r.putCall === "Call" && r.action === "Sell to Open") return "CALL - SELL to OPEN";
-      return "CALL - BUY to OPEN";
+      if (r.putCall === "Call" && r.action === "Buy to Open") return "CALL - BUY to OPEN";
+      if (r.putCall === "Call" && r.action === "Sell to Close") return "CALL - SELL to CLOSE";
+      return "CALL - BUY to CLOSE";
     };
 
     const raw: RankedResult[] = [];
@@ -433,7 +441,7 @@ export default async function handler(req: any, res: any) {
       if (bid <= 0 && ask <= 0) continue;
 
       const row = spec.row;
-      const isSell = row.action === "Sell to Open";
+      const isSell = row.action.startsWith("Sell");
       const optionLimitPrice = isSell ? bid : ask;
       const contracts =
         row.type === "Qty"

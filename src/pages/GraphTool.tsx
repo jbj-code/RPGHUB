@@ -310,7 +310,18 @@ export function GraphTool({ theme: t }: GraphToolProps) {
 
   return (
     <section className="graph-tool-page" style={pageStyle}>
-      <h2 style={titleStyle}>Graph Tool</h2>
+      <h2 style={titleStyle}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
+          <span
+            className="material-symbols-outlined"
+            style={{ fontSize: "1.5rem", color: t.colors.secondary, lineHeight: 1, display: "inline-flex" }}
+            aria-hidden
+          >
+            show_chart
+          </span>
+          Graph Tool
+        </span>
+      </h2>
       <p style={descStyle}>
         Turn a small table into a premium, client‑ready chart. Use a header row, then at least two
         columns: label and numeric value.

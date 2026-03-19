@@ -37,7 +37,18 @@ export function Rankinator({ theme: t }: RankinatorProps) {
 
   return (
     <section className="rankinator-page" style={pageStyle}>
-      <h2 style={titleStyle}>Rankinator</h2>
+      <h2 style={titleStyle}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
+          <span
+            className="material-symbols-outlined"
+            style={{ fontSize: "1.5rem", color: t.colors.secondary, lineHeight: 1, display: "inline-flex" }}
+            aria-hidden
+          >
+            leaderboard
+          </span>
+          Rankinator
+        </span>
+      </h2>
       <p style={descStyle}>
         Company data on all our fund investments. Content and functionality will go here.
       </p>

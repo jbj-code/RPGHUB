@@ -125,7 +125,8 @@ export function getDropdownPanelStyle(t: Theme, placement: "up" | "down"): CSSPr
     border: `1px solid ${t.colors.border}`,
     borderRadius: t.radius.md,
     boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-    zIndex: 101,
+    // Keep dropdown panels above cards/tables across tool pages.
+    zIndex: 4000,
     overflow: "hidden",
   };
 }

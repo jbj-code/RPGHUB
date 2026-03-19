@@ -288,7 +288,18 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
 
   return (
     <section className="options-pricing-page" style={pageStyle}>
-      <h2 style={titleStyle}>Options Pricing</h2>
+      <h2 style={titleStyle}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
+          <span
+            className="material-symbols-outlined"
+            style={{ fontSize: "1.5rem", color: t.colors.secondary, lineHeight: 1, display: "inline-flex" }}
+            aria-hidden
+          >
+            paid
+          </span>
+          Options Pricing
+        </span>
+      </h2>
       <p style={descStyle}>
         Drop in your option lines and fetch live Schwab quotes (bid / ask /
         last / mark) for each contract. Use one option per line, like:

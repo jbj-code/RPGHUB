@@ -1,19 +1,15 @@
-import { useState } from "react";
+import type { CSSProperties } from "react";
 import type { Theme, ThemeMode } from "../theme";
 import { assets } from "../theme";
 import type { Page } from "../App";
 
-type NavSegment = "tools" | "clients";
-
-export const SIDEBAR_WIDTH = 240;
+export const SIDEBAR_WIDTH = 260;
 /** Compact sidebar: icon-only nav, favicon in header. */
 export const SIDEBAR_WIDTH_COMPACT = 72;
 
 export type NavBarProps = {
   page: Page;
   onNavigate: (page: Page) => void;
-  onSelectClient: (name: string) => void;
-  selectedClient: string | null;
   mode: ThemeMode;
   onToggleMode: () => void;
   theme: Theme;
@@ -21,23 +17,18 @@ export type NavBarProps = {
   onToggleCompact: () => void;
 };
 
-const CLIENT_IDS = Array.from({ length: 10 }, (_, i) => i + 1);
-
 export function NavBar({
   page,
   onNavigate,
-  onSelectClient,
-  selectedClient,
   mode,
   onToggleMode,
   theme: t,
   compact,
   onToggleCompact,
 }: NavBarProps) {
-  const [segment, setSegment] = useState<NavSegment>("tools");
   const width = compact ? SIDEBAR_WIDTH_COMPACT : SIDEBAR_WIDTH;
 
-  const sidebarStyle: React.CSSProperties = {
+  const sidebarStyle: CSSProperties = {
     position: "fixed",
     left: 0,
     top: 0,
@@ -55,7 +46,7 @@ export function NavBar({
     transition: "width 0.25s ease, min-width 0.25s ease",
   };
 
-  const headerStyle: React.CSSProperties = {
+  const headerStyle: CSSProperties = {
     minHeight: 68,
     padding: `${t.spacing(4)} ${compact ? t.spacing(2) : t.spacing(6)}`,
     borderBottom: `1px solid ${t.colors.border}`,
@@ -64,17 +55,17 @@ export function NavBar({
     justifyContent: compact ? "center" : "flex-start",
   };
 
-  const logoButtonStyle: React.CSSProperties = {
+  const logoButtonStyle: CSSProperties = {
     padding: 0,
     border: "none",
     background: "none",
     cursor: "pointer",
     lineHeight: 0,
     display: "block",
-    width: "100%",
+    width: compact ? "100%" : "auto",
   };
 
-  const logoStyle: React.CSSProperties = {
+  const logoStyle: CSSProperties = {
     height: 36,
     width: 120,
     minWidth: 120,
@@ -83,40 +74,7 @@ export function NavBar({
     display: "block",
   };
 
-  const faviconStyle: React.CSSProperties = {
-    height: 32,
-    width: 32,
-    display: "block",
-  };
-
-  const pillWrapStyle: React.CSSProperties = {
-    padding: `${t.spacing(2)} ${compact ? t.spacing(1) : t.spacing(3)}`,
-    borderBottom: `1px solid ${t.colors.border}`,
-  };
-
-  const pillTrackStyle: React.CSSProperties = {
-    display: "flex",
-    borderRadius: 9999,
-    backgroundColor: t.colors.background,
-    padding: 2,
-    border: `1px solid ${t.colors.border}`,
-  };
-
-  const pillOptionStyle = (active: boolean): React.CSSProperties => ({
-    flex: 1,
-    padding: `${t.spacing(1)} ${compact ? t.spacing(1) : t.spacing(2)}`,
-    border: "none",
-    borderRadius: 9999,
-    backgroundColor: active ? t.colors.primary : "transparent",
-    color: active ? "#ffffff" : t.colors.textMuted,
-    fontSize: "0.8rem",
-    fontWeight: 600,
-    cursor: "pointer",
-    fontFamily: t.typography.fontFamily,
-    transition: "background-color 0.2s ease, color 0.2s ease",
-  });
-
-  const navStyle: React.CSSProperties = {
+  const navStyle: CSSProperties = {
     flex: 1,
     padding: compact ? t.spacing(2) : t.spacing(3),
     display: "flex",
@@ -124,7 +82,7 @@ export function NavBar({
     gap: t.spacing(1),
   };
 
-  const linkStyle = (active: boolean): React.CSSProperties => ({
+  const linkStyle = (active: boolean): CSSProperties => ({
     position: "relative",
     color: active ? t.colors.primary : t.colors.textMuted,
     textDecoration: "none",
@@ -139,17 +97,17 @@ export function NavBar({
     transition: "background-color 0.15s ease, color 0.15s ease",
   });
 
-  const linkIconStyle: React.CSSProperties = {
+  const linkIconStyle: CSSProperties = {
     fontSize: 22,
     flexShrink: 0,
   };
 
-  const footerStyle: React.CSSProperties = {
+  const footerStyle: CSSProperties = {
     padding: t.spacing(3),
     borderTop: `1px solid ${t.colors.border}`,
   };
 
-  const toggleStyle: React.CSSProperties = {
+  const toggleStyle: CSSProperties = {
     position: "relative",
     display: "inline-flex",
     alignItems: "center",
@@ -172,6 +130,11 @@ export function NavBar({
     { page: "put-optimizer", label: "Options Optimizer", icon: "tune" },
     { page: "options-pricing", label: "Options Pricing", icon: "paid" },
     { page: "options-builder", label: "Options Builder", icon: "table_chart" },
+    {
+      page: "options-opportunities",
+      label: "Options Opportunities",
+      icon: "search",
+    },
     { page: "graph-tool", label: "Graph Tool", icon: "show_chart" },
     { page: "email-crm", label: "Email CRM", icon: "contacts" },
     { page: "todos", label: "To-Dos", icon: "checklist" },
@@ -216,39 +179,8 @@ export function NavBar({
           />
         </button>
       </div>
-      <div style={pillWrapStyle}>
-        <div style={pillTrackStyle}>
-          <button
-            type="button"
-            onClick={() => setSegment("tools")}
-            style={pillOptionStyle(segment === "tools")}
-            aria-pressed={segment === "tools"}
-            aria-label="Tools"
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: 18, verticalAlign: "middle" }}>
-              construction
-            </span>
-            {!compact && " Tools"}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setSegment("clients");
-              onNavigate("clients");
-            }}
-            style={pillOptionStyle(segment === "clients")}
-            aria-pressed={segment === "clients"}
-            aria-label="Clients"
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: 18, verticalAlign: "middle" }}>
-              groups
-            </span>
-            {!compact && " Clients"}
-          </button>
-        </div>
-      </div>
       <div className="app-nav-menu" style={navStyle}>
-        {segment === "tools" && links.map(({ page: p, label, icon, externalUrl }) => (
+        {links.map(({ page: p, label, icon, externalUrl }) => (
           <a
             key={p}
             href="#"
@@ -274,34 +206,6 @@ export function NavBar({
             </span>
           </a>
         ))}
-        {segment === "clients" &&
-          CLIENT_IDS.map((n) => {
-            const label = `Client ${n}`;
-            const isActive = page === "client-detail" && selectedClient === label;
-            return (
-              <a
-                key={n}
-                href="#"
-                onClick={(e) => {
-                  e.preventDefault();
-                  onSelectClient(label);
-                  onNavigate("client-detail");
-                }}
-                style={linkStyle(isActive)}
-                title={compact ? label : undefined}
-              >
-                <span className="material-symbols-outlined" style={linkIconStyle} aria-hidden>
-                  person
-                </span>
-                <span
-                  className={`app-nav-label${compact ? " app-nav-label--compact" : ""}`}
-                  aria-hidden={compact}
-                >
-                  {label}
-                </span>
-              </a>
-            );
-          })}
       </div>
       <div className="app-nav-footer" style={footerStyle}>
         <button

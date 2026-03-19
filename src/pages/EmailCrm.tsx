@@ -150,7 +150,18 @@ export function EmailCrm({ theme: t }: EmailCrmProps) {
 
   return (
     <section className="email-crm-page" style={pageStyle}>
-      <h2 style={titleStyle}>Email CRM</h2>
+      <h2 style={titleStyle}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
+          <span
+            className="material-symbols-outlined"
+            style={{ fontSize: "1.5rem", color: t.colors.secondary, lineHeight: 1, display: "inline-flex" }}
+            aria-hidden
+          >
+            contacts
+          </span>
+          Email CRM
+        </span>
+      </h2>
       <p style={descStyle}>
         Contacts extracted from team email (names, companies, titles, phones). Data lives in
         Supabase — run the SQL in <code style={{ fontSize: "0.85em" }}>supabase/crm_contacts.sql</code>{" "}

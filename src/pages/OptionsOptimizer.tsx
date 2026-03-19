@@ -14,7 +14,15 @@ import {
 
 type OptionsOptimizerProps = { theme: Theme };
 
-type OptionSide = "PUT - SELL to OPEN" | "PUT - BUY to OPEN" | "CALL - SELL to OPEN" | "CALL - BUY to OPEN";
+type OptionSide =
+  | "PUT - SELL to OPEN"
+  | "PUT - BUY to OPEN"
+  | "PUT - SELL to CLOSE"
+  | "PUT - BUY to CLOSE"
+  | "CALL - SELL to OPEN"
+  | "CALL - BUY to OPEN"
+  | "CALL - SELL to CLOSE"
+  | "CALL - BUY to CLOSE";
 
 export type OptionsTrade = {
   id: string;
@@ -41,7 +49,7 @@ export type PortfolioRow = {
   id: string;
   ticker: string;
   putCall: "Put" | "Call";
-  action: "Sell to Open" | "Buy to Open";
+  action: "Sell to Open" | "Buy to Open" | "Sell to Close" | "Buy to Close";
   type: "Qty" | "Notional";
   value: number;
   days: number;
@@ -204,10 +212,10 @@ function OptimizerThemeSelect({
         <>
           <div
             role="presentation"
-            style={{ position: "fixed", inset: 0, zIndex: 98 }}
+            style={{ position: "fixed", inset: 0, zIndex: 3998 }}
             onClick={() => setOpenId(null)}
           />
-          <div style={{ ...getDropdownPanelStyle(t, "down"), zIndex: 101, minWidth: "100%" }}>
+          <div style={{ ...getDropdownPanelStyle(t, "down"), zIndex: 3999, minWidth: "100%" }}>
             {options.map((o) => (
               <button
                 key={o.value}
@@ -409,7 +417,18 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
   return (
     <section className="options-optimizer-page" style={pageStyle}>
       <div className="options-optimizer-header-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: PAGE_LAYOUT.titleBlockMarginTop, marginBottom: t.spacing(PAGE_LAYOUT.titleMarginBottom) }}>
-        <h2 style={{ ...titleStyle, margin: 0, lineHeight: 1.3 }}>Options Optimizer</h2>
+        <h2 style={{ ...titleStyle, margin: 0, lineHeight: 1.3 }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "1.5rem", color: t.colors.secondary, lineHeight: 1, display: "inline-flex" }}
+              aria-hidden
+            >
+              tune
+            </span>
+            Options Optimizer
+          </span>
+        </h2>
         <button
           type="button"
           onClick={() => setShowOptimizeForModal(true)}
@@ -495,7 +514,14 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
       )}
 
       {/* —— Portfolio Tickers (Define what you want) —— */}
-      <div className="options-optimizer-card" style={cardStyle}>
+      <div
+        className="options-optimizer-card"
+        style={{
+          ...cardStyle,
+          position: "relative",
+          zIndex: portfolioDropdownId ? 3000 : 2,
+        }}
+      >
         <h3 style={sectionTitleStyle}>Portfolio tickers</h3>
         <p style={{ fontSize: "0.875rem", color: t.colors.textMuted, marginBottom: t.spacing(3) }}>
           Enter ticker, type (Qty or Notional), value, target days to maturity, and OTM or ITM %. Optionally set variance to consider a strike range. Then run Optimize.
@@ -595,8 +621,16 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                   options={[
                     { value: "Sell to Open", label: "Sell to Open" },
                     { value: "Buy to Open", label: "Buy to Open" },
+                    { value: "Sell to Close", label: "Sell to Close" },
+                    { value: "Buy to Close", label: "Buy to Close" },
                   ]}
-                  onChange={(v) => updatePortfolioRow(row.id, "action", v as "Sell to Open" | "Buy to Open")}
+                  onChange={(v) =>
+                    updatePortfolioRow(
+                      row.id,
+                      "action",
+                      v as "Sell to Open" | "Buy to Open" | "Sell to Close" | "Buy to Close"
+                    )
+                  }
                   dropdownKey={`${row.id}-action`}
                   openId={portfolioDropdownId}
                   setOpenId={setPortfolioDropdownId}
@@ -806,7 +840,14 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
 
       {/* —— Ranked results —— */}
       {rankedResults && rankedResults.length > 0 && (
-        <div className="options-optimizer-card" style={cardStyle}>
+        <div
+          className="options-optimizer-card"
+          style={{
+            ...cardStyle,
+            position: "relative",
+            zIndex: 1,
+          }}
+        >
           <h3 style={sectionTitleStyle}>Ranked results (yield + upside)</h3>
           <p style={{ fontSize: "0.875rem", color: t.colors.textMuted, marginBottom: t.spacing(2) }}>
             Best options by combined yield and underlying upside. Add any row to your trade list below.
@@ -1003,7 +1044,14 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
       )}
 
       {/* —— Trade list —— */}
-      <div className="options-optimizer-card" style={cardStyle}>
+      <div
+        className="options-optimizer-card"
+        style={{
+          ...cardStyle,
+          position: "relative",
+          zIndex: 1,
+        }}
+      >
         <h3 style={sectionTitleStyle}>Trade list</h3>
         <div style={{ display: "flex", alignItems: "center", gap: t.spacing(3), marginBottom: t.spacing(4), flexWrap: "wrap" }}>
           {trades.length > 0 && (

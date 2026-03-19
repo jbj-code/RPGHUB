@@ -8,10 +8,9 @@ import {
   StockComparison,
   OptionsBuilder,
   Todos,
-  Clients,
+  OptionsOpportunities,
   Rankinator,
   RaiseAi,
-  ClientDetail,
   GraphTool,
 } from "./pages";
 import { OptionsPricing } from "./pages/OptionsPricing";
@@ -27,8 +26,7 @@ export type Page =
   | "options-pricing"
   | "options-builder"
   | "todos"
-  | "clients"
-  | "client-detail"
+  | "options-opportunities"
   | "graph-tool"
   | "rankinator"
   | "raise-ai"
@@ -41,7 +39,6 @@ function App() {
   const [page, setPage] = useState<Page>("home");
   const [mode, setMode] = useState<ThemeMode>("light");
   const [sidebarCompact, setSidebarCompact] = useState(false);
-  const [selectedClient, setSelectedClient] = useState<string | null>(null);
   const sidebarWidth = sidebarCompact ? SIDEBAR_WIDTH_COMPACT : SIDEBAR_WIDTH;
 
   useEffect(() => {
@@ -81,8 +78,6 @@ function App() {
       <NavBar
         page={page}
         onNavigate={setPage}
-        onSelectClient={setSelectedClient}
-        selectedClient={selectedClient}
         mode={mode}
         onToggleMode={() => setMode(mode === "light" ? "dark" : "light")}
         theme={t}
@@ -99,11 +94,8 @@ function App() {
             {page === "stock-comparison" && <StockComparison theme={t} />}
             {page === "options-pricing" && <OptionsPricing theme={t} />}
             {page === "options-builder" && <OptionsBuilder theme={t} />}
-            {page === "clients" && <Clients theme={t} />}
-            {page === "client-detail" && (
-              <ClientDetail theme={t} clientName={selectedClient ?? "Client"} />
-            )}
             {page === "graph-tool" && <GraphTool theme={t} />}
+            {page === "options-opportunities" && <OptionsOpportunities theme={t} />}
             {page === "rankinator" && <Rankinator theme={t} />}
             {page === "raise-ai" && <RaiseAi theme={t} />}
             {page === "email-crm" && (
