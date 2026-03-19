@@ -309,7 +309,8 @@ export default async function handler(req: any, res: any) {
         strategy: "SINGLE",
         fromDate: fromStr,
         toDate: toStr,
-        strikeCount: "20",
+        // Slightly wider strike coverage improves match rates for ETFs/smaller names.
+        strikeCount: "40",
       });
       const chainResp = await fetch(
         `https://api.schwabapi.com/marketdata/v1/chains?${params}`,
@@ -322,7 +323,8 @@ export default async function handler(req: any, res: any) {
       if (!expMap || typeof expMap !== "object") continue;
 
       const collected: OptSpec[] = [];
-      const pctMin = row.otmPct / 100;
+      // Variance is symmetric around the target (UI copy: 10% with 5% variance = 5% to 15%).
+      const pctMin = Math.max(0, (row.otmPct - otmVariancePct) / 100);
       const pctMax = (row.otmPct + otmVariancePct) / 100;
       const isOTM = (row.moneyness ?? "OTM") === "OTM";
 
