@@ -14,6 +14,9 @@ type PortfolioRow = {
   moneyness?: "OTM" | "ITM";
   otmPct: number;
   monthly: boolean;
+  currentExpiry?: string;
+  currentStrike?: number;
+  currentContracts?: number;
 };
 
 type OptionSide =
@@ -52,9 +55,14 @@ export type RankedResult = {
   company: string;
   upsidePct: number;
   strike: number;
-  bid: number;
+  limitPrice: number;
   annYield: number;
   premiumPerContract: number;
+  btcAsk?: number | null;
+  netRollPerContract?: number | null;
+  netRollAnnualizedPct?: number | null;
+  netRollTotal?: number | null;
+  rollContractsUsed?: number | null;
   trade: OptionsTrade;
 };
 
@@ -167,6 +175,8 @@ export default async function handler(req: any, res: any) {
     ? body.portfolioRows
     : [];
   const otmVariancePct = Number(body.otmVariancePct) || 0;
+  const rollMode = Boolean(body.rollMode);
+  const rollCreditOnly = Boolean(body.rollCreditOnly);
 
   const tickers = [
     ...new Set(
@@ -422,6 +432,59 @@ export default async function handler(req: any, res: any) {
       }
     }
 
+    // 4b) Optional roll-mode BTC quote lookup for each row's current short leg.
+    const closeAskByRowId: Record<string, number> = {};
+    if (rollMode) {
+      const btcRows = portfolioRows
+        .map((row) => ({
+          rowId: row.id,
+          ticker: row.ticker.trim().toUpperCase(),
+          type: row.putCall === "Call" ? "C" : ("P" as "C" | "P"),
+          expiry: (row.currentExpiry ?? "").trim(),
+          strike: Number(row.currentStrike),
+        }))
+        .filter(
+          (r) =>
+            Boolean(r.rowId) &&
+            Boolean(r.ticker) &&
+            /^\d{4}-\d{2}-\d{2}$/.test(r.expiry) &&
+            Number.isFinite(r.strike) &&
+            r.strike > 0
+        );
+
+      const occByRowId: { rowId: string; occ: string }[] = btcRows.map((r) => ({
+        rowId: r.rowId,
+        occ: toOCCSymbol(r.ticker, r.expiry, r.type, r.strike),
+      }));
+
+      for (let i = 0; i < occByRowId.length; i += BATCH) {
+        const batch = occByRowId.slice(i, i + BATCH);
+        const occSymbols = batch.map((b) => b.occ);
+        const qUrl =
+          "https://api.schwabapi.com/marketdata/v1/quotes?" +
+          new URLSearchParams({ symbols: occSymbols.join(",") }).toString();
+        const qResp = await fetch(qUrl, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!qResp.ok) continue;
+        const qBody: any = await qResp.json();
+        for (const item of batch) {
+          const q = qBody[item.occ] ?? qBody[item.occ.replace(/\s+/g, "")];
+          const src = q?.quote ?? q?.optionContract ?? q;
+          if (!src || typeof src !== "object") continue;
+          const ask =
+            typeof src.askPrice === "number"
+              ? src.askPrice
+              : typeof src.ask === "number"
+                ? src.ask
+                : undefined;
+          if (typeof ask === "number" && Number.isFinite(ask) && ask > 0) {
+            closeAskByRowId[item.rowId] = ask;
+          }
+        }
+      }
+    }
+
     // 5) Build RankedResult + OptionsTrade for each spec that has a quote
     const optionSideFromRow = (r: PortfolioRow): OptionSide => {
       if (r.putCall === "Put" && r.action === "Sell to Open") return "PUT - SELL to OPEN";
@@ -480,27 +543,67 @@ export default async function handler(req: any, res: any) {
       };
 
       const upsidePct = upsideByTicker[spec.underlying] ?? 0;
+      const rollContractsUsed = Math.max(
+        1,
+        Math.round(Number(row.currentContracts) > 0 ? Number(row.currentContracts) : contracts)
+      );
+      const netRollPerContract =
+        rollMode && closeAskByRowId[row.id] != null
+          ? Math.round(
+              ((isSell ? 1 : -1) * optionLimitPrice * 100 - closeAskByRowId[row.id] * 100) *
+                100
+            ) / 100
+          : null;
       raw.push({
         rank: 0,
         ticker: spec.underlying,
         company: spec.underlying,
         upsidePct: Math.round(upsidePct * 10) / 10,
         strike: spec.strike,
-        bid,
+        limitPrice: optionLimitPrice,
         annYield: trade.annualizedYieldPct,
-        premiumPerContract: Math.round(optionLimitPrice * 100),
+        // Signed per-contract premium/cost so buy actions display as negative cash flow.
+        premiumPerContract: Math.round((isSell ? 1 : -1) * optionLimitPrice * 100),
+        btcAsk: rollMode ? closeAskByRowId[row.id] ?? null : null,
+        netRollPerContract,
+        netRollAnnualizedPct: rollMode
+          ? closeAskByRowId[row.id] != null && spec.daysToMaturity > 0
+            ? Math.round(
+                ((((isSell ? 1 : -1) * optionLimitPrice * 100 - closeAskByRowId[row.id] * 100) / (spec.strike * 100)) *
+                  100 *
+                  (365 / spec.daysToMaturity)) *
+                  100
+              ) / 100
+            : null
+          : null,
+        netRollTotal:
+          rollMode && netRollPerContract != null
+            ? Math.round(netRollPerContract * rollContractsUsed * 100) / 100
+            : null,
+        rollContractsUsed: rollMode ? rollContractsUsed : null,
         trade,
       });
     }
 
-    const score = (r: RankedResult) =>
-      r.annYield * 0.5 + (r.upsidePct + 50) * 0.5;
-    raw.sort((a, b) => score(b) - score(a));
-    raw.forEach((r, i) => {
+    let ranked = raw;
+    if (rollMode && rollCreditOnly) {
+      ranked = ranked.filter((r) => (r.netRollPerContract ?? -Infinity) > 0);
+    }
+
+    const score = (r: RankedResult) => {
+      if (rollMode) {
+        const netAnn = r.netRollAnnualizedPct ?? -9999;
+        const netPerC = r.netRollPerContract ?? -9999;
+        return netAnn * 0.8 + netPerC * 0.2;
+      }
+      return r.annYield * 0.5 + (r.upsidePct + 50) * 0.5;
+    };
+    ranked.sort((a, b) => score(b) - score(a));
+    ranked.forEach((r, i) => {
       r.rank = i + 1;
     });
 
-    res.status(200).json({ results: raw, message: null });
+    res.status(200).json({ results: ranked, message: null });
   } catch (err) {
     console.error("schwab-option-optimizer error", err);
     res.status(500).json({
