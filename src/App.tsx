@@ -13,6 +13,7 @@ import {
   Rankinator,
   RaiseAi,
   GraphTool,
+  AssignmentCheck,
 } from "./pages";
 import { OptionsPricing } from "./pages/OptionsPricing";
 
@@ -32,7 +33,8 @@ export type Page =
   | "graph-tool"
   | "rankinator"
   | "raise-ai"
-  | "email-crm";
+  | "email-crm"
+  | "assignment-check";
 
 const PAGE_PADDING_H = 6;
 
@@ -101,6 +103,7 @@ function App() {
             {page === "options-roll" && <OptionsRoll theme={t} />}
             {page === "rankinator" && <Rankinator theme={t} />}
             {page === "raise-ai" && <RaiseAi theme={t} />}
+            {page === "assignment-check" && <AssignmentCheck theme={t} />}
             {page === "email-crm" && (
               <Suspense
                 fallback={

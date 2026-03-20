@@ -10,6 +10,7 @@ type OptionInput = {
 type OptionPrice = {
   symbol: string;
   description?: string;
+  underlyingPrice?: number;
   bid?: number;
   ask?: number;
   last?: number;
@@ -166,6 +167,46 @@ export default async function handler(req: any, res: any) {
     }
 
     const allOCC = [...occToOpt.keys()];
+    const underlyingSymbols = [
+      ...new Set(
+        inputs
+          .map((o) => o.underlying?.trim().toUpperCase())
+          .filter((s): s is string => Boolean(s))
+      ),
+    ];
+    const underlyingPriceBySymbol: Record<string, number> = {};
+    const UNDERLYING_BATCH = 45;
+    for (let i = 0; i < underlyingSymbols.length; i += UNDERLYING_BATCH) {
+      const batch = underlyingSymbols.slice(i, i + UNDERLYING_BATCH);
+      const uResp = await fetch(
+        "https://api.schwabapi.com/marketdata/v1/quotes?" +
+          new URLSearchParams({ symbols: batch.join(",") }).toString(),
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }
+      );
+      if (!uResp.ok) continue;
+      const uBody: any = await uResp.json();
+      for (const sym of batch) {
+        const q = uBody[sym] ?? uBody[sym.replace(/\s+/g, "")];
+        const src = q?.quote ?? q;
+        const px =
+          typeof src?.regularMarketLast === "number"
+            ? src.regularMarketLast
+            : typeof src?.lastPrice === "number"
+            ? src.lastPrice
+            : typeof src?.last === "number"
+            ? src.last
+            : typeof src?.close === "number"
+            ? src.close
+            : typeof src?.regularMarketPrice === "number"
+            ? src.regularMarketPrice
+            : undefined;
+        if (typeof px === "number" && Number.isFinite(px) && px > 0) {
+          underlyingPriceBySymbol[sym] = px;
+        }
+      }
+    }
     const BATCH = 30;
     let firstResponseBody: any = null;
     for (let i = 0; i < allOCC.length; i += BATCH) {
@@ -232,6 +273,7 @@ export default async function handler(req: any, res: any) {
         results[id] = {
           symbol: (q.symbol as string) ?? occ,
           description: q.description,
+          underlyingPrice: underlyingPriceBySymbol[opt.underlying.toUpperCase()],
           bid,
           ask,
           last,

@@ -16,6 +16,7 @@ type ParsedOption = {
 type OptionPrice = {
   symbol: string;
   description?: string;
+  underlyingPrice?: number;
   bid?: number;
   ask?: number;
   last?: number;
@@ -31,32 +32,88 @@ function parseLine(line: string): ParsedOption | null {
   if (!trimmed) return null;
   if (trimmed.startsWith("#")) return null;
   const parts = trimmed.split(/\s+/);
-  // Expect at least: TICKER DATE STRIKE TYPE
-  if (parts.length < 4) return null;
-  const underlying = parts[0].toUpperCase();
-  const datePart = parts[1];
-  const strikePart = parts[2];
-  const typePart = parts[3].toUpperCase();
-  const type: "C" | "P" = typePart.startsWith("C") ? "C" : "P";
 
-  // Accept MM/DD/YYYY or YYYY-MM-DD
-  let expiry: string;
-  if (datePart.includes("/")) {
-    const [mm, dd, yyyy] = datePart.split("/");
-    if (!yyyy || !mm || !dd) return null;
-    expiry = `${yyyy.padStart(4, "0")}-${mm.padStart(2, "0")}-${dd.padStart(
-      2,
-      "0"
-    )}`;
-  } else {
-    expiry = datePart;
+  // Format A: TICKER MM/DD/YYYY STRIKE C|P (existing behavior)
+  if (parts.length >= 4) {
+    const underlying = parts[0].toUpperCase();
+    const datePart = parts[1];
+    const strikePart = parts[2];
+    const typePart = parts[3].toUpperCase();
+    const maybeType: "C" | "P" | null = typePart.startsWith("C")
+      ? "C"
+      : typePart.startsWith("P")
+      ? "P"
+      : null;
+    if (maybeType) {
+      // Accept MM/DD/YYYY or YYYY-MM-DD
+      let expiry: string;
+      if (datePart.includes("/")) {
+        const [mm, dd, yyyy] = datePart.split("/");
+        if (!yyyy || !mm || !dd) return null;
+        expiry = `${yyyy.padStart(4, "0")}-${mm.padStart(2, "0")}-${dd.padStart(
+          2,
+          "0"
+        )}`;
+      } else {
+        expiry = datePart;
+      }
+
+      const strike = Number(strikePart);
+      if (!strike || !isFinite(strike)) return null;
+      const key = `${underlying} ${expiry} ${strike} ${maybeType}`;
+      return { key, underlying, expiry, strike, type: maybeType, raw: line };
+    }
   }
 
-  const strike = Number(strikePart);
-  if (!strike || !isFinite(strike)) return null;
+  // Format B: "Call DDOG @ $155.0 Exp Mar 20, 2026" (plus small variations)
+  const natural = trimmed.match(
+    /^(call|put)\s+([A-Za-z.\-]+)\s*@?\s*\$?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:exp|expiry|expiration)\s+([A-Za-z]{3,9})\s+([0-9]{1,2}),?\s+([0-9]{4})$/i
+  );
+  if (natural) {
+    const side = natural[1].toUpperCase();
+    const underlying = natural[2].toUpperCase();
+    const strike = Number(natural[3]);
+    const monthRaw = natural[4].toLowerCase();
+    const day = Number(natural[5]);
+    const year = Number(natural[6]);
+    if (!underlying || !Number.isFinite(strike) || strike <= 0) return null;
+    const monthMap: Record<string, number> = {
+      jan: 1,
+      january: 1,
+      feb: 2,
+      february: 2,
+      mar: 3,
+      march: 3,
+      apr: 4,
+      april: 4,
+      may: 5,
+      jun: 6,
+      june: 6,
+      jul: 7,
+      july: 7,
+      aug: 8,
+      august: 8,
+      sep: 9,
+      sept: 9,
+      september: 9,
+      oct: 10,
+      october: 10,
+      nov: 11,
+      november: 11,
+      dec: 12,
+      december: 12,
+    };
+    const month = monthMap[monthRaw];
+    if (!month || !Number.isFinite(day) || day < 1 || day > 31 || year < 1900) return null;
+    const expiry = `${year.toString().padStart(4, "0")}-${month
+      .toString()
+      .padStart(2, "0")}-${day.toString().padStart(2, "0")}`;
+    const type: "C" | "P" = side.startsWith("C") ? "C" : "P";
+    const key = `${underlying} ${expiry} ${strike} ${type}`;
+    return { key, underlying, expiry, strike, type, raw: line };
+  }
 
-  const key = `${underlying} ${expiry} ${strike} ${type}`;
-  return { key, underlying, expiry, strike, type, raw: line };
+  return null;
 }
 
 export function OptionsPricing({ theme: t }: OptionsPricingProps) {
@@ -199,7 +256,7 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
 
   function copyTableToClipboard() {
     if (!canCopyTable()) return;
-    const header = ["Input", "Schwab symbol", "Bid", "Ask", "Last", "Mark"].join("\t");
+    const header = ["Input", "Schwab symbol", "Underlying", "Bid", "Ask", "Last", "Mark"].join("\t");
     const rows = resultOrder.map((key) => {
       const p = parsed.find((x) => x.key === key);
       if (!p) return "";
@@ -208,6 +265,7 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
       const cells = [
         p.raw.trim(),
         q?.symbol ?? "",
+        q?.underlyingPrice != null ? q.underlyingPrice.toFixed(2) : "",
         q?.bid != null ? q.bid.toFixed(2) : "",
         q?.ask != null ? q.ask.toFixed(2) : "",
         q?.last != null ? q.last.toFixed(2) : "",
@@ -429,6 +487,7 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
                 <tr>
                   <th style={thStyle}>Input</th>
                   <th style={thStyle}>Schwab symbol</th>
+                  <th style={thNumStyle}>Underlying</th>
                   <th
                     style={{
                       ...thNumStyle,
@@ -504,6 +563,7 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
                     >
                       <td style={{ ...tdStyle, fontFamily: "monospace" }}>{p.raw}</td>
                       <td style={{ ...tdStyle, fontFamily: "monospace" }}>{q?.symbol ?? "—"}</td>
+                      <td style={tdNumStyle}>{q?.underlyingPrice != null ? q.underlyingPrice.toFixed(2) : "—"}</td>
                       <td style={tdNumStyle}>{q?.bid != null ? q.bid.toFixed(2) : "—"}</td>
                       <td style={tdNumStyle}>{q?.ask != null ? q.ask.toFixed(2) : "—"}</td>
                       <td style={tdNumStyle}>{q?.last != null ? q.last.toFixed(2) : "—"}</td>

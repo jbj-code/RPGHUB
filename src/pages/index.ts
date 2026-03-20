@@ -9,3 +9,4 @@ export { Rankinator } from "./Rankinator";
 export { RaiseAi } from "./RaiseAi";
 export { GraphTool } from "./GraphTool";
 export { EmailCrm } from "./EmailCrm";
+export { AssignmentCheck } from "./AssignmentCheck";
