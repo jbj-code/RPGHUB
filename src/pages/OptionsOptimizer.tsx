@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import type { Theme } from "../theme";
 import {
   getPrimaryActionButtonStyle,
@@ -158,6 +158,37 @@ export function formatOptionKey(tr: OptionsTrade): string {
   return `${tr.ticker} US ${mm}/${dd}/${yy} ${type}${strike} Equity`;
 }
 
+/** Sortable numeric columns in the ranked-results table (three-state: default → asc → desc). */
+type OptimizerTableSortKey =
+  | "maturity"
+  | "strike"
+  | "otmDistance"
+  | "limitPx"
+  | "annYield"
+  | "premiumPerContract";
+
+type OptimizerTableSortState =
+  | { phase: "none" }
+  | { phase: "asc" | "desc"; key: OptimizerTableSortKey };
+
+function getOtmDistancePctForSort(r: RankedResult): number | null {
+  const spot = r.trade.currentPrice;
+  if (!Number.isFinite(spot) || spot <= 0) return null;
+  const isPut = r.trade.optionSide.startsWith("PUT");
+  return isPut
+    ? ((spot - r.strike) / spot) * 100
+    : ((r.strike - spot) / spot) * 100;
+}
+
+function getMaturitySortValue(r: RankedResult): number {
+  const dte = r.trade.daysToMaturity;
+  if (Number.isFinite(dte) && dte >= 0) return dte;
+  const raw = r.trade.maturity;
+  const d = new Date(raw.endsWith("Z") ? raw : `${raw}Z`);
+  const t = d.getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
 export function formatRankedRowForCopy(r: RankedResult, rollMode: boolean): string {
   const values: string[] = [
     String(r.rank),
@@ -235,6 +266,108 @@ function HelpTooltip({ theme: t, text, children }: HelpTooltipProps) {
         </div>
       )}
     </span>
+  );
+}
+
+type SortableOptimizerThProps = {
+  theme: Theme;
+  sortKey: OptimizerTableSortKey;
+  tableSort: OptimizerTableSortState;
+  onCycle: (key: OptimizerTableSortKey) => void;
+  label: string;
+  textAlign: "left" | "right" | "center";
+  helpText?: string;
+};
+
+function SortableOptimizerTh({
+  theme: t,
+  sortKey,
+  tableSort,
+  onCycle,
+  label,
+  textAlign,
+  helpText,
+}: SortableOptimizerThProps) {
+  const active = tableSort.phase !== "none" && tableSort.key === sortKey;
+  const ariaSort =
+    !active ? "none" : tableSort.phase === "asc" ? "ascending" : "descending";
+
+  const justify =
+    textAlign === "right" ? "flex-end" : textAlign === "center" ? "center" : "flex-start";
+
+  const btn = (
+    <button
+      type="button"
+      className="options-optimizer-sort-th-btn"
+      onClick={() => onCycle(sortKey)}
+      title="Sort: default order → ascending → descending"
+      style={{
+        background: "none",
+        border: "none",
+        color: "#FFFFFF",
+        fontWeight: 600,
+        cursor: "pointer",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        padding: 0,
+        font: "inherit",
+        textAlign,
+        maxWidth: "100%",
+        borderRadius: 4,
+      }}
+    >
+      <span>{label}</span>
+      {active && (
+        <span
+          className="material-symbols-outlined"
+          style={{ fontSize: 18, lineHeight: 1, opacity: 0.95 }}
+          aria-hidden
+        >
+          {tableSort.phase === "asc" ? "arrow_upward" : "arrow_downward"}
+        </span>
+      )}
+    </button>
+  );
+
+  return (
+    <th
+      aria-sort={ariaSort}
+      style={{
+        textAlign,
+        padding: t.spacing(2),
+        color: "#FFFFFF",
+        fontWeight: 600,
+        verticalAlign: "middle",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: justify,
+          gap: 6,
+          flexWrap: "wrap",
+        }}
+      >
+        {btn}
+        {helpText ? (
+          <HelpTooltip theme={t} text={helpText}>
+            <span
+              style={{ ...getTooltipIconStyle(t), cursor: "help", flexShrink: 0 }}
+              className="material-symbols-outlined"
+              tabIndex={0}
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") e.stopPropagation();
+              }}
+            >
+              info
+            </span>
+          </HelpTooltip>
+        ) : null}
+      </div>
+    </th>
   );
 }
 
@@ -322,6 +455,9 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
   const [assignmentAwareRanking, setAssignmentAwareRanking] = useState(false);
   const [otmVariancePct, setOtmVariancePct] = useState(5);
   const [rankedResults, setRankedResults] = useState<RankedResult[] | null>(null);
+  const [optimizerTableSort, setOptimizerTableSort] = useState<OptimizerTableSortState>({
+    phase: "none",
+  });
   const [optimizeMessage, setOptimizeMessage] = useState<string | null>(null);
   const [optimizeLoading, setOptimizeLoading] = useState(false);
   const [trades, setTrades] = useState<OptionsTrade[]>([]);
@@ -346,6 +482,65 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
   const removePortfolioRow = useCallback((id: string) => {
     setPortfolioRows((prev) => (prev.length > 1 ? prev.filter((r) => r.id !== id) : prev));
   }, []);
+
+  const cycleOptimizerTableSort = useCallback((key: OptimizerTableSortKey) => {
+    setOptimizerTableSort((prev) => {
+      if (prev.phase === "none" || prev.key !== key) return { phase: "asc", key };
+      if (prev.phase === "asc") return { phase: "desc", key };
+      return { phase: "none" };
+    });
+  }, []);
+
+  const displayedRankedResults = useMemo(() => {
+    if (!rankedResults || rankedResults.length === 0) return rankedResults ?? [];
+    if (optimizerTableSort.phase === "none") return rankedResults;
+
+    const arr = [...rankedResults];
+    const sign = optimizerTableSort.phase === "asc" ? 1 : -1;
+    const key = optimizerTableSort.key;
+
+    arr.sort((a, b) => {
+      let cmp = 0;
+      switch (key) {
+        case "maturity": {
+          const va = getMaturitySortValue(a);
+          const vb = getMaturitySortValue(b);
+          cmp = va === vb ? 0 : va < vb ? -1 : 1;
+          break;
+        }
+        case "strike":
+          cmp = a.strike === b.strike ? 0 : a.strike < b.strike ? -1 : 1;
+          break;
+        case "otmDistance": {
+          const oa = getOtmDistancePctForSort(a);
+          const ob = getOtmDistancePctForSort(b);
+          if (oa == null && ob == null) cmp = 0;
+          else if (oa == null) cmp = 1;
+          else if (ob == null) cmp = -1;
+          else cmp = oa === ob ? 0 : oa < ob ? -1 : 1;
+          break;
+        }
+        case "limitPx":
+          cmp = a.limitPrice === b.limitPrice ? 0 : a.limitPrice < b.limitPrice ? -1 : 1;
+          break;
+        case "annYield":
+          cmp = a.annYield === b.annYield ? 0 : a.annYield < b.annYield ? -1 : 1;
+          break;
+        case "premiumPerContract":
+          cmp =
+            a.premiumPerContract === b.premiumPerContract
+              ? 0
+              : a.premiumPerContract < b.premiumPerContract
+                ? -1
+                : 1;
+          break;
+        default:
+          cmp = 0;
+      }
+      return cmp * sign;
+    });
+    return arr;
+  }, [rankedResults, optimizerTableSort]);
 
   const updatePortfolioRow = useCallback(
     (id: string, field: keyof PortfolioRow, value: string | number | boolean) => {
@@ -384,6 +579,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
       const results: RankedResult[] = Array.isArray(data.results) ? data.results : [];
       const message: string | null = data.message ?? null;
       setRankedResults(results);
+      setOptimizerTableSort({ phase: "none" });
       setOptimizeMessage(message);
       if (results.length > 0) {
         setLastUpdated(new Date());
@@ -1017,7 +1213,10 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
         >
           <h3 style={sectionTitleStyle}>Ranked results (yield + upside)</h3>
           <p style={{ fontSize: "0.875rem", color: t.colors.textMuted, marginBottom: t.spacing(2) }}>
-            Best options by combined yield and underlying upside. Add any row to your trade list below.
+            Best options by combined yield and underlying upside. Add any row to your trade list below.{" "}
+            <strong>Tip:</strong> click <strong>Maturity</strong>, <strong>Strike</strong>, <strong>OTM Distance %</strong>,{" "}
+            <strong>Limit Px</strong>, <strong>Ann. Yield</strong>, or <strong>Premium / contract</strong> to cycle sort: default
+            order → ascending → descending.
           </p>
           {rankedResults.length > 0 && (
             <p style={{ fontSize: "0.85rem", color: t.colors.text, marginBottom: t.spacing(3) }}>
@@ -1046,7 +1245,14 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                 <tr style={{ borderBottom: `2px solid ${t.colors.border}`, backgroundColor: t.colors.secondary }}>
                   <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600, borderTopLeftRadius: t.radius.md }}>Rank</th>
                   <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Ticker</th>
-                  <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Maturity</th>
+                  <SortableOptimizerTh
+                    theme={t}
+                    sortKey="maturity"
+                    tableSort={optimizerTableSort}
+                    onCycle={cycleOptimizerTableSort}
+                    label="Maturity"
+                    textAlign="left"
+                  />
                   <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Type</th>
                   <th style={{ textAlign: "center", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
                     <HelpTooltip
@@ -1056,37 +1262,54 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                       <span style={{ cursor: "help" }}>1M Upside %</span>
                     </HelpTooltip>
                   </th>
-                  <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Strike</th>
-                  <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
-                    <HelpTooltip
-                      theme={t}
-                      text="OTM Distance % measures how far strike is from spot in the favorable direction. Positive = OTM, negative = ITM."
-                    >
-                      <span style={{ cursor: "help" }}>OTM Distance %</span>
-                    </HelpTooltip>
-                  </th>
-                  <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
-                    <HelpTooltip
-                      theme={t}
-                      text="Limit Px uses the desk model: midpoint × 92%, where midpoint = (bid + ask) / 2. This modeled execution price drives premium and yield calculations."
-                    >
-                      <span style={{ cursor: "help" }}>Limit Px</span>
-                    </HelpTooltip>
-                  </th>
-                  <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
-                    <HelpTooltip
-                      theme={t}
-                      text="Ann. Yield is annualized from yield at current underlying price (not strike): (modeled premium / current underlying value) × (365 / days to maturity)."
-                    >
-                      <span style={{ cursor: "help" }}>Ann. Yield</span>
-                    </HelpTooltip>
-                  </th>
-                  <th style={{ textAlign: "center", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Premium / contract</th>
+                  <SortableOptimizerTh
+                    theme={t}
+                    sortKey="strike"
+                    tableSort={optimizerTableSort}
+                    onCycle={cycleOptimizerTableSort}
+                    label="Strike"
+                    textAlign="right"
+                  />
+                  <SortableOptimizerTh
+                    theme={t}
+                    sortKey="otmDistance"
+                    tableSort={optimizerTableSort}
+                    onCycle={cycleOptimizerTableSort}
+                    label="OTM Distance %"
+                    textAlign="right"
+                    helpText="OTM Distance % measures how far strike is from spot in the favorable direction. Positive = OTM, negative = ITM."
+                  />
+                  <SortableOptimizerTh
+                    theme={t}
+                    sortKey="limitPx"
+                    tableSort={optimizerTableSort}
+                    onCycle={cycleOptimizerTableSort}
+                    label="Limit Px"
+                    textAlign="right"
+                    helpText="Limit Px uses the desk model: midpoint × 92%, where midpoint = (bid + ask) / 2. This modeled execution price drives premium and yield calculations."
+                  />
+                  <SortableOptimizerTh
+                    theme={t}
+                    sortKey="annYield"
+                    tableSort={optimizerTableSort}
+                    onCycle={cycleOptimizerTableSort}
+                    label="Ann. Yield"
+                    textAlign="right"
+                    helpText="Ann. Yield is annualized from yield at current underlying price (not strike): (modeled premium / current underlying value) × (365 / days to maturity)."
+                  />
+                  <SortableOptimizerTh
+                    theme={t}
+                    sortKey="premiumPerContract"
+                    tableSort={optimizerTableSort}
+                    onCycle={cycleOptimizerTableSort}
+                    label="Premium / contract"
+                    textAlign="center"
+                  />
                   <th style={{ textAlign: "center", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600, borderTopRightRadius: t.radius.md }}>Action</th>
                 </tr>
               </thead>
               <tbody>
-                {rankedResults.map((r) => (
+                {displayedRankedResults.map((r) => (
                   <tr
                     key={r.trade.id}
                     style={{ borderBottom: `1px solid ${t.colors.border}` }}
