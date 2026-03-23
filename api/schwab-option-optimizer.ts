@@ -10,7 +10,9 @@ type PortfolioRow = {
   action: "Sell to Open" | "Buy to Open" | "Sell to Close" | "Buy to Close";
   type: "Qty" | "Notional";
   value: number;
+  targetMode?: "days" | "expiry";
   days: number;
+  targetExpiry?: string;
   moneyness?: "OTM" | "ITM";
   otmPct: number;
   monthly: boolean;
@@ -251,6 +253,7 @@ export default async function handler(req: any, res: any) {
   const otmVariancePct = Number(body.otmVariancePct) || 0;
   const rollMode = Boolean(body.rollMode);
   const rollCreditOnly = Boolean(body.rollCreditOnly);
+  const assignmentAwareRanking = Boolean(body.assignmentAwareRanking);
   const rollObjective =
     body.rollObjective === "cashflow" || body.rollObjective === "yield" || body.rollObjective === "balanced"
       ? body.rollObjective
@@ -385,8 +388,16 @@ export default async function handler(req: any, res: any) {
       if (!currentPrice || currentPrice <= 0) continue;
 
       const type: "C" | "P" = row.putCall === "Call" ? "C" : "P";
-      const fromDate = addDays(today, Math.max(1, row.days - 14));
-      const toDate = addDays(today, row.days + 35);
+      const usingExactExpiry =
+        row.targetMode === "expiry" &&
+        typeof row.targetExpiry === "string" &&
+        /^\d{4}-\d{2}-\d{2}$/.test(row.targetExpiry);
+      const fromDate = usingExactExpiry
+        ? new Date(`${row.targetExpiry}T00:00:00.000Z`)
+        : addDays(today, Math.max(1, row.days - 14));
+      const toDate = usingExactExpiry
+        ? new Date(`${row.targetExpiry}T00:00:00.000Z`)
+        : addDays(today, row.days + 35);
       const fromStr = fromDate.toISOString().slice(0, 10);
       const toStr = toDate.toISOString().slice(0, 10);
 
@@ -419,9 +430,10 @@ export default async function handler(req: any, res: any) {
       for (const [expKey, strikesObj] of Object.entries<any>(expMap)) {
         const expiry = toExpiryYYYYMMDD(expKey);
         if (row.monthly && !isThirdFridayMonthlyExpiry(expiry)) continue;
+        if (usingExactExpiry && expiry !== row.targetExpiry) continue;
         const expDate = new Date(expiry + "Z");
         const dte = daysBetween(today, expDate);
-        if (dte < Math.max(1, row.days - 14) || dte > row.days + 35) continue;
+        if (!usingExactExpiry && (dte < Math.max(1, row.days - 14) || dte > row.days + 35)) continue;
 
         const strikeEntries = Object.entries(strikesObj ?? {});
         for (const [strikeStr, contracts] of strikeEntries) {
@@ -706,7 +718,20 @@ export default async function handler(req: any, res: any) {
         if (rollObjective === "yield") return netAnn;
         return netAnn * 0.8 + netPerC * 0.2;
       }
-      return r.annYield * 0.5 + (r.upsidePct + 50) * 0.5;
+      const base = r.annYield * 0.5 + (r.upsidePct + 50) * 0.5;
+      if (!assignmentAwareRanking) return base;
+
+      // Put-selling assignment-risk penalty (no delta dependency): higher penalty as strike
+      // gets closer to / above spot. This nudges rankings toward safer OTM puts while still
+      // considering yield and upside.
+      if (r.trade.optionSide === "PUT - SELL to OPEN" && r.trade.currentPrice > 0) {
+        const otmPct = ((r.trade.currentPrice - r.strike) / r.trade.currentPrice) * 100;
+        if (otmPct < 0) return base - (40 + Math.abs(otmPct) * 4); // ITM puts heavily penalized
+        if (otmPct < 2) return base - (22 - otmPct * 4);
+        if (otmPct < 5) return base - (14 - (otmPct - 2) * 2);
+        if (otmPct < 8) return base - (8 - (otmPct - 5));
+      }
+      return base;
     };
     ranked.sort((a, b) => score(b) - score(a));
     ranked.forEach((r, i) => {

@@ -52,7 +52,9 @@ export type PortfolioRow = {
   action: "Sell to Open" | "Buy to Open" | "Sell to Close" | "Buy to Close";
   type: "Qty" | "Notional";
   value: number;
+  targetMode?: "days" | "expiry";
   days: number;
+  targetExpiry?: string; // YYYY-MM-DD
   moneyness: "OTM" | "ITM";
   otmPct: number;
   monthly: boolean;
@@ -106,6 +108,17 @@ function formatMoney(n: number): string {
   if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(1)}M`;
   if (abs >= 1_000) return `${sign}$${(abs / 1_000).toFixed(1)}K`;
   return `${sign}$${abs.toFixed(2)}`;
+}
+
+/** Full currency formatting (no K/M compaction) for per-contract premium readability. */
+function formatMoneyFull(n: number): string {
+  const abs = Math.abs(n);
+  const sign = n < 0 ? "−" : "";
+  const isWhole = Math.abs(abs - Math.round(abs)) < 1e-9;
+  return `${sign}$${abs.toLocaleString("en-US", {
+    minimumFractionDigits: isWhole ? 0 : 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
 /** Schwab-style symbol: TICKER MM/DD/YYYY Strike C|P */
@@ -169,7 +182,9 @@ const defaultPortfolioRow = (): PortfolioRow => ({
   action: "Sell to Open",
   type: "Qty",
   value: 0,
+  targetMode: "days",
   days: 30,
+  targetExpiry: "",
   moneyness: "OTM",
   otmPct: 10,
   monthly: false,
@@ -289,8 +304,7 @@ function OptimizerThemeSelect({
 export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
   const [portfolioRows, setPortfolioRows] = useState<PortfolioRow[]>([defaultPortfolioRow()]);
   const [portfolioDropdownId, setPortfolioDropdownId] = useState<string | null>(null);
-  const [rollMode, setRollMode] = useState(false);
-  const [rollCreditOnly, setRollCreditOnly] = useState(true);
+  const [assignmentAwareRanking, setAssignmentAwareRanking] = useState(false);
   const [otmVariancePct, setOtmVariancePct] = useState(5);
   const [rankedResults, setRankedResults] = useState<RankedResult[] | null>(null);
   const [optimizeMessage, setOptimizeMessage] = useState<string | null>(null);
@@ -343,8 +357,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
         body: JSON.stringify({
           portfolioRows,
           otmVariancePct,
-          rollMode,
-          rollCreditOnly,
+          assignmentAwareRanking,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -366,7 +379,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
     } finally {
       setOptimizeLoading(false);
     }
-  }, [portfolioRows, otmVariancePct, rollMode, rollCreditOnly]);
+  }, [portfolioRows, otmVariancePct, assignmentAwareRanking]);
 
   const addToTradeList = useCallback((result: RankedResult) => {
     const trade = { ...result.trade, id: makeId() };
@@ -577,7 +590,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
       >
         <h3 style={sectionTitleStyle}>Portfolio tickers</h3>
         <p style={{ fontSize: "0.875rem", color: t.colors.textMuted, marginBottom: t.spacing(3) }}>
-          Enter ticker, type (Qty or Notional), value, target days to maturity, and OTM or ITM %. Optionally set variance to consider a strike range. Then run Optimize.
+          Enter ticker, type (Qty or Notional), value, and either target DTE or a specific expiry date, plus OTM/ITM %. Optionally set variance to consider a strike range. Then run Optimize.
         </p>
         <div style={{ display: "flex", alignItems: "center", gap: t.spacing(2), marginBottom: t.spacing(3) }}>
           <HelpTooltip
@@ -600,21 +613,11 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
           <label style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(1.5), marginLeft: t.spacing(2), cursor: "pointer" }}>
             <input
               type="checkbox"
-              checked={rollMode}
-              onChange={(e) => setRollMode(e.target.checked)}
+              checked={assignmentAwareRanking}
+              onChange={(e) => setAssignmentAwareRanking(e.target.checked)}
             />
-            <span style={{ fontSize: "0.85rem", color: t.colors.text, fontWeight: 600 }}>Roll mode</span>
+            <span style={{ fontSize: "0.85rem", color: t.colors.text, fontWeight: 600 }}>Assignment-aware ranking</span>
           </label>
-          {rollMode && (
-            <label style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(1.5), cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={rollCreditOnly}
-                onChange={(e) => setRollCreditOnly(e.target.checked)}
-              />
-              <span style={{ fontSize: "0.85rem", color: t.colors.text, fontWeight: 600 }}>Credit only</span>
-            </label>
-          )}
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(3) }}>
           {portfolioRows.map((row) => (
@@ -783,21 +786,55 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                   gap: t.spacing(1),
                 }}
               >
-                <HelpTooltip
+                <label style={labelStyle}>Target by</label>
+                <OptimizerThemeSelect
                   theme={t}
-                  text="Target days to expiration for this leg. Optimizer will look near this DTE."
-                >
-                  <label style={labelStyle}>Days (DTE)</label>
-                </HelpTooltip>
-                <input
-                  type="number"
-                  min={1}
-                  style={{ ...inputStyle, maxWidth: 70 }}
-                  value={row.days || ""}
-                  onChange={(e) => updatePortfolioRow(row.id, "days", Number(e.target.value) || 0)}
-                  placeholder="30"
-                  aria-label="Days to expiration"
+                  value={row.targetMode ?? "days"}
+                  options={[
+                    { value: "days", label: "Days (DTE)" },
+                    { value: "expiry", label: "Expiry date" },
+                  ]}
+                  onChange={(v) => updatePortfolioRow(row.id, "targetMode", v as "days" | "expiry")}
+                  dropdownKey={`${row.id}-targetMode`}
+                  openId={portfolioDropdownId}
+                  setOpenId={setPortfolioDropdownId}
+                  minWidth={120}
                 />
+                {(row.targetMode ?? "days") === "days" ? (
+                  <>
+                    <HelpTooltip
+                      theme={t}
+                      text="Target days to expiration for this leg. Optimizer will look near this DTE."
+                    >
+                      <label style={labelStyle}>Days (DTE)</label>
+                    </HelpTooltip>
+                    <input
+                      type="number"
+                      min={1}
+                      style={{ ...inputStyle, maxWidth: 90 }}
+                      value={row.days || ""}
+                      onChange={(e) => updatePortfolioRow(row.id, "days", Number(e.target.value) || 0)}
+                      placeholder="30"
+                      aria-label="Days to expiration"
+                    />
+                  </>
+                ) : (
+                  <>
+                    <HelpTooltip
+                      theme={t}
+                      text="Exact expiration date for this row. Optimizer will query this specific expiry."
+                    >
+                      <label style={labelStyle}>Expiry date</label>
+                    </HelpTooltip>
+                    <input
+                      type="date"
+                      style={{ ...inputStyle, maxWidth: 150 }}
+                      value={row.targetExpiry ?? ""}
+                      onChange={(e) => updatePortfolioRow(row.id, "targetExpiry", e.target.value)}
+                      aria-label="Target expiry date"
+                    />
+                  </>
+                )}
               </div>
               <div
                 style={{
@@ -872,65 +909,6 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                   aria-label="Monthly expiration only"
                 />
               </div>
-              {rollMode && (
-                <>
-                  <div
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "flex-start",
-                      gap: t.spacing(1),
-                    }}
-                  >
-                    <label style={labelStyle}>Current Expiry</label>
-                    <input
-                      type="date"
-                      style={{ ...inputStyle, maxWidth: 150 }}
-                      value={row.currentExpiry || ""}
-                      onChange={(e) => updatePortfolioRow(row.id, "currentExpiry", e.target.value)}
-                      aria-label="Current expiry"
-                    />
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "flex-start",
-                      gap: t.spacing(1),
-                    }}
-                  >
-                    <label style={labelStyle}>Current Strike</label>
-                    <input
-                      type="number"
-                      min={0}
-                      step={0.5}
-                      style={{ ...inputStyle, maxWidth: 120 }}
-                      value={row.currentStrike || ""}
-                      onChange={(e) => updatePortfolioRow(row.id, "currentStrike", Number(e.target.value) || 0)}
-                      aria-label="Current strike"
-                    />
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "flex-start",
-                      gap: t.spacing(1),
-                    }}
-                  >
-                    <label style={labelStyle}>Current Cts</label>
-                    <input
-                      type="number"
-                      min={0}
-                      step={1}
-                      style={{ ...inputStyle, maxWidth: 100 }}
-                      value={row.currentContracts || ""}
-                      onChange={(e) => updatePortfolioRow(row.id, "currentContracts", Number(e.target.value) || 0)}
-                      aria-label="Current contracts"
-                    />
-                  </div>
-                </>
-              )}
               {portfolioRows.length > 1 && (
                 <button
                   type="button"
@@ -1002,11 +980,9 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
             zIndex: 1,
           }}
         >
-          <h3 style={sectionTitleStyle}>{rollMode ? "Ranked roll candidates" : "Ranked results (yield + upside)"}</h3>
+          <h3 style={sectionTitleStyle}>Ranked results (yield + upside)</h3>
           <p style={{ fontSize: "0.875rem", color: t.colors.textMuted, marginBottom: t.spacing(2) }}>
-            {rollMode
-              ? "Best roll candidates ranked by net annualized roll value and net roll credit/debit."
-              : "Best options by combined yield and underlying upside. Add any row to your trade list below."}
+            Best options by combined yield and underlying upside. Add any row to your trade list below.
           </p>
           {rankedResults.length > 0 && (
             <p style={{ fontSize: "0.85rem", color: t.colors.text, marginBottom: t.spacing(3) }}>
@@ -1017,10 +993,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
           )}
           {rankedResults.length === 0 && (
             <p style={{ fontSize: "0.9rem", color: t.colors.danger, marginBottom: t.spacing(3), fontWeight: 600 }}>
-              {optimizeMessage ??
-                (rollMode
-                  ? "No roll candidates matched your settings."
-                  : "No candidates matched your settings.")}
+              {optimizeMessage ?? "No candidates matched your settings."}
             </p>
           )}
           {rankedResults.length > 0 && (
@@ -1052,16 +1025,19 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                   <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
                     <HelpTooltip
                       theme={t}
+                      text="OTM Distance % measures how far strike is from spot in the favorable direction. Positive = OTM, negative = ITM."
+                    >
+                      <span style={{ cursor: "help" }}>OTM Distance %</span>
+                    </HelpTooltip>
+                  </th>
+                  <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
+                    <HelpTooltip
+                      theme={t}
                       text="Limit Px uses the desk model: midpoint × 92%, where midpoint = (bid + ask) / 2. This modeled execution price drives premium and yield calculations."
                     >
                       <span style={{ cursor: "help" }}>Limit Px</span>
                     </HelpTooltip>
                   </th>
-                  {rollMode && (
-                    <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
-                      BTC Px
-                    </th>
-                  )}
                   <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
                     <HelpTooltip
                       theme={t}
@@ -1070,16 +1046,6 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                       <span style={{ cursor: "help" }}>Ann. Yield</span>
                     </HelpTooltip>
                   </th>
-                  {rollMode && (
-                    <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
-                      Net Roll / c
-                    </th>
-                  )}
-                  {rollMode && (
-                    <th style={{ textAlign: "right", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
-                      Net Roll Total
-                    </th>
-                  )}
                   <th style={{ textAlign: "center", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Premium / contract</th>
                   <th style={{ textAlign: "center", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600, borderTopRightRadius: t.radius.md }}>Action</th>
                 </tr>
@@ -1123,40 +1089,36 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                       {r.upsidePct >= 0 ? "+" : ""}{r.upsidePct}%
                     </td>
                     <td style={{ padding: t.spacing(2), textAlign: "right" }}>${r.strike.toFixed(2)}</td>
+                    <td
+                      style={{
+                        padding: t.spacing(2),
+                        textAlign: "right",
+                        color: (() => {
+                          const spot = r.trade.currentPrice;
+                          if (!Number.isFinite(spot) || spot <= 0) return t.colors.textMuted;
+                          const isPut = r.trade.optionSide.startsWith("PUT");
+                          const pct = isPut
+                            ? ((spot - r.strike) / spot) * 100
+                            : ((r.strike - spot) / spot) * 100;
+                          return pct >= 0 ? t.colors.success : t.colors.danger;
+                        })(),
+                        fontWeight: 600,
+                      }}
+                    >
+                      {(() => {
+                        const spot = r.trade.currentPrice;
+                        if (!Number.isFinite(spot) || spot <= 0) return "—";
+                        const isPut = r.trade.optionSide.startsWith("PUT");
+                        const pct = isPut
+                          ? ((spot - r.strike) / spot) * 100
+                          : ((r.strike - spot) / spot) * 100;
+                        return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+                      })()}
+                    </td>
                     <td style={{ padding: t.spacing(2), textAlign: "right" }}>${r.limitPrice.toFixed(2)}</td>
-                    {rollMode && (
-                      <td style={{ padding: t.spacing(2), textAlign: "right" }}>
-                        {r.btcAsk != null ? `$${r.btcAsk.toFixed(2)}` : "—"}
-                      </td>
-                    )}
                     <td style={{ padding: t.spacing(2), textAlign: "right", color: t.colors.success, fontWeight: 600 }}>
                       {r.annYield}%
                     </td>
-                    {rollMode && (
-                      <td
-                        style={{
-                          padding: t.spacing(2),
-                          textAlign: "right",
-                          color: (r.netRollPerContract ?? 0) >= 0 ? t.colors.success : t.colors.danger,
-                          fontWeight: 600,
-                        }}
-                      >
-                        {r.netRollPerContract != null ? formatMoney(r.netRollPerContract) : "—"}
-                      </td>
-                    )}
-                    {rollMode && (
-                      <td
-                        style={{
-                          padding: t.spacing(2),
-                          textAlign: "right",
-                          color: (r.netRollTotal ?? 0) >= 0 ? t.colors.success : t.colors.danger,
-                          fontWeight: 600,
-                        }}
-                        title={r.rollContractsUsed != null ? `${r.rollContractsUsed} contracts` : undefined}
-                      >
-                        {r.netRollTotal != null ? formatMoney(r.netRollTotal) : "—"}
-                      </td>
-                    )}
                     <td
                       style={{
                         padding: t.spacing(2),
@@ -1165,7 +1127,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                         fontWeight: 600,
                       }}
                     >
-                      {formatMoney(r.premiumPerContract)}
+                      {formatMoneyFull(r.premiumPerContract)}
                     </td>
                     <td style={{ padding: t.spacing(2), textAlign: "center" }}>
                       <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: t.spacing(3) }}>
@@ -1219,7 +1181,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                         <button
                           type="button"
                           onClick={() => {
-                            const text = formatRankedRowForCopy(r, rollMode);
+                            const text = formatRankedRowForCopy(r, false);
                             void navigator.clipboard.writeText(text);
                             setLastCopiedTradeId(r.trade.id);
                             window.setTimeout(
