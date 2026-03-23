@@ -121,6 +121,21 @@ function formatMoneyFull(n: number): string {
   })}`;
 }
 
+function formatNotionalCompact(n: number): string {
+  const abs = Math.abs(n);
+  const sign = n < 0 ? "−" : "";
+  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(2)}M`;
+  if (abs >= 1_000) {
+    const k = (abs / 1_000).toFixed(1).replace(/\.0$/, "");
+    return `${sign}$${k}K`;
+  }
+  return `${sign}$${abs.toFixed(0)}`;
+}
+
+function formatPrice(n: number): string {
+  return Number.isInteger(n) ? `$${n.toFixed(0)}` : `$${n.toFixed(2)}`;
+}
+
 /** Schwab-style symbol: TICKER MM/DD/YYYY Strike C|P */
 export function formatSchwabSymbol(tr: OptionsTrade): string {
   const d = new Date(tr.maturity + "Z");
@@ -571,9 +586,10 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
               </button>
             </div>
             <ul style={{ margin: 0, paddingLeft: t.spacing(5), color: t.colors.text, fontSize: "0.9rem", lineHeight: 1.7 }}>
-              <li><strong>Income:</strong> We rank options by <strong>annualized yield</strong> so you can find the best premium income for your clients.</li>
+              <li><strong>Income:</strong> We rank options by <strong>annualized yield</strong> so you can find strong premium income ideas quickly.</li>
               <li><strong>Strike &amp; contracts:</strong> The table shows the <strong>specific options</strong> that score best—each row is a concrete strike, DTE, and size. The better strikes and contract counts are the ones at the top.</li>
-              <li><strong>Less assignment risk:</strong> We combine yield with <strong>underlying upside</strong> (e.g. 1M performance). So you get high yield without favoring names that are falling—where high yield often means higher assignment risk.</li>
+              <li><strong>Assignment-aware ranking:</strong> When enabled, we apply a <strong>put-assignment risk penalty</strong> based on strike-vs-spot distance, so near-the-money/ITM short puts are de-prioritized.</li>
+              <li><strong>OTM Distance %:</strong> Positive means OTM (generally safer for assignment risk); negative means ITM.</li>
             </ul>
           </div>
         </>
@@ -592,34 +608,49 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
         <p style={{ fontSize: "0.875rem", color: t.colors.textMuted, marginBottom: t.spacing(3) }}>
           Enter ticker, type (Qty or Notional), value, and either target DTE or a specific expiry date, plus OTM/ITM %. Optionally set variance to consider a strike range. Then run Optimize.
         </p>
-        <div style={{ display: "flex", alignItems: "center", gap: t.spacing(2), marginBottom: t.spacing(3) }}>
-          <HelpTooltip
-            theme={t}
-            text="How wide a strike range to consider around your target OTM/ITM %. For example 5% with 10% target = 5–15% strikes."
-          >
-            <label style={{ ...labelStyle, marginBottom: 0 }}>Variance % (strike range)</label>
-          </HelpTooltip>
-          <input
-            type="number"
-            min={0}
-            max={50}
-            step={1}
-            style={{ ...inputStyle, maxWidth: 64 }}
-            value={otmVariancePct}
-            onChange={(e) => setOtmVariancePct(Number(e.target.value) || 0)}
-            aria-label="Variance percent"
-          />
-          <span style={{ fontSize: "0.8rem", color: t.colors.textMuted }}>e.g. 5% with 10% target = 5–15% strikes</span>
-          <label style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(1.5), marginLeft: t.spacing(2), cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={assignmentAwareRanking}
-              onChange={(e) => setAssignmentAwareRanking(e.target.checked)}
-            />
-            <span style={{ fontSize: "0.85rem", color: t.colors.text, fontWeight: 600 }}>Assignment-aware ranking</span>
-          </label>
-        </div>
         <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(3) }}>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "flex-end",
+              gap: t.spacing(3),
+              padding: t.spacing(3),
+              backgroundColor: t.colors.background,
+              borderRadius: t.radius.md,
+              border: `1px solid ${t.colors.border}`,
+            }}
+          >
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
+              <HelpTooltip
+                theme={t}
+                text="How wide a strike range to consider around your target OTM/ITM %. For example 5% with 10% target = 5–15% strikes."
+              >
+                <label style={labelStyle}>Variance % (strike range)</label>
+              </HelpTooltip>
+              <input
+                type="number"
+                min={0}
+                max={50}
+                step={1}
+                style={{ ...inputStyle, maxWidth: 90 }}
+                value={otmVariancePct}
+                onChange={(e) => setOtmVariancePct(Number(e.target.value) || 0)}
+                aria-label="Variance percent"
+              />
+            </div>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(1.5), cursor: "pointer", paddingBottom: t.spacing(2) }}>
+              <input
+                type="checkbox"
+                checked={assignmentAwareRanking}
+                onChange={(e) => setAssignmentAwareRanking(e.target.checked)}
+              />
+              <span style={{ fontSize: "0.85rem", color: t.colors.text, fontWeight: 600 }}>Assignment-aware ranking</span>
+            </label>
+            <span style={{ fontSize: "0.8rem", color: t.colors.textMuted, paddingBottom: t.spacing(2) }}>
+              e.g. 5% with 10% target = 5–15% strikes
+            </span>
+          </div>
           {portfolioRows.map((row) => (
             <div
               key={row.id}
@@ -781,60 +812,64 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
               <div
                 style={{
                   display: "flex",
-                  flexDirection: "column",
-                  alignItems: "flex-start",
+                  flexDirection: "row",
+                  alignItems: "flex-end",
                   gap: t.spacing(1),
                 }}
               >
-                <label style={labelStyle}>Target by</label>
-                <OptimizerThemeSelect
-                  theme={t}
-                  value={row.targetMode ?? "days"}
-                  options={[
-                    { value: "days", label: "Days (DTE)" },
-                    { value: "expiry", label: "Expiry date" },
-                  ]}
-                  onChange={(v) => updatePortfolioRow(row.id, "targetMode", v as "days" | "expiry")}
-                  dropdownKey={`${row.id}-targetMode`}
-                  openId={portfolioDropdownId}
-                  setOpenId={setPortfolioDropdownId}
-                  minWidth={120}
-                />
-                {(row.targetMode ?? "days") === "days" ? (
-                  <>
-                    <HelpTooltip
-                      theme={t}
-                      text="Target days to expiration for this leg. Optimizer will look near this DTE."
-                    >
-                      <label style={labelStyle}>Days (DTE)</label>
-                    </HelpTooltip>
-                    <input
-                      type="number"
-                      min={1}
-                      style={{ ...inputStyle, maxWidth: 90 }}
-                      value={row.days || ""}
-                      onChange={(e) => updatePortfolioRow(row.id, "days", Number(e.target.value) || 0)}
-                      placeholder="30"
-                      aria-label="Days to expiration"
-                    />
-                  </>
-                ) : (
-                  <>
-                    <HelpTooltip
-                      theme={t}
-                      text="Exact expiration date for this row. Optimizer will query this specific expiry."
-                    >
-                      <label style={labelStyle}>Expiry date</label>
-                    </HelpTooltip>
-                    <input
-                      type="date"
-                      style={{ ...inputStyle, maxWidth: 150 }}
-                      value={row.targetExpiry ?? ""}
-                      onChange={(e) => updatePortfolioRow(row.id, "targetExpiry", e.target.value)}
-                      aria-label="Target expiry date"
-                    />
-                  </>
-                )}
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
+                  <label style={labelStyle}>Target by</label>
+                  <OptimizerThemeSelect
+                    theme={t}
+                    value={row.targetMode ?? "days"}
+                    options={[
+                      { value: "days", label: "Days (DTE)" },
+                      { value: "expiry", label: "Expiry date" },
+                    ]}
+                    onChange={(v) => updatePortfolioRow(row.id, "targetMode", v as "days" | "expiry")}
+                    dropdownKey={`${row.id}-targetMode`}
+                    openId={portfolioDropdownId}
+                    setOpenId={setPortfolioDropdownId}
+                    minWidth={120}
+                  />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
+                  {(row.targetMode ?? "days") === "days" ? (
+                    <>
+                      <HelpTooltip
+                        theme={t}
+                        text="Target days to expiration for this leg. Optimizer will look near this DTE."
+                      >
+                        <label style={labelStyle}>Days (DTE)</label>
+                      </HelpTooltip>
+                      <input
+                        type="number"
+                        min={1}
+                        style={{ ...inputStyle, maxWidth: 90 }}
+                        value={row.days || ""}
+                        onChange={(e) => updatePortfolioRow(row.id, "days", Number(e.target.value) || 0)}
+                        placeholder="30"
+                        aria-label="Days to expiration"
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <HelpTooltip
+                        theme={t}
+                        text="Exact expiration date for this row. Optimizer will query this specific expiry."
+                      >
+                        <label style={labelStyle}>Expiry date</label>
+                      </HelpTooltip>
+                      <input
+                        type="date"
+                        style={{ ...inputStyle, maxWidth: 150 }}
+                        value={row.targetExpiry ?? ""}
+                        onChange={(e) => updatePortfolioRow(row.id, "targetExpiry", e.target.value)}
+                        aria-label="Target expiry date"
+                      />
+                    </>
+                  )}
+                </div>
               </div>
               <div
                 style={{
@@ -1088,7 +1123,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                     >
                       {r.upsidePct >= 0 ? "+" : ""}{r.upsidePct}%
                     </td>
-                    <td style={{ padding: t.spacing(2), textAlign: "right" }}>${r.strike.toFixed(2)}</td>
+                    <td style={{ padding: t.spacing(2), textAlign: "right" }}>{formatPrice(r.strike)}</td>
                     <td
                       style={{
                         padding: t.spacing(2),
@@ -1402,7 +1437,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
               </div>
               <div>
                 <div style={labelStyle}>Value of shares at strike</div>
-                <div style={valueStyle}>{formatMoney(tr.valueOfSharesAtStrike)}</div>
+                <div style={valueStyle}>{formatNotionalCompact(tr.valueOfSharesAtStrike)}</div>
               </div>
 
               {/* Execution details */}
@@ -1414,10 +1449,6 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                 <div style={labelStyle}>Bid / Ask</div>
                 <div style={valueStyle}>${tr.currentBid.toFixed(2)} / ${tr.currentAsk.toFixed(2)}</div>
               </div>
-              <div>
-                <div style={labelStyle}>% off bid</div>
-                <div style={valueStyle}>{tr.pctOffBid > 0 ? "+" : ""}{tr.pctOffBid}%</div>
-              </div>
             </div>
           </div>
         ))}
@@ -1427,7 +1458,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
             <div style={{ ...labelStyle, marginBottom: t.spacing(2) }}>Summary</div>
             <div style={{ display: "flex", gap: t.spacing(6), flexWrap: "wrap" }}>
               <div>
-                <div style={labelStyle}>Premium</div>
+                <div style={labelStyle}>Total premium</div>
                 <div
                   style={{
                     fontSize: "1.25rem",
@@ -1435,13 +1466,13 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                     color: summaryPremium >= 0 ? t.colors.success : t.colors.danger,
                   }}
                 >
-                  {formatMoney(summaryPremium)}
+                  {formatMoneyFull(summaryPremium)}
                 </div>
               </div>
               <div>
-                <div style={labelStyle}>Total</div>
+                <div style={labelStyle}>Total notional at strike</div>
                 <div style={{ fontSize: "1.25rem", fontWeight: 600, color: t.colors.text }}>
-                  {formatMoney(summaryTotal)}
+                  {formatMoneyFull(summaryTotal)}
                 </div>
               </div>
             </div>

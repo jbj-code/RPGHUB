@@ -612,7 +612,10 @@ export default async function handler(req: any, res: any) {
       const contracts =
         row.type === "Qty"
           ? Math.max(1, Math.round(row.value))
-          : Math.max(1, Math.round(row.value / (spec.strike * 100)));
+          : Math.floor(row.value / (spec.strike * 100));
+      // In Notional mode, never exceed the requested notional by rounding up.
+      // If notional cannot fund at least 1 contract at this strike, skip candidate.
+      if (row.type === "Notional" && contracts < 1) continue;
       const notional = spec.strike * contracts * 100;
       const premiumReceived = (isSell ? 1 : -1) * optionLimitPrice * contracts * 100;
       // Boss-sheet aligned: yield at current underlying price (not strike).
