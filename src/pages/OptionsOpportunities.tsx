@@ -321,7 +321,6 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
   const [openId, setOpenId] = useState<string | null>(null);
   const [minMarketCap, setMinMarketCap] = useState<number>(500_000_000);
   const minMarketCapText = useMemo(() => minMarketCap.toLocaleString("en-US"), [minMarketCap]);
-  const [maxUnderlyingsToScan, setMaxUnderlyingsToScan] = useState(50);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -346,7 +345,6 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
           otmLevels: Array.from(OTM_LEVELS),
           topN: 5,
           minMarketCap,
-          maxUnderlyingsToScan,
           strikeTolerancePct: 1.25,
           monthlyOnly,
         }),
@@ -488,7 +486,16 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
 
           {/* Min Market Cap */}
           <div>
-            <span style={labelStyle}>Min Market Cap ($)</span>
+            <span style={labelStyle}>
+              <HelpTooltip
+                theme={t}
+                text="Only scan stocks with at least this market cap. Larger companies tend to have tighter bid/ask spreads and better option liquidity."
+              >
+                <span style={{ cursor: "help", borderBottom: `1px dotted ${t.colors.textMuted}` }}>
+                  Min Market Cap ($)
+                </span>
+              </HelpTooltip>
+            </span>
             <div style={{ display: "flex", alignItems: "center", gap: t.spacing(1) }}>
               <span style={{ fontWeight: 800, color: t.colors.primary, fontSize: "0.9rem" }}>$</span>
               <input
@@ -502,37 +509,6 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                 style={{ ...inputStyle }}
                 aria-label="Minimum market cap"
               />
-            </div>
-          </div>
-
-          {/* Max symbols to scan */}
-          <div>
-            <span style={labelStyle}>
-              <HelpTooltip
-                theme={t}
-                text="After filtering by market cap, we only request option chains for this many symbols (highest market cap first). Lower = faster; higher = wider scan but may time out or hit Schwab rate limits."
-              >
-                <span style={{ cursor: "help", borderBottom: `1px dotted ${t.colors.textMuted}` }}>
-                  Max symbols to scan
-                </span>
-              </HelpTooltip>
-            </span>
-            <input
-              type="number"
-              min={10}
-              max={150}
-              step={5}
-              value={maxUnderlyingsToScan}
-              onChange={(e) => {
-                const n = Number(e.target.value);
-                if (!Number.isFinite(n)) return;
-                setMaxUnderlyingsToScan(Math.min(150, Math.max(10, Math.round(n))));
-              }}
-              style={{ ...inputStyle, maxWidth: "100%" }}
-              aria-label="Max symbols to scan"
-            />
-            <div style={{ marginTop: t.spacing(1), fontSize: "0.75rem", color: t.colors.textMuted }}>
-              10–150 (default 50)
             </div>
           </div>
 
@@ -642,7 +618,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                         <th style={thNumStyle}>Strike</th>
                         <th style={thNumStyle}>Bid</th>
                         <th style={thNumStyle}>Ann. Yield</th>
-                        <th style={thNumStyle}>Premium / contract</th>
+                        <th style={thNumStyle}>Premium</th>
                         <th style={{ ...thStyle, textAlign: "center", borderTopRightRadius: t.radius.md }}>Action</th>
                       </tr>
                     </thead>

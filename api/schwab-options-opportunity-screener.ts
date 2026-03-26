@@ -1,7 +1,7 @@
 // Options Opportunity Screener
 // Uses a hardcoded broad US equity universe (no external CSV) plus Schwab's live
-// movers endpoint to capture high-volatility candidates. Filters by market cap,
-// fetches chains for the top N underlyings, and ranks by annualised yield.
+// movers endpoint to capture high-volatility candidates. Sorts by market cap
+// (largest/most-liquid first), fetches chains for the top underlyings, and ranks by annualised yield.
 
 import { createClient } from "@supabase/supabase-js";
 import { toOCCSymbol, getValidAccessToken } from "./_schwab-utils.js";
@@ -136,7 +136,7 @@ async function fetchEquityQuotesBatched(
     const batch = symbols.slice(i, i + QUOTE_BATCH);
     const url =
       "https://api.schwabapi.com/marketdata/v1/quotes?" +
-      new URLSearchParams({ symbols: batch.join(",") }).toString();
+      new URLSearchParams({ symbols: batch.join(","), fields: "quote,fundamental" }).toString();
     const quotesResp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
     throwIfRateLimited(quotesResp, "equity_quotes");
     if (!quotesResp.ok) {
@@ -228,10 +228,9 @@ export default async function handler(req: any, res: any) {
   const topN = Number(body.topN) || 5;
   const strikeTolerancePct = Number(body.strikeTolerancePct) || 1.25;
   const minMarketCap = body.minMarketCap != null ? Number(body.minMarketCap) : null;
-  const maxUnderlyingsRaw = Number(body.maxUnderlyingsToScan);
-  const maxUnderlyingsToScan = Number.isFinite(maxUnderlyingsRaw)
-    ? Math.min(150, Math.max(10, Math.round(maxUnderlyingsRaw)))
-    : 50;
+  // Internal cap prevents Schwab rate-limit (HTTP 429) and Vercel timeouts.
+  // Not exposed to the UI — we always scan the broadest set we can safely handle.
+  const MAX_UNDERLYINGS = 150;
 
   try {
     const supabaseUrl = process.env.SUPABASE_URL;
@@ -298,11 +297,14 @@ export default async function handler(req: any, res: any) {
         src?.regularMarketPrice;
       currentPriceByTicker[sym] = typeof p === "number" && p > 0 ? p : 0;
 
+      // Schwab returns fundamentals at the top-level symbol key (q.fundamental),
+      // not inside the nested quote object (src), so we check both paths.
+      const fund: any = q?.fundamental ?? src?.fundamental;
       const mcCandidate =
+        (typeof fund?.marketCap === "number" ? fund.marketCap : null) ??
+        (typeof fund?.market_cap === "number" ? fund.market_cap : null) ??
         (typeof src?.marketCap === "number" ? src.marketCap : null) ??
-        (typeof src?.market_cap === "number" ? src.market_cap : null) ??
-        (typeof src?.fundamental?.marketCap === "number" ? src.fundamental.marketCap : null) ??
-        (typeof src?.fundamental?.market_cap === "number" ? src.fundamental.market_cap : null);
+        (typeof src?.market_cap === "number" ? src.market_cap : null);
       marketCapByTicker[sym] =
         typeof mcCandidate === "number" && Number.isFinite(mcCandidate) ? mcCandidate : null;
 
@@ -326,11 +328,11 @@ export default async function handler(req: any, res: any) {
       const withMarketCap = effectiveTickers.filter((t) => marketCapByTicker[t] != null);
       if (withMarketCap.length === 0) {
         warnings.push(
-          "Market cap not returned by Schwab for these symbols; skipping market cap filter."
+          "Market cap data not returned by Schwab for these symbols; skipping market cap filter."
         );
       } else {
         effectiveTickers = effectiveTickers.filter(
-          (t) => (marketCapByTicker[t] ?? 0) >= minMarketCap
+          (t) => marketCapByTicker[t] == null || (marketCapByTicker[t] ?? 0) >= minMarketCap
         );
       }
     }
@@ -342,18 +344,15 @@ export default async function handler(req: any, res: any) {
       return mb - ma;
     });
 
-    const beforeCap = effectiveTickers.length;
-    if (beforeCap > maxUnderlyingsToScan) {
-      warnings.push(
-        `Scanning the top ${maxUnderlyingsToScan} names by market cap (${beforeCap} passed filters). Increase "Max symbols to scan" for a wider pass.`
-      );
-      effectiveTickers = effectiveTickers.slice(0, maxUnderlyingsToScan);
+    // Safety cap to avoid Schwab rate-limits and Vercel timeouts
+    if (effectiveTickers.length > MAX_UNDERLYINGS) {
+      effectiveTickers = effectiveTickers.slice(0, MAX_UNDERLYINGS);
     }
 
     if (effectiveTickers.length === 0) {
       res.status(200).json({
         resultsByOtmPct: {},
-        message: "No tickers passed the price/market cap filters.",
+        message: "No tickers with valid prices found in the universe.",
         warnings,
       });
       return;
@@ -614,7 +613,7 @@ export default async function handler(req: any, res: any) {
     if (msg === RATE_LIMIT_ERR) {
       res.status(503).json({
         error:
-          'Schwab rate limit (HTTP 429). Wait a moment and try again, or reduce "Max symbols to scan".',
+          "Schwab rate limit (HTTP 429). Wait a moment and try again.",
         resultsByOtmPct: {},
         message: null,
         warnings: [],

@@ -29,6 +29,8 @@ type OptionSide =
 
 export type OptionsTrade = {
   id: string;
+  /** ID of the RankedResult row this trade was added from — used to show persistent ✓ in the results table. */
+  sourceResultId?: string;
   ticker: string;
   maturity: string;
   daysToMaturity: number;
@@ -624,17 +626,24 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
   }, [portfolioRows, otmVariancePct]);
 
   const addToTradeList = useCallback((result: RankedResult) => {
-    const trade = { ...result.trade, id: makeId() };
+    const trade = { ...result.trade, id: makeId(), sourceResultId: result.trade.id };
     setTrades((prev) => [...prev, trade]);
+    // Brief flash animation — the persistent ✓ is derived from the trades array below.
     setLastAddedTradeId(result.trade.id);
     window.setTimeout(() => {
       setLastAddedTradeId((prev) => (prev === result.trade.id ? null : prev));
-    }, 1200);
+    }, 800);
   }, []);
 
   const removeTrade = useCallback((id: string) => {
     setTrades((prev) => prev.filter((tr) => tr.id !== id));
   }, []);
+
+  // Set of result IDs currently in the trade list — drives the persistent ✓ on the ranked row.
+  const addedResultIds = useMemo(
+    () => new Set(trades.map((tr) => tr.sourceResultId).filter(Boolean) as string[]),
+    [trades]
+  );
 
   const summaryPremium = trades.reduce((sum, tr) => sum + tr.premiumReceived, 0);
   const summaryTotal = trades.reduce((sum, tr) => sum + tr.valueOfSharesAtStrike, 0);
@@ -1495,7 +1504,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                             style={{
                               fontSize: 24,
                               position: "absolute",
-                              opacity: lastAddedTradeId === r.trade.id ? 0 : 1,
+                              opacity: addedResultIds.has(r.trade.id) ? 0 : 1,
                               transition: "opacity 0.2s ease",
                               pointerEvents: "none",
                             }}
@@ -1508,7 +1517,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                             style={{
                               fontSize: 24,
                               position: "absolute",
-                              opacity: lastAddedTradeId === r.trade.id ? 1 : 0,
+                              opacity: addedResultIds.has(r.trade.id) ? 1 : 0,
                               transition: "opacity 0.2s ease",
                               pointerEvents: "none",
                             }}
