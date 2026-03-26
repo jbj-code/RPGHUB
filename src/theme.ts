@@ -19,12 +19,105 @@ import type { CSSProperties } from "react";
 
 /** Standard page layout: same max-width and spacing for every tool page. */
 export const PAGE_LAYOUT = {
-  maxWidth: 1200,
+  maxWidth: 1360,
+  appShellMaxWidth: 1440,
+  pagePaddingH: 4,
   titleMarginBottom: 1,
   descMarginBottom: 5,
   /** Top margin when the first element is not an h2 (e.g. a wrapper div). Matches browser default h2 margin-top (0.83em of 1.5rem title font). */
   titleBlockMarginTop: "1.245rem",
 } as const;
+
+export type FixedRailsLayoutOptions = {
+  sidebarWidth: number;
+  leftRailWidth?: number;
+  rightRailWidth?: number;
+  headerHeight?: number;
+  panelGapPx?: number;
+};
+
+export function getFixedRailsLayoutStyles(
+  t: Theme,
+  options: FixedRailsLayoutOptions
+): {
+  leftRailWidth: number;
+  rightRailWidth: number;
+  headerHeight: number;
+  panelGapPx: number;
+  page: CSSProperties;
+  topHeader: CSSProperties;
+  leftRail: CSSProperties;
+  rightRail: CSSProperties;
+  contentWrap: CSSProperties;
+} {
+  const leftRailWidth = options.leftRailWidth ?? 286;
+  const rightRailWidth = options.rightRailWidth ?? 256;
+  const headerHeight = options.headerHeight ?? 104;
+  const panelGapPx = options.panelGapPx ?? Number(t.spacing(3).replace("px", ""));
+
+  return {
+    leftRailWidth,
+    rightRailWidth,
+    headerHeight,
+    panelGapPx,
+    page: {
+      width: "100%",
+      margin: 0,
+      minHeight: "100vh",
+      display: "block",
+      fontFamily: t.typography.fontFamily,
+      color: t.colors.text,
+    },
+    topHeader: {
+      position: "fixed",
+      left: options.sidebarWidth,
+      right: 0,
+      top: 0,
+      height: headerHeight,
+      backgroundColor: t.colors.surface,
+      borderBottom: `1px solid ${t.colors.border}`,
+      padding: `${t.spacing(3)} ${t.spacing(8)}`,
+      display: "flex",
+      flexDirection: "column",
+      justifyContent: "center",
+      zIndex: 8,
+      animation: "rails-fade-in 0.35s ease-out both",
+    },
+    leftRail: {
+      position: "fixed",
+      left: options.sidebarWidth,
+      top: headerHeight,
+      width: leftRailWidth,
+      height: `calc(100vh - ${headerHeight}px)`,
+      borderRight: `1px solid ${t.colors.border}`,
+      backgroundColor: t.colors.surface,
+      padding: 0,
+      display: "flex",
+      flexDirection: "column",
+      zIndex: 6,
+      animation: "rails-fade-in 0.4s ease-out 0.05s both",
+    },
+    rightRail: {
+      position: "fixed",
+      right: 0,
+      top: headerHeight,
+      width: rightRailWidth,
+      height: `calc(100vh - ${headerHeight}px)`,
+      borderLeft: `1px solid ${t.colors.border}`,
+      backgroundColor: t.colors.surface,
+      padding: 0,
+      display: "flex",
+      flexDirection: "column",
+      zIndex: 6,
+      animation: "rails-fade-in 0.4s ease-out 0.1s both",
+    },
+    contentWrap: {
+      marginTop: headerHeight + panelGapPx,
+      marginLeft: leftRailWidth + panelGapPx,
+      marginRight: rightRailWidth + panelGapPx,
+    },
+  };
+}
 
 /** Paths to assets in public/assets/ (favicon.png, logo.png, logo-white.png). */
 export const assets = {

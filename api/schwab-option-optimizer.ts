@@ -2,6 +2,7 @@
 // POST body: { portfolioRows: PortfolioRow[], otmVariancePct: number }
 
 import { createClient } from "@supabase/supabase-js";
+import { toOCCSymbol, getValidAccessToken } from "./_schwab-utils";
 
 type PortfolioRow = {
   id: string;
@@ -60,6 +61,7 @@ export type RankedResult = {
   limitPrice: number;
   annYield: number;
   premiumPerContract: number;
+  delta?: number | null;
   btcAsk?: number | null;
   netRollPerContract?: number | null;
   netRollAnnualizedPct?: number | null;
@@ -107,13 +109,13 @@ function isThirdFridayMonthlyExpiry(expiry: string): boolean {
   return fridayCount === 3;
 }
 
-// Desk model requested by user: limit price = midpoint * 92%.
+// Limit price = pure midpoint (bid + ask) / 2.
 function modeledLimitPrice(bid?: number, ask?: number): number | null {
   const b = typeof bid === "number" && Number.isFinite(bid) && bid > 0 ? bid : null;
   const a = typeof ask === "number" && Number.isFinite(ask) && ask > 0 ? ask : null;
-  if (b != null && a != null) return ((b + a) / 2) * 0.92;
-  if (b != null) return b * 0.92;
-  if (a != null) return a * 0.92;
+  if (b != null && a != null) return (b + a) / 2;
+  if (b != null) return b;
+  if (a != null) return a;
   return null;
 }
 
@@ -153,85 +155,17 @@ function modeledPriceFromOptionQuote(src: any): number | null {
       : typeof src.last === "number" && Number.isFinite(src.last) && src.last > 0
         ? src.last
         : undefined;
-  if (last != null) return last * 0.92;
+  if (last != null) return last;
   const mark =
     typeof src.markPrice === "number" && Number.isFinite(src.markPrice) && src.markPrice > 0
       ? src.markPrice
       : typeof src.mark === "number" && Number.isFinite(src.mark) && src.mark > 0
         ? src.mark
         : undefined;
-  if (mark != null) return mark * 0.92;
+  if (mark != null) return mark;
   return null;
 }
 
-/** Build OCC option symbol */
-function toOCCSymbol(
-  underlying: string,
-  expiry: string,
-  type: "C" | "P",
-  strike: number
-): string {
-  const root = underlying.trim().toUpperCase().padEnd(6).slice(0, 6);
-  const [y, m, d] = expiry.split("-");
-  const yymmdd = `${y!.slice(-2)}${m}${d}`;
-  const strikeVal = Math.round(strike * 1000);
-  const strikeStr = String(strikeVal).padStart(8, "0");
-  return `${root}${yymmdd}${type}${strikeStr}`;
-}
-
-function getAccessToken(supabase: any, tokenRow: any): Promise<string | null> {
-  // Refresh if needed (same pattern as option-prices)
-  const expiresAt =
-    tokenRow.expires_at != null
-      ? new Date(tokenRow.expires_at).getTime()
-      : null;
-  const now = Date.now();
-  const bufferMs = 5 * 60 * 1000;
-  const needsRefresh = expiresAt != null && now >= expiresAt - bufferMs;
-  let accessToken = tokenRow.access_token as string;
-
-  if (!needsRefresh && accessToken) return Promise.resolve(accessToken);
-  if (!tokenRow.refresh_token) return Promise.resolve(accessToken);
-
-  const clientId = process.env.SCHWAB_CLIENT_ID;
-  const clientSecret = process.env.SCHWAB_CLIENT_SECRET;
-  if (!clientId || !clientSecret) return Promise.resolve(null);
-
-  const authHeader = Buffer.from(`${clientId}:${clientSecret}`).toString(
-    "base64"
-  );
-  const refreshBody = new URLSearchParams({
-    grant_type: "refresh_token",
-    refresh_token: tokenRow.refresh_token,
-  });
-
-  return fetch("https://api.schwabapi.com/v1/oauth/token", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Authorization: `Basic ${authHeader}`,
-    },
-    body: refreshBody,
-  })
-    .then((r) => r.json())
-    .then(async (refreshJson: any) => {
-      const newExpiresIn =
-        typeof refreshJson.expires_in === "number" ? refreshJson.expires_in : 1800;
-      const newExpiresAt = new Date(now + newExpiresIn * 1000).toISOString();
-      await supabase
-        .from("schwab_tokens")
-        .update({
-          access_token: refreshJson.access_token,
-          expires_at: newExpiresAt,
-          ...(refreshJson.refresh_token != null && {
-            refresh_token: refreshJson.refresh_token,
-          }),
-        })
-        .eq("id", "default");
-      return refreshJson.access_token as string;
-    })
-    .catch(() => null);
-}
 
 export default async function handler(req: any, res: any) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -299,7 +233,7 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    const accessToken = await getAccessToken(supabase, tokenRow);
+    const accessToken = await getValidAccessToken(supabase, tokenRow);
     if (!accessToken) {
       res.status(401).json({
         error: "Schwab token expired. Run the Schwab login flow again.",
@@ -330,45 +264,47 @@ export default async function handler(req: any, res: any) {
       if (typeof p === "number" && p > 0) currentPriceByTicker[sym] = p;
     }
 
-    // 2) 1M return per ticker (price history)
+    // 2) 1M return per ticker (price history) — parallel, 2-month window is sufficient for 1M lookback
     const upsideByTicker: Record<string, number> = {};
-    for (const symbol of tickers) {
-      try {
-        const params = new URLSearchParams({
-          symbol: symbol,
-          periodType: "year",
-          period: "1",
-          frequencyType: "daily",
-          frequency: "1",
-          needExtendedHoursData: "false",
-        });
-        const histResp = await fetch(
-          `https://api.schwabapi.com/marketdata/v1/pricehistory?${params}`,
-          { headers: { Authorization: `Bearer ${accessToken}` } }
-        );
-        if (!histResp.ok) continue;
-        const histBody: any = await histResp.json();
-        const candles = histBody?.candles ?? [];
-        if (candles.length < 2) continue;
-        const sorted = candles
-          .slice()
-          .sort((a: any, b: any) => (a.datetime ?? 0) - (b.datetime ?? 0));
-        const latest = sorted[sorted.length - 1];
-        const latestClose = latest?.close ?? 0;
-        const oneMonthAgo = new Date(today);
-        oneMonthAgo.setUTCMonth(oneMonthAgo.getUTCMonth() - 1);
-        const targetMs = oneMonthAgo.getTime();
-        const start = sorted.find((c: any) => (c.datetime ?? 0) >= targetMs) ?? sorted[0];
-        const startClose = start?.close ?? 0;
-        if (startClose > 0 && latestClose > 0) {
-          upsideByTicker[symbol] = (latestClose / startClose - 1) * 100;
+    await Promise.allSettled(
+      tickers.map(async (symbol) => {
+        try {
+          const params = new URLSearchParams({
+            symbol,
+            periodType: "month",
+            period: "2",
+            frequencyType: "daily",
+            frequency: "1",
+            needExtendedHoursData: "false",
+          });
+          const histResp = await fetch(
+            `https://api.schwabapi.com/marketdata/v1/pricehistory?${params}`,
+            { headers: { Authorization: `Bearer ${accessToken}` } }
+          );
+          if (!histResp.ok) return;
+          const histBody: any = await histResp.json();
+          const candles = histBody?.candles ?? [];
+          if (candles.length < 2) return;
+          const sorted = candles
+            .slice()
+            .sort((a: any, b: any) => (a.datetime ?? 0) - (b.datetime ?? 0));
+          const latest = sorted[sorted.length - 1];
+          const latestClose = latest?.close ?? 0;
+          const oneMonthAgo = new Date(today);
+          oneMonthAgo.setUTCMonth(oneMonthAgo.getUTCMonth() - 1);
+          const targetMs = oneMonthAgo.getTime();
+          const start = sorted.find((c: any) => (c.datetime ?? 0) >= targetMs) ?? sorted[0];
+          const startClose = start?.close ?? 0;
+          if (startClose > 0 && latestClose > 0) {
+            upsideByTicker[symbol] = (latestClose / startClose - 1) * 100;
+          }
+        } catch {
+          /* ignore per-ticker failures */
         }
-      } catch {
-        /* ignore */
-      }
-    }
+      })
+    );
 
-    // 3) For each row: get expirations + strikes from chains, then build option list
+    // 3) For each row: get expirations + strikes from chains, then build option list — parallel
     type OptSpec = {
       underlying: string;
       expiry: string;
@@ -381,98 +317,102 @@ export default async function handler(req: any, res: any) {
     const optionSpecs: OptSpec[] = [];
     const MAX_OPTIONS_PER_ROW = 24;
 
-    for (const row of portfolioRows) {
-      const ticker = row.ticker.trim().toUpperCase();
-      if (!ticker) continue;
-      const currentPrice = currentPriceByTicker[ticker];
-      if (!currentPrice || currentPrice <= 0) continue;
+    const chainResults = await Promise.allSettled(
+      portfolioRows.map(async (row): Promise<OptSpec[]> => {
+        const collected: OptSpec[] = [];
+        const ticker = row.ticker.trim().toUpperCase();
+        if (!ticker) return collected;
+        const currentPrice = currentPriceByTicker[ticker];
+        if (!currentPrice || currentPrice <= 0) return collected;
 
-      const type: "C" | "P" = row.putCall === "Call" ? "C" : "P";
-      const usingExactExpiry =
-        row.targetMode === "expiry" &&
-        typeof row.targetExpiry === "string" &&
-        /^\d{4}-\d{2}-\d{2}$/.test(row.targetExpiry);
-      const fromDate = usingExactExpiry
-        ? new Date(`${row.targetExpiry}T00:00:00.000Z`)
-        : addDays(today, Math.max(1, row.days - 14));
-      const toDate = usingExactExpiry
-        ? new Date(`${row.targetExpiry}T00:00:00.000Z`)
-        : addDays(today, row.days + 35);
-      const fromStr = fromDate.toISOString().slice(0, 10);
-      const toStr = toDate.toISOString().slice(0, 10);
+        const type: "C" | "P" = row.putCall === "Call" ? "C" : "P";
+        const usingExactExpiry =
+          row.targetMode === "expiry" &&
+          typeof row.targetExpiry === "string" &&
+          /^\d{4}-\d{2}-\d{2}$/.test(row.targetExpiry);
+        const fromDate = usingExactExpiry
+          ? new Date(`${row.targetExpiry}T00:00:00.000Z`)
+          : addDays(today, Math.max(1, row.days - 14));
+        const toDate = usingExactExpiry
+          ? new Date(`${row.targetExpiry}T00:00:00.000Z`)
+          : addDays(today, row.days + 35);
+        const fromStr = fromDate.toISOString().slice(0, 10);
+        const toStr = toDate.toISOString().slice(0, 10);
 
-      const params = new URLSearchParams({
-        symbol: ticker,
-        contractType: type === "C" ? "CALL" : "PUT",
-        includeUnderlyingQuote: "FALSE",
-        strategy: "SINGLE",
-        fromDate: fromStr,
-        toDate: toStr,
-        // Slightly wider strike coverage improves match rates for ETFs/smaller names.
-        strikeCount: "40",
-      });
-      const chainResp = await fetch(
-        `https://api.schwabapi.com/marketdata/v1/chains?${params}`,
-        { headers: { Authorization: `Bearer ${accessToken}` } }
-      );
-      if (!chainResp.ok) continue;
+        const params = new URLSearchParams({
+          symbol: ticker,
+          contractType: type === "C" ? "CALL" : "PUT",
+          includeUnderlyingQuote: "FALSE",
+          strategy: "SINGLE",
+          fromDate: fromStr,
+          toDate: toStr,
+          // Slightly wider strike coverage improves match rates for ETFs/smaller names.
+          strikeCount: "40",
+        });
+        const chainResp = await fetch(
+          `https://api.schwabapi.com/marketdata/v1/chains?${params}`,
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+        if (!chainResp.ok) return collected;
 
-      const chainBody: any = await chainResp.json();
-      const expMap = type === "C" ? chainBody?.callExpDateMap : chainBody?.putExpDateMap;
-      if (!expMap || typeof expMap !== "object") continue;
+        const chainBody: any = await chainResp.json();
+        const expMap = type === "C" ? chainBody?.callExpDateMap : chainBody?.putExpDateMap;
+        if (!expMap || typeof expMap !== "object") return collected;
 
-      const collected: OptSpec[] = [];
-      // Variance is symmetric around the target (UI copy: 10% with 5% variance = 5% to 15%).
-      const pctMin = Math.max(0, (row.otmPct - otmVariancePct) / 100);
-      const pctMax = (row.otmPct + otmVariancePct) / 100;
-      const isOTM = (row.moneyness ?? "OTM") === "OTM";
+        // Variance is symmetric around the target (UI copy: 10% with 5% variance = 5% to 15%).
+        const pctMin = Math.max(0, (row.otmPct - otmVariancePct) / 100);
+        const pctMax = (row.otmPct + otmVariancePct) / 100;
+        const isOTM = (row.moneyness ?? "OTM") === "OTM";
 
-      for (const [expKey, strikesObj] of Object.entries<any>(expMap)) {
-        const expiry = toExpiryYYYYMMDD(expKey);
-        if (row.monthly && !isThirdFridayMonthlyExpiry(expiry)) continue;
-        if (usingExactExpiry && expiry !== row.targetExpiry) continue;
-        const expDate = new Date(expiry + "Z");
-        const dte = daysBetween(today, expDate);
-        if (!usingExactExpiry && (dte < Math.max(1, row.days - 14) || dte > row.days + 35)) continue;
+        for (const [expKey, strikesObj] of Object.entries<any>(expMap)) {
+          const expiry = toExpiryYYYYMMDD(expKey);
+          if (row.monthly && !isThirdFridayMonthlyExpiry(expiry)) continue;
+          if (usingExactExpiry && expiry !== row.targetExpiry) continue;
+          const expDate = new Date(expiry + "Z");
+          const dte = daysBetween(today, expDate);
+          if (!usingExactExpiry && (dte < Math.max(1, row.days - 14) || dte > row.days + 35)) continue;
 
-        const strikeEntries = Object.entries(strikesObj ?? {});
-        for (const [strikeStr, contracts] of strikeEntries) {
-          const strike = Number(strikeStr);
-          if (!Number.isFinite(strike) || strike <= 0) continue;
-          const pctBelow = (currentPrice - strike) / currentPrice;
-          const pctAbove = (strike - currentPrice) / currentPrice;
-          // OTM: Put = strike below spot, Call = strike above spot. ITM: Put = strike above spot, Call = strike below spot.
-          if (type === "P") {
-            if (isOTM) {
-              if (pctBelow < pctMin || pctBelow > pctMax) continue; // put OTM: strike < spot
+          const strikeEntries = Object.entries(strikesObj ?? {});
+          for (const [strikeStr, contracts] of strikeEntries) {
+            const strike = Number(strikeStr);
+            if (!Number.isFinite(strike) || strike <= 0) continue;
+            const pctBelow = (currentPrice - strike) / currentPrice;
+            const pctAbove = (strike - currentPrice) / currentPrice;
+            // OTM: Put = strike below spot, Call = strike above spot. ITM: Put = strike above spot, Call = strike below spot.
+            if (type === "P") {
+              if (isOTM) {
+                if (pctBelow < pctMin || pctBelow > pctMax) continue; // put OTM: strike < spot
+              } else {
+                if (pctAbove < pctMin || pctAbove > pctMax) continue; // put ITM: strike > spot
+              }
             } else {
-              if (pctAbove < pctMin || pctAbove > pctMax) continue; // put ITM: strike > spot
+              if (isOTM) {
+                if (pctAbove < pctMin || pctAbove > pctMax) continue; // call OTM: strike > spot
+              } else {
+                if (pctBelow < pctMin || pctBelow > pctMax) continue; // call ITM: strike < spot
+              }
             }
-          } else {
-            if (isOTM) {
-              if (pctAbove < pctMin || pctAbove > pctMax) continue; // call OTM: strike > spot
-            } else {
-              if (pctBelow < pctMin || pctBelow > pctMax) continue; // call ITM: strike < spot
+            if (Array.isArray(contracts) && contracts.length > 0) {
+              collected.push({
+                underlying: ticker,
+                expiry,
+                strike,
+                type,
+                row,
+                currentPrice,
+                daysToMaturity: dte,
+              });
             }
-          }
-          if (Array.isArray(contracts) && contracts.length > 0) {
-            collected.push({
-              underlying: ticker,
-              expiry,
-              strike,
-              type,
-              row,
-              currentPrice,
-              daysToMaturity: dte,
-            });
           }
         }
-      }
 
-      // Keep a spread of strikes (e.g. by premium) up to MAX_OPTIONS_PER_ROW
-      collected.sort((a, b) => a.strike - b.strike);
-      const slice = collected.slice(0, MAX_OPTIONS_PER_ROW);
-      optionSpecs.push(...slice);
+        collected.sort((a, b) => a.strike - b.strike);
+        return collected.slice(0, MAX_OPTIONS_PER_ROW);
+      })
+    );
+
+    for (const result of chainResults) {
+      if (result.status === "fulfilled") optionSpecs.push(...result.value);
     }
 
     if (optionSpecs.length === 0) {
@@ -484,8 +424,8 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    // 4) Option quotes (OCC batch)
-    const BATCH = 30;
+    // 4) Option quotes (OCC batch — 50 per request reduces round trips vs the old 30)
+    const BATCH = 50;
     const optionQuoteSrc = (q: any): any => {
       if (!q || typeof q !== "object") return null;
       if (q.quote && typeof q.quote === "object") return q.quote;
@@ -493,7 +433,7 @@ export default async function handler(req: any, res: any) {
       if (q.option && typeof q.option === "object") return q.option;
       return q.quote ?? q.optionContract ?? q;
     };
-    const optionQuotes: Record<string, { bid: number; ask: number; modeled: number }> = {};
+    const optionQuotes: Record<string, { bid: number; ask: number; modeled: number; delta: number | null }> = {};
     for (let i = 0; i < optionSpecs.length; i += BATCH) {
       const batch = optionSpecs.slice(i, i + BATCH);
       const occSymbols = batch.map((o) =>
@@ -527,8 +467,12 @@ export default async function handler(req: any, res: any) {
             : typeof src.ask === "number" && Number.isFinite(src.ask)
               ? src.ask
               : 0;
+        const delta =
+          typeof src.delta === "number" && Number.isFinite(src.delta)
+            ? src.delta
+            : null;
         const key = `${spec.underlying} ${spec.expiry} ${spec.strike} ${spec.type}`;
-        optionQuotes[key] = { bid, ask, modeled };
+        optionQuotes[key] = { bid, ask, modeled, delta };
       }
     }
 
@@ -618,10 +562,11 @@ export default async function handler(req: any, res: any) {
       if (row.type === "Notional" && contracts < 1) continue;
       const notional = spec.strike * contracts * 100;
       const premiumReceived = (isSell ? 1 : -1) * optionLimitPrice * contracts * 100;
-      // Boss-sheet aligned: yield at current underlying price (not strike).
-      const currentUnderlyingNotional = spec.currentPrice * contracts * 100;
+      // Yield on strike notional = premium / (strike × contracts × 100).
+      // This reflects actual capital at risk (cash needed to cover assignment for short puts,
+      // or shares needed for short calls), which is the standard industry convention.
       const yieldAtCurrentPrice =
-        currentUnderlyingNotional !== 0 ? (premiumReceived / currentUnderlyingNotional) * 100 : 0;
+        notional !== 0 ? (premiumReceived / notional) * 100 : 0;
       const annualizedYieldPct =
         spec.daysToMaturity > 0
           ? yieldAtCurrentPrice * (365 / spec.daysToMaturity)
@@ -674,6 +619,7 @@ export default async function handler(req: any, res: any) {
         annYield: trade.annualizedYieldPct,
         // Signed per-contract premium/cost so buy actions display as negative cash flow.
         premiumPerContract: Math.round((isSell ? 1 : -1) * optionLimitPrice * 100),
+        delta: quote?.delta ?? null,
         btcAsk: rollMode ? closePriceByRowId[row.id] ?? null : null,
         netRollPerContract,
         netRollAnnualizedPct: rollMode
@@ -721,19 +667,38 @@ export default async function handler(req: any, res: any) {
         if (rollObjective === "yield") return netAnn;
         return netAnn * 0.8 + netPerC * 0.2;
       }
-      const base = r.annYield * 0.5 + (r.upsidePct + 50) * 0.5;
-      if (!assignmentAwareRanking) return base;
 
-      // Put-selling assignment-risk penalty (no delta dependency): higher penalty as strike
-      // gets closer to / above spot. This nudges rankings toward safer OTM puts while still
-      // considering yield and upside.
-      if (r.trade.optionSide === "PUT - SELL to OPEN" && r.trade.currentPrice > 0) {
-        const otmPct = ((r.trade.currentPrice - r.strike) / r.trade.currentPrice) * 100;
-        if (otmPct < 0) return base - (40 + Math.abs(otmPct) * 4); // ITM puts heavily penalized
+      const isSell = r.trade.optionSide.includes("SELL");
+      const isPut = r.trade.optionSide.startsWith("PUT");
+
+      // Directional momentum: flip sign for trades that benefit from downside moves.
+      // Short put / long call → upside is good. Short call / long put → downside is good.
+      const benefitsFromUpside = (isPut && isSell) || (!isPut && !isSell);
+      const directedUpside = benefitsFromUpside ? r.upsidePct : -r.upsidePct;
+      // Cap at ±50 so an extreme single-month outlier can't dominate the ranking.
+      const cappedUpside = Math.max(-50, Math.min(50, directedUpside));
+
+      // Base: 50% yield (primary) + 50% directional momentum (secondary context)
+      const base = r.annYield * 0.5 + (cappedUpside + 50) * 0.5;
+
+      // Risk adjustment for short options — rewards high PoP, penalises near/in-the-money.
+      if (isSell && r.delta != null) {
+        // PoP = (1 - |delta|) × 100.  Neutral at 70%; above = reward, below = penalise.
+        const pop = (1 - Math.abs(r.delta)) * 100;
+        return base + (pop - 70) * 0.4;
+      }
+
+      // Fallback OTM penalty tiers used when Schwab did not return a delta value.
+      if (isSell && r.trade.currentPrice > 0) {
+        const otmPct = isPut
+          ? ((r.trade.currentPrice - r.strike) / r.trade.currentPrice) * 100
+          : ((r.strike - r.trade.currentPrice) / r.trade.currentPrice) * 100;
+        if (otmPct < 0) return base - (40 + Math.abs(otmPct) * 4);
         if (otmPct < 2) return base - (22 - otmPct * 4);
         if (otmPct < 5) return base - (14 - (otmPct - 2) * 2);
         if (otmPct < 8) return base - (8 - (otmPct - 5));
       }
+
       return base;
     };
     ranked.sort((a, b) => score(b) - score(a));

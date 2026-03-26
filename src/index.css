@@ -322,6 +322,12 @@ body {
     transform: translateY(0);
   }
 }
+/* Fixed rails panels (header, left rail, right rail) — pure opacity so fixed
+   positioning is not disrupted by transform during the animation. */
+@keyframes rails-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
 .page-card:hover {
   box-shadow: 0 4px 16px rgba(15, 42, 54, 0.08);
 }
@@ -601,5 +607,259 @@ body {
   .home-cards-grid {
     grid-template-columns: 1fr;
     gap: 12px;
+  }
+}
+
+/* ─── Website: animated water-wave / lava-lamp hero ─────────────────────── */
+/* Technique: large elliptical blobs with heavy blur + varying scaleX/scaleY
+   to stretch like water; organic multi-stop keyframes give the lava-lamp
+   drift without mechanical rotation. Dark background shows through at edges
+   exactly like the Bluefyn reference. */
+
+.website-home-hero {
+  isolation: isolate;
+  background-color: #041518;
+}
+
+/* Base blob style – override per-layer below */
+.website-gradient-layer {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  will-change: transform;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+/* ── Layer A: primary teal – large, slow, drifts across centre ── */
+.website-gradient-layer-a {
+  inset: -45%;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(68, 193, 193, 0.95)  0%,
+    rgba(68, 193, 193, 0.60) 30%,
+    rgba(68, 193, 193, 0.18) 55%,
+    transparent               74%
+  );
+  filter: blur(68px) saturate(140%);
+  opacity: 0.90;
+  animation: website-a 26s ease-in-out infinite;
+}
+
+/* ── Layer B: deep secondary – subtle depth, not a darkness killer ── */
+.website-gradient-layer-b {
+  inset: -38%;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(8, 26, 38, 0.75)  0%,
+    rgba(12, 32, 46, 0.38) 40%,
+    transparent            65%
+  );
+  filter: blur(65px);
+  opacity: 0.50;
+  animation: website-b 20s ease-in-out infinite;
+}
+
+/* ── Layer C: lighter teal highlight – creates the bright "crest" ── */
+.website-gradient-layer-c {
+  inset: -30%;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(140, 242, 242, 0.88)  0%,
+    rgba(90, 218, 218, 0.48)  32%,
+    rgba(68, 193, 193, 0.14)  54%,
+    transparent               70%
+  );
+  filter: blur(52px) saturate(155%);
+  opacity: 0.76;
+  animation: website-c 31s ease-in-out infinite;
+}
+
+/* ── Layer D: mid-teal fill – adds warmth and body ── */
+.website-gradient-layer-d {
+  inset: -42%;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(48, 168, 168, 0.85)  0%,
+    rgba(48, 168, 168, 0.38) 40%,
+    transparent               63%
+  );
+  filter: blur(76px) saturate(125%);
+  opacity: 0.72;
+  animation: website-d 19s ease-in-out infinite;
+}
+
+/* ── Layer E: fast horizontal streak – the "action" wave crest ── */
+.website-gradient-layer-e {
+  inset: -35%;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(100, 220, 220, 0.78)  0%,
+    rgba(68,  193, 193, 0.35) 34%,
+    transparent               60%
+  );
+  filter: blur(50px) saturate(145%);
+  opacity: 0.58;
+  animation: website-e 9s ease-in-out infinite;
+}
+
+/* ── Caustic layer: bright hot-spot that floats around ── */
+.website-caustic-layer {
+  position: absolute;
+  inset: 12%;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(200, 254, 254, 0.65)  0%,
+    rgba(140, 238, 238, 0.28) 36%,
+    transparent               65%
+  );
+  filter: blur(35px) saturate(165%);
+  opacity: 0.62;
+  will-change: transform;
+  animation: website-caustic 15s ease-in-out infinite;
+}
+
+/* ── Wave sweep: wide horizontal layer that breathes side-to-side ── */
+.website-wave-layer {
+  position: absolute;
+  inset: -10%;
+  pointer-events: none;
+  background:
+    radial-gradient(160% 55% at 10% 60%, rgba(68, 193, 193, 0.20) 0%, transparent 65%),
+    radial-gradient(160% 55% at 90% 40%, rgba(28, 120, 150, 0.22) 0%, transparent 65%),
+    radial-gradient(100% 40% at 50% 100%, rgba(68, 193, 193, 0.12) 0%, transparent 60%);
+  filter: blur(18px);
+  opacity: 0.65;
+  will-change: transform;
+  transform: translateZ(0);
+  animation: website-wave 13s ease-in-out infinite;
+}
+
+/* ── Noise: SVG fractal turbulence for organic water texture ── */
+.website-noise-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.055;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n' x='0' y='0'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.72' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+  background-size: 300px 300px;
+  background-repeat: repeat;
+}
+
+/* ── Grain: fine film-grain dots over noise ── */
+.website-grain-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.10;
+  background-image:
+    radial-gradient(rgba(180, 240, 240, 0.70) 0.5px, transparent 0.5px),
+    radial-gradient(rgba(68, 193, 193, 0.35) 0.5px, transparent 0.5px);
+  background-size: 4px 4px, 7px 7px;
+  background-position: 0 0, 2px 2px;
+}
+
+/* ── Hover/interactive states ── */
+.website-cta-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 38px rgba(0,0,0,0.45), 0 0 0 1px rgba(68,193,193,0.3) !important;
+}
+.website-cta-btn:active {
+  transform: translateY(0);
+}
+.website-menu-item:hover {
+  background-color: rgba(68, 193, 193, 0.10) !important;
+  color: rgba(200, 248, 248, 0.95) !important;
+}
+
+/* ─── Keyframes ─────────────────────────────────────────────────────────── */
+/* Technique: wide+flat ellipses (scaleX 1.4–1.7, scaleY 0.42–0.68) sweep
+   across with skewX for diagonal tilt → genuine wave crest feel.
+   Large translations (±40%) ensure blobs actually travel, not just breathe.
+   Five different speeds create complex interference patterns. */
+
+/* Layer A – slow deep current (24s), sweeps in a wide lazy arc */
+@keyframes website-a {
+  0%   { transform: translate(-44%, -10%) scaleX(1.58) scaleY(0.50) skewX(-5deg); }
+  14%  { transform: translate(-20%,  18%) scaleX(1.28) scaleY(0.72); }
+  28%  { transform: translate(10%,   22%) scaleX(1.55) scaleY(0.52) skewX(4deg); }
+  43%  { transform: translate(40%,    6%) scaleX(1.68) scaleY(0.44); }
+  57%  { transform: translate(32%,  -20%) scaleX(1.42) scaleY(0.62) skewX(-4deg); }
+  71%  { transform: translate(2%,   -26%) scaleX(1.60) scaleY(0.48); }
+  86%  { transform: translate(-30%,  -6%) scaleX(1.45) scaleY(0.60) skewX(3deg); }
+  100% { transform: translate(-44%, -10%) scaleX(1.58) scaleY(0.50) skewX(-5deg); }
+}
+
+/* Layer B – dark void (17s), sweeps opposite to A – punches troughs */
+@keyframes website-b {
+  0%   { transform: translate(46%,  16%) scaleX(1.48) scaleY(0.56) skewX(4deg); }
+  16%  { transform: translate(20%,  -6%) scaleX(1.72) scaleY(0.40); }
+  33%  { transform: translate(-26%,  4%) scaleX(1.44) scaleY(0.60) skewX(-5deg); }
+  50%  { transform: translate(-42%, 20%) scaleX(1.62) scaleY(0.46); }
+  66%  { transform: translate(-14%, 32%) scaleX(1.38) scaleY(0.66) skewX(4deg); }
+  83%  { transform: translate(22%,  22%) scaleX(1.58) scaleY(0.52); }
+  100% { transform: translate(46%,  16%) scaleX(1.48) scaleY(0.56) skewX(4deg); }
+}
+
+/* Layer C – bright crest (13s), medium speed, high contrast sweeps */
+@keyframes website-c {
+  0%   { transform: translate(-36%, 28%) scaleX(1.62) scaleY(0.44) skewX(-6deg); }
+  13%  { transform: translate(-12%, 10%) scaleX(1.32) scaleY(0.68); }
+  26%  { transform: translate(20%,   0%) scaleX(1.66) scaleY(0.42) skewX(5deg); }
+  40%  { transform: translate(38%, -14%) scaleX(1.48) scaleY(0.56); }
+  53%  { transform: translate(22%, -30%) scaleX(1.58) scaleY(0.46) skewX(-4deg); }
+  66%  { transform: translate(-14%, -22%) scaleX(1.36) scaleY(0.64); }
+  80%  { transform: translate(-32%,  2%)  scaleX(1.64) scaleY(0.44) skewX(4deg); }
+  100% { transform: translate(-36%, 28%) scaleX(1.62) scaleY(0.44) skewX(-6deg); }
+}
+
+/* Layer D – diagonal cross-current (19s), moves perpendicular to others */
+@keyframes website-d {
+  0%   { transform: translate(22%, -18%) scaleX(1.46) scaleY(0.58); }
+  20%  { transform: translate(-16%,  0%) scaleX(1.62) scaleY(0.46) skewX(-3deg); }
+  40%  { transform: translate(-34%, 22%) scaleX(1.42) scaleY(0.62) skewX(5deg); }
+  60%  { transform: translate(6%,   32%) scaleX(1.56) scaleY(0.50); }
+  80%  { transform: translate(30%,  14%) scaleX(1.50) scaleY(0.56) skewX(-4deg); }
+  100% { transform: translate(22%, -18%) scaleX(1.46) scaleY(0.58); }
+}
+
+/* Layer E – fast shimmer streak (9s), the "action" element */
+@keyframes website-e {
+  0%   { transform: translate(-50%, -5%)  scaleX(1.80) scaleY(0.35) skewX(-8deg); }
+  20%  { transform: translate(-10%, 15%)  scaleX(1.50) scaleY(0.55) skewX(5deg); }
+  40%  { transform: translate(30%,  10%)  scaleX(1.75) scaleY(0.38) skewX(-6deg); }
+  60%  { transform: translate(45%, -12%)  scaleX(1.55) scaleY(0.50) skewX(4deg); }
+  80%  { transform: translate(10%, -20%)  scaleX(1.70) scaleY(0.40) skewX(-5deg); }
+  100% { transform: translate(-50%, -5%) scaleX(1.80) scaleY(0.35) skewX(-8deg); }
+}
+
+/* Caustic hotspot – fast small shimmer (10s), zips around */
+@keyframes website-caustic {
+  0%   { transform: translate(-22%, -26%) scaleX(1.30) scaleY(0.68); }
+  15%  { transform: translate(28%,  -14%) scaleX(0.88) scaleY(1.12); }
+  30%  { transform: translate(38%,   8%)  scaleX(1.40) scaleY(0.62); }
+  50%  { transform: translate(12%,   30%) scaleX(0.82) scaleY(1.18); }
+  65%  { transform: translate(-20%,  22%) scaleX(1.36) scaleY(0.66); }
+  80%  { transform: translate(-32%,  2%)  scaleX(0.94) scaleY(1.06); }
+  100% { transform: translate(-22%, -26%) scaleX(1.30) scaleY(0.68); }
+}
+
+/* Wave sweep – dramatic horizontal undulation (8s) */
+@keyframes website-wave {
+  0%   { transform: translateX(-22%) scaleX(1.28) skewY(-2.5deg); }
+  25%  { transform: translateX(8%)   scaleX(0.90) skewY(2.0deg);  }
+  50%  { transform: translateX(24%)  scaleX(1.22) skewY(-2.0deg); }
+  75%  { transform: translateX(-6%)  scaleX(0.94) skewY(2.5deg);  }
+  100% { transform: translateX(-22%) scaleX(1.28) skewY(-2.5deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .website-gradient-layer,
+  .website-wave-layer {
+    animation: none !important;
+    transform: none !important;
   }
 }

@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { toOCCSymbol, getValidAccessToken } from "./_schwab-utils";
 
 type OptionInput = {
   underlying: string;
@@ -30,15 +31,6 @@ function parseBody(req: any): OptionInput[] {
   }
 }
 
-/** Build OCC option symbol: 6-char root + YYMMDD + C|P + 8-digit strike (strike * 1000). */
-function toOCCSymbol(opt: OptionInput): string {
-  const root = opt.underlying.trim().toUpperCase().padEnd(6).slice(0, 6);
-  const [y, m, d] = opt.expiry.split("-");
-  const yymmdd = `${y!.slice(-2)}${m}${d}`;
-  const strikeVal = Math.round(opt.strike * 1000);
-  const strikeStr = String(strikeVal).padStart(8, "0");
-  return `${root}${yymmdd}${opt.type}${strikeStr}`;
-}
 
 export default async function handler(req: any, res: any) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -85,71 +77,8 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    const expiresAt =
-      tokenRow.expires_at != null
-        ? new Date(tokenRow.expires_at).getTime()
-        : null;
-    const now = Date.now();
-    const bufferMs = 5 * 60 * 1000;
-    const needsRefresh = expiresAt != null && now >= expiresAt - bufferMs;
-
-    let accessToken = tokenRow.access_token as string;
-
-    if (needsRefresh && tokenRow.refresh_token) {
-      const clientId = process.env.SCHWAB_CLIENT_ID;
-      const clientSecret = process.env.SCHWAB_CLIENT_SECRET;
-      if (!clientId || !clientSecret) {
-        res
-          .status(500)
-          .json({ error: "Server missing Schwab client credentials." });
-        return;
-      }
-      const authHeader = Buffer.from(`${clientId}:${clientSecret}`).toString(
-        "base64"
-      );
-      const refreshBody = new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: tokenRow.refresh_token,
-      });
-      const refreshResp = await fetch(
-        "https://api.schwabapi.com/v1/oauth/token",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-            Authorization: `Basic ${authHeader}`,
-          },
-          body: refreshBody,
-        }
-      );
-      if (!refreshResp.ok) {
-        console.error(
-          "[schwab-option-prices] refresh failed",
-          refreshResp.status
-        );
-        res.status(401).json({
-          error: "Schwab token expired. Run the Schwab login flow again.",
-        });
-        return;
-      }
-      const refreshJson: any = await refreshResp.json();
-      const newExpiresIn =
-        typeof refreshJson.expires_in === "number"
-          ? refreshJson.expires_in
-          : 1800;
-      const newExpiresAt = new Date(now + newExpiresIn * 1000).toISOString();
-      await supabase
-        .from("schwab_tokens")
-        .update({
-          access_token: refreshJson.access_token,
-          expires_at: newExpiresAt,
-          ...(refreshJson.refresh_token != null && {
-            refresh_token: refreshJson.refresh_token,
-          }),
-        })
-        .eq("id", "default");
-      accessToken = refreshJson.access_token;
-    } else if (expiresAt != null && now >= expiresAt) {
+    const accessToken = await getValidAccessToken(supabase, tokenRow);
+    if (!accessToken) {
       res.status(401).json({
         error: "Schwab token expired. Run the Schwab login flow again.",
       });
@@ -162,7 +91,7 @@ export default async function handler(req: any, res: any) {
     for (const opt of inputs) {
       const u = opt.underlying.trim().toUpperCase();
       if (!u) continue;
-      const occ = toOCCSymbol(opt);
+      const occ = toOCCSymbol(opt.underlying, opt.expiry, opt.type, opt.strike);
       occToOpt.set(occ, opt);
     }
 
@@ -207,7 +136,7 @@ export default async function handler(req: any, res: any) {
         }
       }
     }
-    const BATCH = 30;
+    const BATCH = 50;
     let firstResponseBody: any = null;
     for (let i = 0; i < allOCC.length; i += BATCH) {
       const batch = allOCC.slice(i, i + BATCH);

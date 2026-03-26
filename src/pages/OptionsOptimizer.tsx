@@ -1,6 +1,8 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
+import { createPortal } from "react-dom";
 import type { Theme } from "../theme";
 import {
+  getFixedRailsLayoutStyles,
   getPrimaryActionButtonStyle,
   getPrimaryButtonStyle,
   PAGE_LAYOUT,
@@ -11,8 +13,9 @@ import {
   getTooltipIconStyle,
   getTooltipBubbleStyle,
 } from "../theme";
+import { SIDEBAR_WIDTH } from "../components/NavBar";
 
-type OptionsOptimizerProps = { theme: Theme };
+type OptionsOptimizerProps = { theme: Theme; sidebarWidth?: number };
 
 type OptionSide =
   | "PUT - SELL to OPEN"
@@ -243,27 +246,55 @@ type HelpTooltipProps = { theme: Theme; text: string; children: React.ReactNode 
 
 function HelpTooltip({ theme: t, text, children }: HelpTooltipProps) {
   const [open, setOpen] = useState(false);
+  const [mouse, setMouse] = useState<{ x: number; y: number } | null>(null);
+
+  function handleMouseEnter(e: React.MouseEvent) {
+    setMouse({ x: e.clientX, y: e.clientY });
+    setOpen(true);
+  }
+
+  function handleMouseMove(e: React.MouseEvent) {
+    setMouse({ x: e.clientX, y: e.clientY });
+  }
+
+  const tooltipWidth = 280;
+  const offsetY = 22; // gap below cursor — enough to clear the pointer tip
+
+  const left = mouse
+    ? Math.max(8, Math.min(mouse.x - tooltipWidth / 2, window.innerWidth - tooltipWidth - 8))
+    : 0;
+  const top = mouse ? mouse.y + offsetY : 0;
+
   return (
     <span
-      style={{ position: "relative", display: "inline-flex" }}
-      onMouseEnter={() => setOpen(true)}
+      style={{ display: "inline-flex" }}
+      onMouseEnter={handleMouseEnter}
+      onMouseMove={handleMouseMove}
       onMouseLeave={() => setOpen(false)}
-      onFocus={() => setOpen(true)}
+      onFocus={(e) => { setMouse({ x: e.currentTarget.getBoundingClientRect().left, y: e.currentTarget.getBoundingClientRect().bottom }); setOpen(true); }}
       onBlur={() => setOpen(false)}
     >
       {children}
-      {open && (
+      {open && mouse && createPortal(
         <div
           style={{
             ...getTooltipBubbleStyle(t),
-            maxWidth: 560,
-            minWidth: 280,
+            position: "fixed",
+            top,
+            left,
+            marginTop: 0,
+            maxWidth: tooltipWidth,
+            minWidth: 180,
             whiteSpace: "normal",
+            zIndex: 9999,
+            pointerEvents: "none",
+            fontFamily: t.typography.fontFamily,
           }}
           role="tooltip"
         >
           {text}
-        </div>
+        </div>,
+        document.body
       )}
     </span>
   );
@@ -449,10 +480,9 @@ function OptimizerThemeSelect({
   );
 }
 
-export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
+export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: OptionsOptimizerProps) {
   const [portfolioRows, setPortfolioRows] = useState<PortfolioRow[]>([defaultPortfolioRow()]);
   const [portfolioDropdownId, setPortfolioDropdownId] = useState<string | null>(null);
-  const [assignmentAwareRanking, setAssignmentAwareRanking] = useState(false);
   const [otmVariancePct, setOtmVariancePct] = useState(5);
   const [rankedResults, setRankedResults] = useState<RankedResult[] | null>(null);
   const [optimizerTableSort, setOptimizerTableSort] = useState<OptimizerTableSortState>({
@@ -465,6 +495,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [lastAddedTradeId, setLastAddedTradeId] = useState<string | null>(null);
   const [lastCopiedTradeId, setLastCopiedTradeId] = useState<string | null>(null);
+  const [expandedTradeId, setExpandedTradeId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!showOptimizeForModal) return;
@@ -476,7 +507,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
   }, [showOptimizeForModal]);
 
   const addPortfolioRow = useCallback(() => {
-    setPortfolioRows((prev) => [...prev, defaultPortfolioRow()]);
+    setPortfolioRows((prev) => [defaultPortfolioRow(), ...prev]);
   }, []);
 
   const removePortfolioRow = useCallback((id: string) => {
@@ -567,7 +598,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
         body: JSON.stringify({
           portfolioRows,
           otmVariancePct,
-          assignmentAwareRanking,
+          assignmentAwareRanking: true,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -590,7 +621,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
     } finally {
       setOptimizeLoading(false);
     }
-  }, [portfolioRows, otmVariancePct, assignmentAwareRanking]);
+  }, [portfolioRows, otmVariancePct]);
 
   const addToTradeList = useCallback((result: RankedResult) => {
     const trade = { ...result.trade, id: makeId() };
@@ -612,15 +643,6 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
     !!optimizeMessage &&
     (optimizeMessage.includes("Schwab token expired") ||
       optimizeMessage.includes("Not authorized with Schwab"));
-
-  const pageStyle: React.CSSProperties = {
-    maxWidth: PAGE_LAYOUT.maxWidth,
-    width: "100%",
-    margin: "0 auto",
-    fontFamily: t.typography.fontFamily,
-    color: t.colors.text,
-    minHeight: 400,
-  };
 
   const titleStyle: React.CSSProperties = {
     fontWeight: t.typography.headingWeight,
@@ -654,7 +676,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
   };
 
   const labelStyle: React.CSSProperties = {
-    fontSize: "0.75rem",
+    fontSize: "0.72rem",
     color: t.colors.textMuted,
     textTransform: "uppercase" as const,
     letterSpacing: "0.04em",
@@ -691,47 +713,58 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
     color: t.colors.text,
   };
 
+  const fixedRails = getFixedRailsLayoutStyles(t, {
+    sidebarWidth,
+    headerHeight: 104,
+    panelGapPx: Number(t.spacing(3).replace("px", "")),
+  });
+
   return (
-    <section className="options-optimizer-page" style={pageStyle}>
-      <div className="options-optimizer-header-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: PAGE_LAYOUT.titleBlockMarginTop, marginBottom: t.spacing(PAGE_LAYOUT.titleMarginBottom) }}>
-        <h2 style={{ ...titleStyle, margin: 0, lineHeight: 1.3 }}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
-            <span
-              className="material-symbols-outlined"
-              style={{ fontSize: "1.5rem", color: t.colors.secondary, lineHeight: 1, display: "inline-flex" }}
-              aria-hidden
-            >
-              tune
+    <section className="options-optimizer-page" style={fixedRails.page}>
+      <div
+        className="options-optimizer-header-row"
+        style={fixedRails.topHeader}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+          <h2 style={titleStyle}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: "1.5rem", color: t.colors.secondary, lineHeight: 1, display: "inline-flex" }}
+                aria-hidden
+              >
+                tune
+              </span>
+              Options Optimizer
             </span>
-            Options Optimizer
-          </span>
-        </h2>
-        <button
-          type="button"
-          onClick={() => setShowOptimizeForModal(true)}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: 28,
-            height: 28,
-            padding: 0,
-            border: "none",
-            borderRadius: "50%",
-            backgroundColor: "transparent",
-            color: t.colors.secondary,
-            cursor: "pointer",
-            flexShrink: 0,
-            verticalAlign: "middle",
-          }}
-          aria-label="What we optimize for"
-        >
-          <span className="material-symbols-outlined options-optimizer-info-icon" style={{ fontSize: 26 }} aria-hidden>info</span>
-        </button>
+          </h2>
+          <button
+            type="button"
+            onClick={() => setShowOptimizeForModal(true)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 28,
+              height: 28,
+              padding: 0,
+              border: "none",
+              borderRadius: "50%",
+              backgroundColor: "transparent",
+              color: t.colors.secondary,
+              cursor: "pointer",
+              flexShrink: 0,
+              verticalAlign: "middle",
+            }}
+            aria-label="What we optimize for"
+          >
+            <span className="material-symbols-outlined options-optimizer-info-icon" style={{ fontSize: 26 }} aria-hidden>info</span>
+          </button>
+        </div>
+        <p style={{ ...descStyle, marginTop: t.spacing(1), marginBottom: 0 }}>
+          Define the tickers and parameters you want, run Optimize to fetch live options from Schwab, then add ideas to your trade list.
+        </p>
       </div>
-      <p style={descStyle}>
-        Define the tickers and parameters you want, run Optimize to fetch live options from Schwab, then add ideas to your trade list.
-      </p>
 
       {showOptimizeForModal && (
         <>
@@ -759,8 +792,10 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
               backgroundColor: t.colors.surface,
               borderRadius: t.radius.lg,
               padding: t.spacing(5),
-              maxWidth: 420,
+              maxWidth: 560,
               width: "90%",
+              maxHeight: "85vh",
+              overflowY: "auto",
               boxShadow: "0 12px 40px rgba(15, 42, 54, 0.2)",
             }}
           >
@@ -781,12 +816,40 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                 <span className="material-symbols-outlined" style={{ fontSize: 22 }}>close</span>
               </button>
             </div>
-            <ul style={{ margin: 0, paddingLeft: t.spacing(5), color: t.colors.text, fontSize: "0.9rem", lineHeight: 1.7 }}>
-              <li><strong>Income:</strong> We rank options by <strong>annualized yield</strong> so you can find strong premium income ideas quickly.</li>
-              <li><strong>Strike &amp; contracts:</strong> The table shows the <strong>specific options</strong> that score best—each row is a concrete strike, DTE, and size. The better strikes and contract counts are the ones at the top.</li>
-              <li><strong>Assignment-aware ranking:</strong> When enabled, we apply a <strong>put-assignment risk penalty</strong> based on strike-vs-spot distance, so near-the-money/ITM short puts are de-prioritized.</li>
-              <li><strong>OTM Distance %:</strong> Positive means OTM (generally safer for assignment risk); negative means ITM.</li>
-            </ul>
+            <div style={{ color: t.colors.text, fontSize: "0.88rem", lineHeight: 1.75 }}>
+
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>How ranking works</p>
+              <p style={{ marginBottom: t.spacing(2) }}>
+                Each candidate is scored on three factors and sorted highest to lowest:
+              </p>
+              <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
+                <li><strong>Annualized Yield (50%)</strong> — premium ÷ strike notional × (365 ÷ DTE). This is the return on actual capital at risk (cash to cover a short put, or shares for a short call), annualized. Higher is better.</li>
+                <li><strong>Directional Momentum (50% of base)</strong> — the underlying's trailing 1-month return, adjusted for trade direction. Upside helps short puts &amp; long calls; downside helps short calls &amp; long puts. Capped at ±50% so extreme single-month moves don't dominate.</li>
+                <li><strong>Risk adjustment</strong> — for short options, we use <strong>Probability of Profit (PoP)</strong> from the Schwab-quoted delta: <em>PoP = (1 − |delta|) × 100</em>. Options above 70% PoP get a score boost; below 50% (near/in-the-money) get a penalty. When Schwab doesn't return a delta, we fall back to tiered OTM-distance penalties.</li>
+              </ul>
+
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Understanding the columns</p>
+              <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
+                <li><strong>OTM Distance %</strong> — how far the strike is from the current price. Positive = out-of-the-money (safer for assignment); negative = in-the-money.</li>
+                <li><strong>Limit Px</strong> — midpoint of the Schwab bid/ask. This is your target fill price; real fills may differ.</li>
+                <li><strong>Ann. Yield</strong> — annualized yield based on strike notional (see above).</li>
+                <li><strong>PoP</strong> — probability the option expires worthless (you keep the full premium). Derived from delta: higher is better for short options.</li>
+                <li><strong>Premium</strong> — limit price × 100 × contracts. Positive = cash you receive (sell to open); negative = cash you pay (buy to open).</li>
+              </ul>
+
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Trade types</p>
+              <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
+                <li><strong>Sell to Open</strong> — generates premium income. You take on the obligation to buy (put) or sell (call) shares if assigned. The optimizer scores these most often.</li>
+                <li><strong>Buy to Open</strong> — pays premium upfront. Requires directional conviction. The momentum signal is automatically flipped to match your intended direction.</li>
+                <li><strong>Sell/Buy to Close</strong> — exits an existing position. Useful for rolling analysis.</li>
+              </ul>
+
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Assignment-aware ranking</p>
+              <p style={{ marginBottom: 0 }}>
+                Always on. Short puts near or below the current price carry meaningful assignment risk—you could be obligated to buy shares at the strike. The PoP score naturally penalises these by rewarding high-delta-distance (deeply OTM) options. The same logic applies to short calls: ITM calls risk having your position exercised against you.
+              </p>
+
+            </div>
           </div>
         </>
       )}
@@ -796,71 +859,81 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
         className="options-optimizer-card"
         style={{
           ...cardStyle,
-          position: "relative",
-          zIndex: portfolioDropdownId ? 3000 : 2,
+          ...fixedRails.leftRail,
+          borderRadius: 0,
+          border: "none",
+          borderRight: `1px solid ${t.colors.border}`,
+          boxShadow: "none",
+          marginBottom: 0,
+          padding: t.spacing(3),
+          overflow: "visible",
+          display: "flex",
+          flexDirection: "column",
+          zIndex: portfolioDropdownId ? 3000 : 6,
         }}
       >
-        <h3 style={sectionTitleStyle}>Portfolio tickers</h3>
-        <p style={{ fontSize: "0.875rem", color: t.colors.textMuted, marginBottom: t.spacing(3) }}>
-          Enter ticker, type (Qty or Notional), value, and either target DTE or a specific expiry date, plus OTM/ITM %. Optionally set variance to consider a strike range. Then run Optimize.
-        </p>
-        <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(3) }}>
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              alignItems: "flex-end",
-              gap: t.spacing(3),
-              padding: t.spacing(3),
-              backgroundColor: t.colors.background,
-              borderRadius: t.radius.md,
-              border: `1px solid ${t.colors.border}`,
-            }}
-          >
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
-              <HelpTooltip
-                theme={t}
-                text="How wide a strike range to consider around your target OTM/ITM %. For example 5% with 10% target = 5–15% strikes."
-              >
-                <label style={labelStyle}>Variance % (strike range)</label>
-              </HelpTooltip>
-              <input
-                type="number"
-                min={0}
-                max={50}
-                step={1}
-                style={{ ...inputStyle, maxWidth: 90 }}
-                value={otmVariancePct}
-                onChange={(e) => setOtmVariancePct(Number(e.target.value) || 0)}
-                aria-label="Variance percent"
-              />
-            </div>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(1.5), cursor: "pointer", paddingBottom: t.spacing(2) }}>
-              <input
-                type="checkbox"
-                checked={assignmentAwareRanking}
-                onChange={(e) => setAssignmentAwareRanking(e.target.checked)}
-              />
-              <span style={{ fontSize: "0.85rem", color: t.colors.text, fontWeight: 600 }}>Assignment-aware ranking</span>
-            </label>
-            <span style={{ fontSize: "0.8rem", color: t.colors.textMuted, paddingBottom: t.spacing(2) }}>
-              e.g. 5% with 10% target = 5–15% strikes
-            </span>
-          </div>
-          {portfolioRows.map((row) => (
+        <h3 style={sectionTitleStyle}>Inputs</h3>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: t.spacing(3),
+            overflowY: "auto",
+            overflowX: "hidden",
+            flex: 1,
+            scrollbarWidth: "none",
+          }}
+        >
+          {portfolioRows.map((row) => {
+            const rowTicker = row.ticker.trim().toUpperCase();
+            const isOptimized =
+              !!rankedResults &&
+              rankedResults.length > 0 &&
+              rowTicker.length > 0 &&
+              rankedResults.some((r) => r.ticker === rowTicker);
+            return (
             <div
               key={row.id}
               style={{
+                position: "relative",
                 display: "flex",
                 flexWrap: "wrap",
                 alignItems: "flex-end",
                 gap: t.spacing(3),
                 padding: t.spacing(3),
-                backgroundColor: t.colors.background,
+                paddingTop: portfolioRows.length > 1 ? t.spacing(5) : t.spacing(3),
+                backgroundColor: isOptimized
+                  ? `${t.colors.primary}22`
+                  : t.colors.background,
                 borderRadius: t.radius.md,
                 border: `1px solid ${t.colors.border}`,
               }}
             >
+              {portfolioRows.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => removePortfolioRow(row.id)}
+                  style={{
+                    position: "absolute",
+                    top: t.spacing(1.5),
+                    right: t.spacing(1.5),
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 22,
+                    height: 22,
+                    padding: 0,
+                    border: "none",
+                    background: "none",
+                    cursor: "pointer",
+                    color: t.colors.danger,
+                    borderRadius: "50%",
+                  }}
+                  aria-label="Remove row"
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 18 }} aria-hidden>close</span>
+                </button>
+              )}
               <div
                 style={{
                   display: "flex",
@@ -938,72 +1011,61 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                   minWidth={130}
                 />
               </div>
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "flex-start",
-                  gap: t.spacing(1),
-                }}
-              >
-                <HelpTooltip
-                  theme={t}
-                  text="Qty = number of contracts. Notional = target dollar amount of underlying shares at strike."
-                >
-                  <label style={labelStyle}>Type</label>
-                </HelpTooltip>
-                <OptimizerThemeSelect
-                  theme={t}
-                  value={row.type}
-                  options={[
-                    { value: "Qty", label: "Qty" },
-                    { value: "Notional", label: "Notional" },
-                  ]}
-                  onChange={(v) => updatePortfolioRow(row.id, "type", v as "Qty" | "Notional")}
-                  dropdownKey={`${row.id}-type`}
-                  openId={portfolioDropdownId}
-                  setOpenId={setPortfolioDropdownId}
-                  minWidth={90}
-                />
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "flex-start",
-                  gap: t.spacing(1),
-                }}
-              >
-                <HelpTooltip
-                  theme={t}
-                  text="If Type is Qty, this is contracts. If Notional, this is target notional of underlying at strike."
-                >
-                  <label style={labelStyle}>Value</label>
-                </HelpTooltip>
-                {row.type === "Notional" ? (
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    style={inputStyle}
-                    value={row.value > 0 ? Math.round(row.value).toLocaleString("en-US") : ""}
-                    onChange={(e) => {
-                      const digits = e.target.value.replace(/[^\d]/g, "");
-                      updatePortfolioRow(row.id, "value", digits ? Number(digits) : 0);
-                    }}
-                    placeholder="0"
-                    aria-label="Value"
+              {/* Type + Value side-by-side */}
+              <div style={{ display: "flex", gap: t.spacing(2), alignItems: "flex-end" }}>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
+                  <HelpTooltip
+                    theme={t}
+                    text="Qty = number of contracts. Notional = target dollar amount of underlying shares at strike."
+                  >
+                    <label style={labelStyle}>Type</label>
+                  </HelpTooltip>
+                  <OptimizerThemeSelect
+                    theme={t}
+                    value={row.type}
+                    options={[
+                      { value: "Qty", label: "Qty" },
+                      { value: "Notional", label: "Notional" },
+                    ]}
+                    onChange={(v) => updatePortfolioRow(row.id, "type", v as "Qty" | "Notional")}
+                    dropdownKey={`${row.id}-type`}
+                    openId={portfolioDropdownId}
+                    setOpenId={setPortfolioDropdownId}
+                    minWidth={90}
                   />
-                ) : (
-                  <input
-                    type="number"
-                    min={0}
-                    style={inputStyle}
-                    value={row.value || ""}
-                    onChange={(e) => updatePortfolioRow(row.id, "value", Number(e.target.value) || 0)}
-                    placeholder="0"
-                    aria-label="Value"
-                  />
-                )}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
+                  <HelpTooltip
+                    theme={t}
+                    text="If Type is Qty, this is contracts. If Notional, this is target notional of underlying at strike."
+                  >
+                    <label style={labelStyle}>Value</label>
+                  </HelpTooltip>
+                  {row.type === "Notional" ? (
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      style={{ ...inputStyle, maxWidth: 90 }}
+                      value={row.value > 0 ? Math.round(row.value).toLocaleString("en-US") : ""}
+                      onChange={(e) => {
+                        const digits = e.target.value.replace(/[^\d]/g, "");
+                        updatePortfolioRow(row.id, "value", digits ? Number(digits) : 0);
+                      }}
+                      placeholder="0"
+                      aria-label="Value"
+                    />
+                  ) : (
+                    <input
+                      type="number"
+                      min={0}
+                      style={{ ...inputStyle, maxWidth: 90 }}
+                      value={row.value || ""}
+                      onChange={(e) => updatePortfolioRow(row.id, "value", Number(e.target.value) || 0)}
+                      placeholder="0"
+                      aria-label="Value"
+                    />
+                  )}
+                </div>
               </div>
               <div
                 style={{
@@ -1067,58 +1129,69 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                   )}
                 </div>
               </div>
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "flex-start",
-                  gap: t.spacing(1),
-                }}
-              >
-                <HelpTooltip
-                  theme={t}
-                  text="Whether you want strikes out of the money (OTM) or in the money (ITM) relative to current price."
-                >
-                  <label style={labelStyle}>OTM / ITM</label>
-                </HelpTooltip>
-                <OptimizerThemeSelect
-                  theme={t}
-                  value={row.moneyness ?? "OTM"}
-                  options={[
-                    { value: "OTM", label: "OTM" },
-                    { value: "ITM", label: "ITM" },
-                  ]}
-                  onChange={(v) => updatePortfolioRow(row.id, "moneyness", v as "OTM" | "ITM")}
-                  dropdownKey={`${row.id}-moneyness`}
-                  openId={portfolioDropdownId}
-                  setOpenId={setPortfolioDropdownId}
-                  minWidth={90}
-                />
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "flex-start",
-                  gap: t.spacing(1),
-                }}
-              >
-                <HelpTooltip
-                  theme={t}
-                  text="How far OTM or ITM you want the strike, as a percent of current price."
-                >
-                  <label style={labelStyle}>{row.moneyness ?? "OTM"} %</label>
-                </HelpTooltip>
-                <input
-                  type="number"
-                  min={0}
-                  step={0.5}
-                  style={{ ...inputStyle, maxWidth: 70 }}
-                  value={row.otmPct || ""}
-                  onChange={(e) => updatePortfolioRow(row.id, "otmPct", Number(e.target.value) || 0)}
-                  placeholder="10"
-                  aria-label={`${row.moneyness} percent`}
-                />
+              {/* OTM/ITM · OTM % · Variance % — all on one row */}
+              <div style={{ display: "flex", gap: t.spacing(2), alignItems: "flex-end" }}>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
+                  <HelpTooltip
+                    theme={t}
+                    text="Whether you want strikes out of the money (OTM) or in the money (ITM) relative to current price."
+                  >
+                    <label style={labelStyle}>OTM / ITM</label>
+                  </HelpTooltip>
+                  <OptimizerThemeSelect
+                    theme={t}
+                    value={row.moneyness ?? "OTM"}
+                    options={[
+                      { value: "OTM", label: "OTM" },
+                      { value: "ITM", label: "ITM" },
+                    ]}
+                    onChange={(v) => updatePortfolioRow(row.id, "moneyness", v as "OTM" | "ITM")}
+                    dropdownKey={`${row.id}-moneyness`}
+                    openId={portfolioDropdownId}
+                    setOpenId={setPortfolioDropdownId}
+                    minWidth={72}
+                  />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
+                  <HelpTooltip
+                    theme={t}
+                    text="How far OTM or ITM you want the strike, as a percent of current price."
+                  >
+                    <label style={labelStyle}>{row.moneyness ?? "OTM"}</label>
+                  </HelpTooltip>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    style={{ ...inputStyle, maxWidth: 62, minWidth: 52 }}
+                    value={row.otmPct > 0 ? `${row.otmPct}%` : ""}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(/%/g, "");
+                      updatePortfolioRow(row.id, "otmPct", Number(raw) || 0);
+                    }}
+                    placeholder="0%"
+                    aria-label={`${row.moneyness} percent`}
+                  />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
+                  <HelpTooltip
+                    theme={t}
+                    text="How wide a strike range to search around your OTM/ITM target."
+                  >
+                    <label style={labelStyle}>Variance</label>
+                  </HelpTooltip>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    style={{ ...inputStyle, maxWidth: 62, minWidth: 52 }}
+                    value={otmVariancePct > 0 ? `${otmVariancePct}%` : ""}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(/%/g, "");
+                      setOtmVariancePct(Number(raw) || 0);
+                    }}
+                    placeholder="0%"
+                    aria-label="Variance percent"
+                  />
+                </div>
               </div>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
                 <HelpTooltip
@@ -1140,31 +1213,36 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                   aria-label="Monthly expiration only"
                 />
               </div>
-              {portfolioRows.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => removePortfolioRow(row.id)}
-                  style={{ ...secondaryBtnStyle, padding: `${t.spacing(1)} ${t.spacing(2)}`, fontSize: "0.8rem" }}
-                  aria-label="Remove row"
-                >
-                  Remove
-                </button>
-              )}
             </div>
-          ))}
+            );
+          })}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: t.spacing(3), marginTop: t.spacing(3), flexWrap: "wrap" }}>
+        <div
+          style={{
+            marginTop: t.spacing(3),
+            borderTop: `1px solid ${t.colors.border}`,
+            paddingTop: t.spacing(3),
+            display: "flex",
+            flexDirection: "column",
+            gap: t.spacing(2),
+            backgroundColor: t.colors.surface,
+          }}
+        >
+          <button type="button" style={{ ...secondaryBtnStyle, width: "100%" }} onClick={addPortfolioRow}>
+            + Add Contract
+          </button>
           <button
             type="button"
             style={{
               ...primaryBtn,
+              width: "100%",
               display: "inline-flex",
               alignItems: "center",
-              gap: t.spacing(2),
+              justifyContent: "center",
             }}
             onClick={runOptimize}
             disabled={optimizeLoading}
-            aria-label="Optimize portfolio"
+            aria-label="Optimize Portfolio"
           >
             {optimizeLoading ? (
               <>
@@ -1172,35 +1250,28 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                 Optimizing…
               </>
             ) : (
-              <>
-                Optimize portfolio
-                <span className="material-symbols-outlined" style={{ fontSize: 20 }} aria-hidden>
-                  auto_fix_high
-                </span>
-              </>
+              "Optimize Portfolio"
             )}
           </button>
-          <button type="button" style={secondaryBtnStyle} onClick={addPortfolioRow}>
-            + Add contract
-          </button>
+          {optimizeMessage && (
+            <p style={{ margin: 0, fontSize: "0.85rem", color: t.colors.danger }}>
+              {optimizeMessage}{" "}
+              {showSchwabAuthHint && (
+                <a
+                  href={`${SCHWAB_API_BASE}/api/schwab-auth`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: t.colors.primary, fontWeight: t.typography.headingWeight }}
+                >
+                  Click here to reauthorize Schwab and refresh the token.
+                </a>
+              )}
+            </p>
+          )}
         </div>
-        {optimizeMessage && (
-          <p style={{ marginTop: t.spacing(3), fontSize: "0.875rem", color: t.colors.danger }}>
-            {optimizeMessage}{" "}
-            {showSchwabAuthHint && (
-              <a
-                href={`${SCHWAB_API_BASE}/api/schwab-auth`}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{ color: t.colors.primary, fontWeight: t.typography.headingWeight }}
-              >
-                Click here to reauthorize Schwab and refresh the token.
-              </a>
-            )}
-          </p>
-        )}
       </div>
 
+      <div style={fixedRails.contentWrap}>
       {/* —— Ranked results —— */}
       {rankedResults && (
         <div
@@ -1211,11 +1282,11 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
             zIndex: 1,
           }}
         >
-          <h3 style={sectionTitleStyle}>Ranked results (yield + upside)</h3>
+          <h3 style={sectionTitleStyle}>Ranked results (yield + upside + risk)</h3>
           <p style={{ fontSize: "0.875rem", color: t.colors.textMuted, marginBottom: t.spacing(2) }}>
             Best options by combined yield and underlying upside. Add any row to your trade list below.{" "}
             <strong>Tip:</strong> click <strong>Maturity</strong>, <strong>Strike</strong>, <strong>OTM Distance %</strong>,{" "}
-            <strong>Limit Px</strong>, <strong>Ann. Yield</strong>, or <strong>Premium / contract</strong> to cycle sort: default
+                    <strong>Limit Px</strong>, <strong>Ann. Yield</strong>, or <strong>Premium</strong> to cycle sort: default
             order → ascending → descending.
           </p>
           {rankedResults.length > 0 && (
@@ -1276,8 +1347,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                     tableSort={optimizerTableSort}
                     onCycle={cycleOptimizerTableSort}
                     label="OTM Distance %"
-                    textAlign="right"
-                    helpText="OTM Distance % measures how far strike is from spot in the favorable direction. Positive = OTM, negative = ITM."
+                    textAlign="center"
                   />
                   <SortableOptimizerTh
                     theme={t}
@@ -1285,8 +1355,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                     tableSort={optimizerTableSort}
                     onCycle={cycleOptimizerTableSort}
                     label="Limit Px"
-                    textAlign="right"
-                    helpText="Limit Px uses the desk model: midpoint × 92%, where midpoint = (bid + ask) / 2. This modeled execution price drives premium and yield calculations."
+                    textAlign="center"
                   />
                   <SortableOptimizerTh
                     theme={t}
@@ -1294,15 +1363,22 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                     tableSort={optimizerTableSort}
                     onCycle={cycleOptimizerTableSort}
                     label="Ann. Yield"
-                    textAlign="right"
-                    helpText="Ann. Yield is annualized from yield at current underlying price (not strike): (modeled premium / current underlying value) × (365 / days to maturity)."
+                    textAlign="center"
                   />
+                  <th style={{ textAlign: "center", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
+                    <HelpTooltip
+                      theme={t}
+                      text="Probability of Profit = (1 − |delta|) × 100. Delta is sourced from the Schwab option quote. For a short option, |delta| ≈ probability of expiring in-the-money (against you), so 1 − |delta| is the probability of keeping the full premium."
+                    >
+                      <span style={{ cursor: "help" }}>PoP</span>
+                    </HelpTooltip>
+                  </th>
                   <SortableOptimizerTh
                     theme={t}
                     sortKey="premiumPerContract"
                     tableSort={optimizerTableSort}
                     onCycle={cycleOptimizerTableSort}
-                    label="Premium / contract"
+                    label="Premium"
                     textAlign="center"
                   />
                   <th style={{ textAlign: "center", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600, borderTopRightRadius: t.radius.md }}>Action</th>
@@ -1350,7 +1426,7 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                     <td
                       style={{
                         padding: t.spacing(2),
-                        textAlign: "right",
+                        textAlign: "center",
                         color: (() => {
                           const spot = r.trade.currentPrice;
                           if (!Number.isFinite(spot) || spot <= 0) return t.colors.textMuted;
@@ -1373,9 +1449,14 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
                         return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
                       })()}
                     </td>
-                    <td style={{ padding: t.spacing(2), textAlign: "right" }}>${r.limitPrice.toFixed(2)}</td>
-                    <td style={{ padding: t.spacing(2), textAlign: "right", color: t.colors.success, fontWeight: 600 }}>
+                    <td style={{ padding: t.spacing(2), textAlign: "center" }}>${r.limitPrice.toFixed(2)}</td>
+                    <td style={{ padding: t.spacing(2), textAlign: "center", color: t.colors.success, fontWeight: 600 }}>
                       {r.annYield}%
+                    </td>
+                    <td style={{ padding: t.spacing(2), textAlign: "center", fontWeight: 600, color: t.colors.textMuted }}>
+                      {r.delta != null
+                        ? `${((1 - Math.abs(r.delta)) * 100).toFixed(0)}%`
+                        : "—"}
                     </td>
                     <td
                       style={{
@@ -1506,27 +1587,20 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
         </div>
       )}
 
-      {/* —— Trade list —— */}
-      <div
-        className="options-optimizer-card"
-        style={{
-          ...cardStyle,
-          position: "relative",
-          zIndex: 1,
-        }}
-      >
-        <h3 style={sectionTitleStyle}>Trade list</h3>
-        <div style={{ display: "flex", alignItems: "center", gap: t.spacing(3), marginBottom: t.spacing(4), flexWrap: "wrap" }}>
-          {trades.length > 0 && (
-            <span style={{ fontSize: "0.875rem", color: t.colors.textMuted }}>
-              {trades.length} trade{trades.length !== 1 ? "s" : ""}
-            </span>
-          )}
-        </div>
-
-        {trades.length === 0 && (
+      {!rankedResults && (
+        <div
+          className="options-optimizer-card"
+          style={{
+            ...cardStyle,
+            position: "relative",
+            zIndex: 1,
+            padding: t.spacing(5),
+          }}
+        >
+          <h3 style={sectionTitleStyle}>Ranked results (yield + upside + risk)</h3>
           <div
             style={{
+              marginTop: t.spacing(3),
               padding: t.spacing(6),
               textAlign: "center",
               color: t.colors.textMuted,
@@ -1535,177 +1609,15 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
               backgroundColor: t.colors.background,
             }}
           >
-            <p style={{ margin: 0, fontSize: "0.95rem" }}>
-              No trades yet. Run Optimize above, then use “Add to list” on any ranked result.
-            </p>
+            Run Optimize to see ranked options candidates here.
           </div>
-        )}
-
-        {trades.map((tr) => (
-          <div
-            key={tr.id}
-            style={{
-              ...cardStyle,
-              padding: t.spacing(4),
-              marginBottom: t.spacing(4),
-              backgroundColor: t.colors.background,
-              border: `1px solid ${t.colors.border}`,
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: t.spacing(2) }}>
-              <div style={{ display: "flex", alignItems: "center", gap: t.spacing(3), flexWrap: "wrap" }}>
-                <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(0.5) }}>
-                  <span style={{ fontSize: "1.125rem", fontWeight: 600, color: t.colors.text }}>{tr.ticker}</span>
-                  <span style={{ fontSize: "0.8rem", color: t.colors.textMuted }}>
-                    {TICKER_TO_COMPANY[tr.ticker] ?? tr.ticker}
-                  </span>
-                </div>
-                <span
-                  style={{
-                    fontSize: "0.8rem",
-                    padding: `${t.spacing(0.5)} ${t.spacing(2)}`,
-                    borderRadius: t.radius.sm,
-                    backgroundColor: tr.optionSide.includes("PUT")
-                      ? "rgba(34, 197, 94, 0.12)" // green-ish for puts
-                      : tr.optionSide.includes("SELL")
-                        ? "rgba(234, 179, 8, 0.14)" // amber for call writes
-                        : "rgba(59, 130, 246, 0.14)", // blue for call buys
-                    color: t.colors.text,
-                  }}
-                >
-                  {tr.optionSide}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => removeTrade(tr.id)}
-                style={{ ...secondaryBtnStyle, padding: `${t.spacing(1)} ${t.spacing(2)}`, fontSize: "0.8rem" }}
-                aria-label="Remove trade"
-              >
-                Remove
-              </button>
-            </div>
-            <div style={{ marginBottom: t.spacing(3), fontSize: "0.8rem" }}>
-              <div style={labelStyle}>Schwab symbol</div>
-              <div style={{ fontFamily: "monospace", color: t.colors.text }}>{formatSchwabSymbol(tr)}</div>
-            </div>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
-                gap: t.spacing(4),
-              }}
-            >
-              {/* Economics first */}
-              <div>
-                <div style={labelStyle}>Premium</div>
-                <div
-                  style={{
-                    ...valueStyle,
-                    fontSize: "1.05rem",
-                    fontWeight: 600,
-                    color: tr.premiumReceived >= 0 ? t.colors.success : t.colors.danger,
-                  }}
-                >
-                  {formatMoney(tr.premiumReceived)}
-                </div>
-              </div>
-              <div>
-                <div style={labelStyle}>Annualized yield</div>
-                <div
-                  style={{
-                    ...valueStyle,
-                    fontSize: "1.05rem",
-                    fontWeight: 600,
-                    color:
-                      tr.annualizedYieldPct >= 15
-                        ? t.colors.success
-                        : tr.annualizedYieldPct < 10
-                          ? t.colors.danger
-                          : t.colors.text,
-                  }}
-                >
-                  {tr.annualizedYieldPct}%
-                </div>
-              </div>
-              <div>
-                <div style={labelStyle}>Yield</div>
-                <div style={valueStyle}>{tr.yieldAtCurrentPrice}%</div>
-              </div>
-              <div>
-                <div style={labelStyle}>Contracts</div>
-                <div style={valueStyle}>{tr.contracts}</div>
-              </div>
-
-              {/* Structure and risk */}
-              <div>
-                <div style={labelStyle}>Maturity</div>
-                <div style={valueStyle}>{tr.maturity}</div>
-              </div>
-              <div>
-                <div style={labelStyle}>Days to maturity</div>
-                <div style={valueStyle}>{tr.daysToMaturity}</div>
-              </div>
-              <div>
-                <div style={labelStyle}>Strike</div>
-                <div style={valueStyle}>${tr.strikePrice.toFixed(2)}</div>
-              </div>
-              <div>
-                <div style={labelStyle}>Current price</div>
-                <div style={valueStyle}>${tr.currentPrice.toFixed(2)}</div>
-              </div>
-              <div>
-                <div style={labelStyle}>Moneyness</div>
-                <div style={valueStyle}>{tr.moneynessPct}%</div>
-              </div>
-              <div>
-                <div style={labelStyle}>Value of shares at strike</div>
-                <div style={valueStyle}>{formatNotionalCompact(tr.valueOfSharesAtStrike)}</div>
-              </div>
-
-              {/* Execution details */}
-              <div>
-                <div style={labelStyle}>Limit price</div>
-                <div style={{ ...valueStyle, color: t.colors.primary }}>${tr.optionLimitPrice.toFixed(2)}</div>
-              </div>
-              <div>
-                <div style={labelStyle}>Bid / Ask</div>
-                <div style={valueStyle}>${tr.currentBid.toFixed(2)} / ${tr.currentAsk.toFixed(2)}</div>
-              </div>
-            </div>
-          </div>
-        ))}
-
-        {trades.length > 0 && (
-          <div style={{ marginTop: t.spacing(4), paddingTop: t.spacing(4), borderTop: `1px solid ${t.colors.border}` }}>
-            <div style={{ ...labelStyle, marginBottom: t.spacing(2) }}>Summary</div>
-            <div style={{ display: "flex", gap: t.spacing(6), flexWrap: "wrap" }}>
-              <div>
-                <div style={labelStyle}>Total premium</div>
-                <div
-                  style={{
-                    fontSize: "1.25rem",
-                    fontWeight: 600,
-                    color: summaryPremium >= 0 ? t.colors.success : t.colors.danger,
-                  }}
-                >
-                  {formatMoneyFull(summaryPremium)}
-                </div>
-              </div>
-              <div>
-                <div style={labelStyle}>Total notional at strike</div>
-                <div style={{ fontSize: "1.25rem", fontWeight: 600, color: t.colors.text }}>
-                  {formatMoneyFull(summaryTotal)}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
+        </div>
+      )}
       <footer
         style={{
           marginTop: t.spacing(6),
           paddingTop: t.spacing(3),
+          paddingBottom: t.spacing(6),
           borderTop: `1px solid ${t.colors.border}`,
           fontSize: "0.75rem",
           color: t.colors.textMuted,
@@ -1729,6 +1641,155 @@ export function OptionsOptimizer({ theme: t }: OptionsOptimizerProps) {
           </span>
         )}
       </footer>
+      </div>
+
+      <aside style={fixedRails.rightRail}>
+        <div
+          className="page-card"
+          style={{
+            margin: 0,
+            borderRadius: 0,
+            border: "none",
+            borderLeft: `1px solid ${t.colors.border}`,
+            boxShadow: "none",
+            padding: t.spacing(3),
+            display: "flex",
+            flexDirection: "column",
+            gap: t.spacing(2),
+            height: "100%",
+          }}
+        >
+          <h3 style={{ ...sectionTitleStyle, marginBottom: t.spacing(1) }}>Trade list</h3>
+          {trades.length > 0 && (
+            <span style={{ fontSize: "0.875rem", color: t.colors.textMuted }}>
+              {trades.length} trade{trades.length !== 1 ? "s" : ""}
+            </span>
+          )}
+          <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(2), overflowY: "auto", flex: 1, paddingRight: t.spacing(1) }}>
+            {trades.length === 0 && (
+              <div
+                style={{
+                  marginTop: t.spacing(1),
+                  padding: t.spacing(4),
+                  textAlign: "center",
+                  color: t.colors.textMuted,
+                  border: `1px dashed ${t.colors.border}`,
+                  borderRadius: t.radius.md,
+                  backgroundColor: t.colors.background,
+                  fontSize: "0.9rem",
+                }}
+              >
+                No trades yet. Add rows from Ranked results.
+              </div>
+            )}
+            {trades.map((tr) => {
+              const isExpanded = expandedTradeId === tr.id;
+              return (
+                <div
+                  key={tr.id}
+                  style={{
+                    marginTop: t.spacing(1),
+                    border: `1px solid ${t.colors.border}`,
+                    borderRadius: t.radius.md,
+                    backgroundColor: t.colors.background,
+                  }}
+                >
+                  {/* Compact header row — always visible, click to expand */}
+                  <button
+                    type="button"
+                    onClick={() => setExpandedTradeId(isExpanded ? null : tr.id)}
+                    style={{
+                      width: "100%",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: t.spacing(2),
+                      padding: t.spacing(2),
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                    aria-expanded={isExpanded}
+                  >
+                    <div>
+                      <div style={{ fontSize: "0.95rem", fontWeight: 600, color: t.colors.text }}>{tr.ticker}</div>
+                      <div style={{ fontSize: "0.75rem", color: t.colors.textMuted }}>{tr.optionSide}</div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: t.spacing(1.5), flexShrink: 0 }}>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: "0.8rem", fontWeight: 600, color: tr.premiumReceived >= 0 ? t.colors.success : t.colors.danger }}>{formatMoney(tr.premiumReceived)}</div>
+                        <div style={{ fontSize: "0.7rem", color: t.colors.textMuted }}>{tr.annualizedYieldPct}% ann.</div>
+                      </div>
+                      <span
+                        className="material-symbols-outlined"
+                        style={{ fontSize: 18, color: t.colors.textMuted, transition: "transform 0.15s", transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)" }}
+                        aria-hidden
+                      >
+                        expand_more
+                      </span>
+                    </div>
+                  </button>
+
+                  {/* Expanded detail */}
+                  {isExpanded && (
+                    <div style={{ padding: `0 ${t.spacing(2)} ${t.spacing(2)}`, borderTop: `1px solid ${t.colors.border}` }}>
+                      <div style={{ marginBottom: t.spacing(2), fontSize: "0.75rem", paddingTop: t.spacing(2) }}>
+                        <div style={labelStyle}>Schwab symbol</div>
+                        <div style={{ fontFamily: "monospace", color: t.colors.text, fontSize: "0.8rem" }}>{formatSchwabSymbol(tr)}</div>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: `${t.spacing(2)} ${t.spacing(3)}` }}>
+                        <div><div style={labelStyle}>Maturity</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{tr.maturity}</div></div>
+                        <div><div style={labelStyle}>DTE</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{tr.daysToMaturity}</div></div>
+                        <div><div style={labelStyle}>Strike</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>${tr.strikePrice.toFixed(2)}</div></div>
+                        <div><div style={labelStyle}>Spot</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>${tr.currentPrice.toFixed(2)}</div></div>
+                        <div><div style={labelStyle}>Limit Px</div><div style={{ fontSize: "0.8rem", color: t.colors.primary }}>${tr.optionLimitPrice.toFixed(2)}</div></div>
+                        <div><div style={labelStyle}>Bid / Ask</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>${tr.currentBid.toFixed(2)} / ${tr.currentAsk.toFixed(2)}</div></div>
+                        <div><div style={labelStyle}>Contracts</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{tr.contracts}</div></div>
+                        <div><div style={labelStyle}>Moneyness</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{tr.moneynessPct}%</div></div>
+                        <div><div style={labelStyle}>Yield</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{tr.yieldAtCurrentPrice}%</div></div>
+                        <div><div style={labelStyle}>Notional</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{formatNotionalCompact(tr.valueOfSharesAtStrike)}</div></div>
+                      </div>
+                      <div style={{ marginTop: t.spacing(2), display: "flex", justifyContent: "center" }}>
+                        <button
+                          type="button"
+                          onClick={() => removeTrade(tr.id)}
+                          style={{ ...secondaryBtnStyle, padding: `${t.spacing(0.5)} ${t.spacing(3)}`, fontSize: "0.75rem", color: t.colors.danger, borderColor: t.colors.danger }}
+                          aria-label="Remove trade"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {trades.length > 0 && (
+            <div
+              style={{
+                marginTop: t.spacing(2),
+                paddingTop: t.spacing(2),
+                borderTop: `1px solid ${t.colors.border}`,
+                backgroundColor: t.colors.surface,
+                position: "sticky",
+                bottom: 0,
+              }}
+            >
+              <div style={{ fontSize: "0.75rem", color: t.colors.textMuted, marginBottom: t.spacing(1) }}>Summary</div>
+              <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, textTransform: "uppercase", letterSpacing: "0.04em" }}>Total premium</div>
+              <div style={{ fontSize: "1.15rem", fontWeight: 700, color: summaryPremium >= 0 ? t.colors.success : t.colors.danger, marginBottom: t.spacing(1.5) }}>
+                {formatMoneyFull(summaryPremium)}
+              </div>
+              <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, textTransform: "uppercase", letterSpacing: "0.04em" }}>Total notional</div>
+              <div style={{ fontSize: "1.05rem", fontWeight: 600, color: t.colors.text }}>
+                {formatMoneyFull(summaryTotal)}
+              </div>
+            </div>
+          )}
+        </div>
+      </aside>
     </section>
   );
 }

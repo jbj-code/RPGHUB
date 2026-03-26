@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { toOCCSymbol, getValidAccessToken } from "./_schwab-utils";
 
 type BuilderRowInput = {
   ticker: string;
@@ -29,19 +30,6 @@ type BuilderRowOutput = {
   valueOfSharesAtStrike: number;
 };
 
-function toOCCSymbol(
-  underlying: string,
-  expiry: string,
-  type: "C" | "P",
-  strike: number
-): string {
-  const root = underlying.trim().toUpperCase().padEnd(6).slice(0, 6);
-  const [y, m, d] = expiry.split("-");
-  const yymmdd = `${y!.slice(-2)}${m}${d}`;
-  const strikeVal = Math.round(strike * 1000);
-  const strikeStr = String(strikeVal).padStart(8, "0");
-  return `${root}${yymmdd}${type}${strikeStr}`;
-}
 
 export default async function handler(req: any, res: any) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -77,7 +65,7 @@ export default async function handler(req: any, res: any) {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const { data: tokenRow } = await supabase
       .from("schwab_tokens")
-      .select("access_token")
+      .select("access_token, refresh_token, expires_at")
       .eq("id", "default")
       .single();
 
@@ -89,7 +77,13 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    const accessToken = tokenRow.access_token as string;
+    const accessToken = await getValidAccessToken(supabase, tokenRow);
+    if (!accessToken) {
+      res.status(401).json({
+        error: "Schwab token expired. Run the Schwab login flow again.",
+      });
+      return;
+    }
 
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);

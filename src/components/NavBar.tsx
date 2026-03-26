@@ -145,7 +145,6 @@ export function NavBar({
       label: "Assignment Check",
       icon: "schedule",
     },
-    { page: "graph-tool", label: "Graph Tool", icon: "show_chart" },
     { page: "email-crm", label: "Email CRM", icon: "contacts" },
     { page: "todos", label: "To-Dos", icon: "checklist" },
     {
@@ -160,6 +159,7 @@ export function NavBar({
       icon: "rocket_launch",
       externalUrl: "https://lookerstudio.google.com/s/vnU0N-aINPg",
     },
+    { page: "website", label: "Website", icon: "language" },
   ];
 
   return (

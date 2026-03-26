@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import type { Theme } from "../theme";
-import { getPrimaryActionButtonStyle, getPrimaryButtonStyle, PAGE_LAYOUT } from "../theme";
+import {
+  getFixedRailsLayoutStyles,
+  getPrimaryActionButtonStyle,
+  getPrimaryButtonStyle,
+  PAGE_LAYOUT,
+} from "../theme";
+import { SIDEBAR_WIDTH } from "../components/NavBar";
 
-type StockComparisonProps = { theme: Theme };
+type StockComparisonProps = { theme: Theme; sidebarWidth?: number };
 
 const TIMEFRAMES = ["1D", "1W", "1M", "3M", "6M", "1Y", "YTD"] as const;
 
@@ -34,7 +40,7 @@ const BENCHMARKS: Benchmark[] = [
   { symbol: "IBIT", label: "IBIT", description: "iShares Bitcoin Trust" },
 ];
 
-export function StockComparison({ theme: t }: StockComparisonProps) {
+export function StockComparison({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: StockComparisonProps) {
   const [tickers, setTickers] = useState<string[]>([]);
   const [tickerInput, setTickerInput] = useState("");
   const [lookbacks, setLookbacks] = useState<Set<string>>(new Set(TIMEFRAMES));
@@ -64,15 +70,13 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
     ...Array.from(selectedBenchmarks).filter((b) => !tickers.includes(b)),
   ];
 
-  const pageStyle: React.CSSProperties = {
-    maxWidth: PAGE_LAYOUT.maxWidth,
-    width: "100%",
-    margin: "0 auto",
-    fontFamily: t.typography.fontFamily,
-    color: t.colors.text,
-    minHeight: 400,
-    display: "block",
-  };
+  const fixedRails = getFixedRailsLayoutStyles(t, {
+    sidebarWidth,
+    leftRailWidth: 286,
+    rightRailWidth: 256,
+    headerHeight: 104,
+    panelGapPx: Number(t.spacing(3).replace("px", "")),
+  });
 
   const titleStyle: React.CSSProperties = {
     fontWeight: t.typography.headingWeight,
@@ -91,7 +95,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
   const cardStyle: React.CSSProperties = {
     backgroundColor: t.colors.surface,
     borderRadius: t.radius.lg,
-    padding: `${t.spacing(3)} ${t.spacing(5)} ${t.spacing(5)}`,
+    padding: `${t.spacing(3)} ${t.spacing(3)} ${t.spacing(4)}`,
     marginBottom: t.spacing(4),
     boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
     border: `1px solid ${t.colors.border}`,
@@ -122,7 +126,6 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
     padding: `${t.spacing(3)} ${t.spacing(4)}`,
     marginBottom: t.spacing(4),
     alignSelf: "stretch",
-    height: "100%",
   };
 
   const labelStyle: React.CSSProperties = {
@@ -133,7 +136,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
 
   const inputStyle: React.CSSProperties = {
     width: "100%",
-    maxWidth: 160,
+    maxWidth: 132,
     padding: `${t.spacing(2)} ${t.spacing(3)}`,
     fontSize: t.typography.baseFontSize,
     border: `1px solid ${t.colors.border}`,
@@ -409,38 +412,45 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
     <section
       className="stock-comparison-page"
       style={{
-        ...pageStyle,
+        ...fixedRails.page,
         ["--checkbox-primary" as string]: t.colors.primary,
         ["--input-border" as string]: t.colors.border,
       }}
     >
-      <h2 style={titleStyle}>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
-          <span
-            className="material-symbols-outlined"
-            style={{ fontSize: "1.5rem", color: t.colors.secondary, lineHeight: 1, display: "inline-flex" }}
-            aria-hidden
-          >
-            compare_arrows
+      <div style={fixedRails.topHeader}>
+        <h2 style={titleStyle}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: "1.5rem", color: t.colors.secondary, lineHeight: 1, display: "inline-flex" }}
+              aria-hidden
+            >
+              compare_arrows
+            </span>
+            Stock Comparison
           </span>
-          Stock Comparison
-        </span>
-      </h2>
-      <p style={descStyle}>
-        Compare returns across multiple tickers using live Schwab market data. Add symbols to see returns and choose which timeframes to show.
-      </p>
+        </h2>
+        <p style={{ ...descStyle, marginTop: t.spacing(1), marginBottom: 0 }}>
+          Compare returns across multiple tickers using live Schwab market data. Add symbols to see returns and choose which timeframes to show.
+        </p>
+      </div>
 
-      {/* Inputs + Benchmarks + Presets side by side */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr)",
-          gap: t.spacing(4),
-          marginBottom: t.spacing(4),
-          alignItems: "stretch",
-        }}
-      >
-        <div className="page-card" style={inputsCardStyle}>
+      <aside style={fixedRails.leftRail}>
+        <div
+          className="page-card"
+          style={{
+            ...inputsCardStyle,
+            marginBottom: 0,
+            height: "100%",
+            display: "flex",
+            flexDirection: "column",
+            borderRadius: 0,
+            border: "none",
+            borderRight: `1px solid ${t.colors.border}`,
+            boxShadow: "none",
+            padding: t.spacing(3),
+          }}
+        >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: t.spacing(3) }}>
           <h3 style={cardTitleStyleNoMargin}>Inputs</h3>
           {tickers.length > 0 && (
@@ -468,9 +478,9 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
             </button>
           )}
         </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(4) }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(4), flex: 1, minHeight: 0 }}>
             <div>
-              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: t.spacing(2) }}>
+              <div style={{ display: "flex", flexWrap: "nowrap", alignItems: "center", gap: t.spacing(2) }}>
                 <input
                   type="text"
                   placeholder="Ticker"
@@ -490,13 +500,14 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
                     backgroundColor: "transparent",
                     color: t.colors.textMuted,
                     border: `1px solid ${t.colors.border}`,
+                    flexShrink: 0,
                   }}
                   onClick={addTicker}
                 >
                   <span className="material-symbols-outlined" style={{ fontSize: 20 }} aria-hidden>
                     add
                   </span>
-                  Add ticker
+                  Add
                 </button>
               </div>
               {tickers.length > 0 && (
@@ -560,9 +571,9 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
             <div
               style={{
                 marginTop: "auto",
-                paddingTop: t.spacing(2),
-                display: "flex",
-                justifyContent: "flex-start",
+                paddingTop: t.spacing(3),
+                display: "block",
+                flexShrink: 0,
               }}
             >
               <button
@@ -573,6 +584,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
                   alignItems: "center",
                   justifyContent: "center",
                   whiteSpace: "nowrap",
+                  width: "100%",
                 }}
                 onClick={refreshReturns}
                 disabled={loading || allTickersForFetch.length === 0}
@@ -589,8 +601,251 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
             </div>
           </div>
         </div>
+      </aside>
 
-        <div className="page-card" style={presetsCardStyle}>
+      <div style={fixedRails.contentWrap}>
+        <main>
+          {/* Performance — live returns from Schwab */}
+          <div className="page-card" style={cardStyle}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: t.spacing(3) }}>
+              <h3 style={cardTitleStyle}>Performance</h3>
+              <div style={{ display: "flex", alignItems: "center", gap: t.spacing(2) }}>
+                {tableTickers.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={refreshReturns}
+                    className="stock-comparison-refresh"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: t.spacing(1.5),
+                      border: "none",
+                      background: "none",
+                      cursor: "pointer",
+                      color: t.colors.textMuted,
+                      borderRadius: t.radius.sm,
+                    }}
+                    title="Refresh returns"
+                    aria-label="Refresh returns from Schwab"
+                  >
+                    <span className="material-symbols-outlined" style={{ fontSize: 22 }} aria-hidden>refresh</span>
+                  </button>
+                )}
+                {canCopyTable && (
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                    <button
+                      type="button"
+                      onClick={copyTableToClipboard}
+                      className="stock-comparison-copy-table"
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        width: 34,
+                        height: 34,
+                        padding: 0,
+                        border: "none",
+                        background: "none",
+                        cursor: "pointer",
+                        color: t.colors.textMuted,
+                        borderRadius: t.radius.sm,
+                        position: "relative",
+                      }}
+                      title="Copy table (Excel / Google Sheets)"
+                      aria-label="Copy table to clipboard"
+                    >
+                      <span
+                        className="material-symbols-outlined"
+                        style={{
+                          fontSize: 22,
+                          position: "absolute",
+                          opacity: copyJustPressed ? 0 : 1,
+                          transition: "opacity 0.2s ease",
+                          pointerEvents: "none",
+                        }}
+                        aria-hidden
+                      >
+                        content_copy
+                      </span>
+                      <span
+                        className="material-symbols-outlined"
+                        style={{
+                          fontSize: 22,
+                          position: "absolute",
+                          opacity: copyJustPressed ? 1 : 0,
+                          transition: "opacity 0.2s ease",
+                          pointerEvents: "none",
+                        }}
+                        aria-hidden
+                      >
+                        check
+                      </span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+            {tableTickers.length === 0 ? (
+              <div style={{ padding: t.spacing(6), textAlign: "center" as const, color: t.colors.textMuted, fontSize: "0.9rem", border: `1px dashed ${t.colors.border}`, borderRadius: t.radius.md, backgroundColor: t.colors.background }}>
+                Add tickers above to see returns.
+              </div>
+            ) : selectedLookbacks.length === 0 ? (
+              <div style={{ padding: t.spacing(6), textAlign: "center" as const, color: t.colors.textMuted, fontSize: "0.9rem", border: `1px dashed ${t.colors.border}`, borderRadius: t.radius.md, backgroundColor: t.colors.background }}>
+                Select at least one timeframe.
+              </div>
+            ) : error && !hasAnyReturns && hasFetched ? (
+              <div style={{ padding: t.spacing(6), textAlign: "center" as const, color: t.colors.danger, fontSize: "0.9rem", border: `1px dashed ${t.colors.border}`, borderRadius: t.radius.md, backgroundColor: t.colors.background }}>
+                {error}
+              </div>
+            ) : (
+              <>
+                {error && hasAnyReturns && (
+                  <p style={{ marginBottom: t.spacing(2), fontSize: "0.875rem", color: t.colors.danger }}>
+                    {error} (showing partial data.)
+                  </p>
+                )}
+                {!loading && !hasAnyReturns && tableTickers.length > 0 && hasFetched && (
+                  <p style={{ marginBottom: t.spacing(2), fontSize: "0.875rem", color: t.colors.textMuted }}>
+                    {apiHint || "No return data for these symbols. This can happen when the market is closed, the Schwab token has expired, or the API returned no candles."}
+                    {" "}
+                    <a
+                      href={`${SCHWAB_API_BASE}/api/schwab-auth`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: t.colors.primary, fontWeight: t.typography.headingWeight }}
+                    >
+                      Authorize Schwab (log in to refresh token)
+                    </a>
+                  </p>
+                )}
+              <div style={tableWrapStyle}>
+                <table style={tableStyle}>
+                  <thead>
+                    <tr>
+                      <th style={thStyle}>Ticker</th>
+                      <th style={thNumStyle}>Price</th>
+                      {selectedLookbacks.map((tf) => (
+                        <th key={tf} style={thNumStyle}>
+                          {tf}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tableTickers.map((ticker, i) => {
+                      const returns = returnsMap[ticker];
+                      const isLoadingRow = loadingTickers.has(ticker);
+                      const isDragging = draggedIndex === i;
+                      const isDropTarget = dropTargetIndex === i;
+                      return (
+                        <tr
+                          key={ticker}
+                          draggable={canReorder}
+                          onDragStart={() => canReorder && handleDragStart(i)}
+                          onDragOver={(e) => canReorder && handleDragOver(e, i)}
+                          onDragLeave={handleDragLeave}
+                          onDragEnd={handleDragEnd}
+                          onDrop={(e) => canReorder && handleDrop(e, i)}
+                          style={{
+                            cursor: canReorder ? "grab" : undefined,
+                            opacity: isDragging ? 0.5 : 1,
+                            backgroundColor: isDropTarget ? t.colors.background : undefined,
+                          }}
+                        >
+                          <td style={{ ...tdStyle, fontWeight: t.typography.headingWeight }}>{ticker}</td>
+                          {isLoadingRow ? (
+                            <>
+                              <td style={tdNumStyle}>
+                                <div
+                                  className="stock-comparison-skeleton-cell"
+                                  style={{
+                                    background: `linear-gradient(90deg, ${t.colors.background} 25%, ${t.colors.border} 50%, ${t.colors.background} 75%)`,
+                                  }}
+                                />
+                              </td>
+                              {selectedLookbacks.map((tf) => (
+                                <td key={tf} style={tdNumStyle}>
+                                  <div
+                                    className="stock-comparison-skeleton-cell"
+                                    style={{
+                                      background: `linear-gradient(90deg, ${t.colors.background} 25%, ${t.colors.border} 50%, ${t.colors.background} 75%)`,
+                                    }}
+                                  />
+                                </td>
+                              ))}
+                            </>
+                          ) : (
+                            <>
+                              <td style={tdNumStyle}>
+                                {returns?.price != null && Number.isFinite(returns.price)
+                                  ? returns.price.toFixed(2)
+                                  : "—"}
+                              </td>
+                              {selectedLookbacks.map((tf) => {
+                                const value = returns != null ? (returns[tf] ?? null) : null;
+                                const isPos = value !== null && value >= 0;
+                                return (
+                                  <td key={tf} style={{ ...tdNumStyle, color: isPos ? t.colors.success : t.colors.danger }}>
+                                    {value === null ? "—" : formatPct(value)}
+                                  </td>
+                                );
+                              })}
+                            </>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              </>
+            )}
+          </div>
+        </main>
+
+        <footer
+          style={{
+            marginTop: t.spacing(3),
+            paddingTop: t.spacing(2),
+            borderTop: `1px solid ${t.colors.border}`,
+            fontSize: "0.75rem",
+            color: t.colors.textMuted,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: t.spacing(2),
+          }}
+        >
+          <span>Market data provided by Charles Schwab.</span>
+          {lastUpdated && (
+            <span>
+              Data as of{" "}
+              {lastUpdated.toLocaleString(undefined, {
+                year: "numeric",
+                month: "short",
+                day: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </span>
+          )}
+        </footer>
+      </div>
+
+      <aside style={fixedRails.rightRail}>
+        <div
+          className="page-card"
+          style={{
+            ...presetsCardStyle,
+            marginBottom: t.spacing(2),
+            borderRadius: 0,
+            border: "none",
+            borderLeft: `1px solid ${t.colors.border}`,
+            boxShadow: "none",
+            padding: t.spacing(3),
+          }}
+        >
           <div
             style={{
               display: "flex",
@@ -613,10 +868,6 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
               display: "flex",
               flexDirection: "column",
               gap: t.spacing(1.5),
-              maxHeight: 260,
-              overflowY: "auto",
-              paddingRight: t.spacing(1),
-              marginRight: -t.spacing(1),
             }}
           >
             {BENCHMARKS.map((bm) => {
@@ -654,7 +905,18 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
           </div>
         </div>
 
-        <div className="page-card" style={presetsCardStyle}>
+        <div
+          className="page-card"
+          style={{
+            ...presetsCardStyle,
+            marginBottom: 0,
+            borderRadius: 0,
+            border: "none",
+            borderLeft: `1px solid ${t.colors.border}`,
+            boxShadow: "none",
+            padding: t.spacing(3),
+          }}
+        >
           <h3 style={{ ...cardTitleStyleNoMargin, marginBottom: t.spacing(2) }}>Presets</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(2) }}>
             {PRESETS.map((preset) => (
@@ -679,232 +941,7 @@ export function StockComparison({ theme: t }: StockComparisonProps) {
             ))}
           </div>
         </div>
-      </div>
-
-      {/* Performance — live returns from Schwab */}
-      <div className="page-card" style={cardStyle}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: t.spacing(3) }}>
-          <h3 style={cardTitleStyle}>Performance</h3>
-          <div style={{ display: "flex", alignItems: "center", gap: t.spacing(2) }}>
-            {tableTickers.length > 0 && (
-              <button
-                type="button"
-                onClick={refreshReturns}
-                className="stock-comparison-refresh"
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  padding: t.spacing(1.5),
-                  border: "none",
-                  background: "none",
-                  cursor: "pointer",
-                  color: t.colors.textMuted,
-                  borderRadius: t.radius.sm,
-                }}
-                title="Refresh returns"
-                aria-label="Refresh returns from Schwab"
-              >
-                <span className="material-symbols-outlined" style={{ fontSize: 22 }} aria-hidden>refresh</span>
-              </button>
-            )}
-            {canCopyTable && (
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
-                <button
-                  type="button"
-                  onClick={copyTableToClipboard}
-                  className="stock-comparison-copy-table"
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    width: 34,
-                    height: 34,
-                    padding: 0,
-                    border: "none",
-                    background: "none",
-                    cursor: "pointer",
-                    color: t.colors.textMuted,
-                    borderRadius: t.radius.sm,
-                    position: "relative",
-                  }}
-                  title="Copy table (Excel / Google Sheets)"
-                  aria-label="Copy table to clipboard"
-                >
-                  <span
-                    className="material-symbols-outlined"
-                    style={{
-                      fontSize: 22,
-                      position: "absolute",
-                      opacity: copyJustPressed ? 0 : 1,
-                      transition: "opacity 0.2s ease",
-                      pointerEvents: "none",
-                    }}
-                    aria-hidden
-                  >
-                    content_copy
-                  </span>
-                  <span
-                    className="material-symbols-outlined"
-                    style={{
-                      fontSize: 22,
-                      position: "absolute",
-                      opacity: copyJustPressed ? 1 : 0,
-                      transition: "opacity 0.2s ease",
-                      pointerEvents: "none",
-                    }}
-                    aria-hidden
-                  >
-                    check
-                  </span>
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-        {tableTickers.length === 0 ? (
-          <div style={{ padding: t.spacing(6), textAlign: "center" as const, color: t.colors.textMuted, fontSize: "0.9rem", border: `1px dashed ${t.colors.border}`, borderRadius: t.radius.md, backgroundColor: t.colors.background }}>
-            Add tickers above to see returns.
-          </div>
-        ) : selectedLookbacks.length === 0 ? (
-          <div style={{ padding: t.spacing(6), textAlign: "center" as const, color: t.colors.textMuted, fontSize: "0.9rem", border: `1px dashed ${t.colors.border}`, borderRadius: t.radius.md, backgroundColor: t.colors.background }}>
-            Select at least one timeframe.
-          </div>
-        ) : error && !hasAnyReturns && hasFetched ? (
-          <div style={{ padding: t.spacing(6), textAlign: "center" as const, color: t.colors.danger, fontSize: "0.9rem", border: `1px dashed ${t.colors.border}`, borderRadius: t.radius.md, backgroundColor: t.colors.background }}>
-            {error}
-          </div>
-        ) : (
-          <>
-            {error && hasAnyReturns && (
-              <p style={{ marginBottom: t.spacing(2), fontSize: "0.875rem", color: t.colors.danger }}>
-                {error} (showing partial data.)
-              </p>
-            )}
-            {!loading && !hasAnyReturns && tableTickers.length > 0 && hasFetched && (
-              <p style={{ marginBottom: t.spacing(2), fontSize: "0.875rem", color: t.colors.textMuted }}>
-                {apiHint || "No return data for these symbols. This can happen when the market is closed, the Schwab token has expired, or the API returned no candles."}
-                {" "}
-                <a
-                  href={`${SCHWAB_API_BASE}/api/schwab-auth`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ color: t.colors.primary, fontWeight: t.typography.headingWeight }}
-                >
-                  Authorize Schwab (log in to refresh token)
-                </a>
-              </p>
-            )}
-          <div style={tableWrapStyle}>
-            <table style={tableStyle}>
-              <thead>
-                <tr>
-                  <th style={thStyle}>Ticker</th>
-                  <th style={thNumStyle}>Price</th>
-                  {selectedLookbacks.map((tf) => (
-                    <th key={tf} style={thNumStyle}>
-                      {tf}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {tableTickers.map((ticker, i) => {
-                  const returns = returnsMap[ticker];
-                  const isLoadingRow = loadingTickers.has(ticker);
-                  const isDragging = draggedIndex === i;
-                  const isDropTarget = dropTargetIndex === i;
-                  return (
-                    <tr
-                      key={ticker}
-                      draggable={canReorder}
-                      onDragStart={() => canReorder && handleDragStart(i)}
-                      onDragOver={(e) => canReorder && handleDragOver(e, i)}
-                      onDragLeave={handleDragLeave}
-                      onDragEnd={handleDragEnd}
-                      onDrop={(e) => canReorder && handleDrop(e, i)}
-                      style={{
-                        cursor: canReorder ? "grab" : undefined,
-                        opacity: isDragging ? 0.5 : 1,
-                        backgroundColor: isDropTarget ? t.colors.background : undefined,
-                      }}
-                    >
-                      <td style={{ ...tdStyle, fontWeight: t.typography.headingWeight }}>{ticker}</td>
-                      {isLoadingRow ? (
-                        <>
-                          <td style={tdNumStyle}>
-                            <div
-                              className="stock-comparison-skeleton-cell"
-                              style={{
-                                background: `linear-gradient(90deg, ${t.colors.background} 25%, ${t.colors.border} 50%, ${t.colors.background} 75%)`,
-                              }}
-                            />
-                          </td>
-                          {selectedLookbacks.map((tf) => (
-                            <td key={tf} style={tdNumStyle}>
-                              <div
-                                className="stock-comparison-skeleton-cell"
-                                style={{
-                                  background: `linear-gradient(90deg, ${t.colors.background} 25%, ${t.colors.border} 50%, ${t.colors.background} 75%)`,
-                                }}
-                              />
-                            </td>
-                          ))}
-                        </>
-                      ) : (
-                        <>
-                          <td style={tdNumStyle}>
-                            {returns?.price != null && Number.isFinite(returns.price)
-                              ? returns.price.toFixed(2)
-                              : "—"}
-                          </td>
-                          {selectedLookbacks.map((tf) => {
-                            const value = returns != null ? (returns[tf] ?? null) : null;
-                            const isPos = value !== null && value >= 0;
-                            return (
-                              <td key={tf} style={{ ...tdNumStyle, color: isPos ? t.colors.success : t.colors.danger }}>
-                                {value === null ? "—" : formatPct(value)}
-                              </td>
-                            );
-                          })}
-                        </>
-                      )}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          </>
-        )}
-      </div>
-      <footer
-        style={{
-          marginTop: t.spacing(6),
-          paddingTop: t.spacing(3),
-          borderTop: `1px solid ${t.colors.border}`,
-          fontSize: "0.75rem",
-          color: t.colors.textMuted,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: t.spacing(2),
-        }}
-      >
-        <span>Market data provided by Charles Schwab.</span>
-        {lastUpdated && (
-          <span>
-            Data as of{" "}
-            {lastUpdated.toLocaleString(undefined, {
-              year: "numeric",
-              month: "short",
-              day: "2-digit",
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
-          </span>
-        )}
-      </footer>
+      </aside>
     </section>
   );
 }

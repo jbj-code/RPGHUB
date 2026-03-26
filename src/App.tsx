@@ -1,5 +1,6 @@
 import { useState, useEffect, lazy, Suspense } from "react";
 import { lightTheme, darkTheme, type ThemeMode, type Theme } from "./theme";
+import { PAGE_LAYOUT } from "./theme";
 import { NavBar, SIDEBAR_WIDTH, SIDEBAR_WIDTH_COMPACT } from "./components/NavBar";
 import { PasswordGate, getIsUnlocked } from "./components/PasswordGate";
 import {
@@ -12,8 +13,8 @@ import {
   OptionsRoll,
   Rankinator,
   RaiseAi,
-  GraphTool,
   AssignmentCheck,
+  Website,
 } from "./pages";
 import { OptionsPricing } from "./pages/OptionsPricing";
 
@@ -30,13 +31,11 @@ export type Page =
   | "todos"
   | "options-opportunities"
   | "options-roll"
-  | "graph-tool"
   | "rankinator"
   | "raise-ai"
   | "email-crm"
-  | "assignment-check";
-
-const PAGE_PADDING_H = 6;
+  | "assignment-check"
+  | "website";
 
 function App() {
   const [unlocked, setUnlocked] = useState(false);
@@ -72,9 +71,9 @@ function App() {
   };
 
   const mainInnerStyle: React.CSSProperties = {
-    maxWidth: 1280,
+    maxWidth: PAGE_LAYOUT.appShellMaxWidth,
     margin: "0 auto",
-    padding: `${t.spacing(6)} ${t.spacing(PAGE_PADDING_H)}`,
+    padding: `${t.spacing(6)} ${t.spacing(PAGE_LAYOUT.pagePaddingH)}`,
   };
 
   return (
@@ -91,15 +90,19 @@ function App() {
       <main className="app-main" style={mainStyle}>
         {page === "todos" ? (
           <Todos theme={t} sidebarWidth={sidebarWidth} />
+        ) : page === "stock-comparison" ? (
+          <StockComparison theme={t} sidebarWidth={sidebarWidth} />
+        ) : page === "put-optimizer" ? (
+          <OptionsOptimizer theme={t} sidebarWidth={sidebarWidth} />
+        ) : page === "options-opportunities" ? (
+          <OptionsOpportunities theme={t} sidebarWidth={sidebarWidth} />
+        ) : page === "website" ? (
+          <Website theme={t} />
         ) : (
           <div className="app-main-inner" style={mainInnerStyle}>
             {page === "home" && <Home theme={t} />}
-            {page === "put-optimizer" && <OptionsOptimizer theme={t} />}
-            {page === "stock-comparison" && <StockComparison theme={t} />}
             {page === "options-pricing" && <OptionsPricing theme={t} />}
             {page === "options-builder" && <OptionsBuilder theme={t} />}
-            {page === "graph-tool" && <GraphTool theme={t} />}
-            {page === "options-opportunities" && <OptionsOpportunities theme={t} />}
             {page === "options-roll" && <OptionsRoll theme={t} />}
             {page === "rankinator" && <Rankinator theme={t} />}
             {page === "raise-ai" && <RaiseAi theme={t} />}

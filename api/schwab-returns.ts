@@ -3,6 +3,7 @@
 // for the Stock Comparison page.
 
 import { createClient } from "@supabase/supabase-js";
+import { getValidAccessToken } from "./_schwab-utils";
 
 type Returns = {
   "1D": number;
@@ -59,56 +60,8 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    const expiresAt = tokenRow.expires_at != null
-      ? new Date(tokenRow.expires_at).getTime()
-      : null;
-    const now = Date.now();
-    const bufferMs = 5 * 60 * 1000; // refresh 5 min before expiry
-    const needsRefresh = expiresAt != null && now >= expiresAt - bufferMs;
-
-    let accessToken = tokenRow.access_token as string;
-
-    if (needsRefresh && tokenRow.refresh_token) {
-      const clientId = process.env.SCHWAB_CLIENT_ID;
-      const clientSecret = process.env.SCHWAB_CLIENT_SECRET;
-      if (!clientId || !clientSecret) {
-        res.status(500).json({ error: "Server missing Schwab client credentials." });
-        return;
-      }
-      const authHeader = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-      const refreshBody = new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: tokenRow.refresh_token,
-      });
-      const refreshResp = await fetch("https://api.schwabapi.com/v1/oauth/token", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Authorization: `Basic ${authHeader}`,
-        },
-        body: refreshBody,
-      });
-      if (!refreshResp.ok) {
-        const errText = await refreshResp.text();
-        console.error("[schwab-returns] refresh failed", refreshResp.status, errText);
-        res.status(401).json({
-          error: "Schwab token expired. Run the Schwab login flow again.",
-        });
-        return;
-      }
-      const refreshJson: any = await refreshResp.json();
-      const newExpiresIn = typeof refreshJson.expires_in === "number" ? refreshJson.expires_in : 1800;
-      const newExpiresAt = new Date(now + newExpiresIn * 1000).toISOString();
-      await supabase
-        .from("schwab_tokens")
-        .update({
-          access_token: refreshJson.access_token,
-          expires_at: newExpiresAt,
-          ...(refreshJson.refresh_token != null && { refresh_token: refreshJson.refresh_token }),
-        })
-        .eq("id", "default");
-      accessToken = refreshJson.access_token;
-    } else if (expiresAt != null && now >= expiresAt) {
+    const accessToken = await getValidAccessToken(supabase, tokenRow);
+    if (!accessToken) {
       res.status(401).json({
         error: "Schwab token expired. Run the Schwab login flow again.",
       });
@@ -135,115 +88,107 @@ export default async function handler(req: any, res: any) {
     > = {};
     let had404 = false;
 
-    for (const symbol of symbols) {
-      try {
-        const basePath = "https://api.schwabapi.com/marketdata/v1";
-        const params = new URLSearchParams({
-          symbol,
-          periodType: "year",
-          period: "1",
-          frequencyType: "daily",
-          frequency: "1",
-          needExtendedHoursData: "false",
-        });
-        const url = `${basePath}/pricehistory?${params.toString()}`;
+    // Fetch all price histories in parallel — each symbol is independent.
+    await Promise.allSettled(
+      symbols.map(async (symbol) => {
+        try {
+          const basePath = "https://api.schwabapi.com/marketdata/v1";
+          const params = new URLSearchParams({
+            symbol,
+            periodType: "year",
+            period: "1",
+            frequencyType: "daily",
+            frequency: "1",
+            needExtendedHoursData: "false",
+          });
+          const url = `${basePath}/pricehistory?${params.toString()}`;
 
-        const resp = await fetch(url, {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
+          const resp = await fetch(url, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
 
-        if (!resp.ok) {
-          if (resp.status === 404) had404 = true;
-          const text = await resp.text();
-          console.error("[schwab-returns] pricehistory error for", symbol, resp.status, text.slice(0, 400));
-          continue;
+          if (!resp.ok) {
+            if (resp.status === 404) had404 = true;
+            const text = await resp.text();
+            console.error("[schwab-returns] pricehistory error for", symbol, resp.status, text.slice(0, 400));
+            return;
+          }
+
+          const body: any = await resp.json();
+          if (symbols.indexOf(symbol) === 0) {
+            console.log("[schwab-returns] first symbol response keys:", Object.keys(body || {}), "candles?", Array.isArray(body?.candles) ? body.candles.length : "n/a");
+          }
+          const rawCandles = body?.candles ?? body?.priceHistory ?? [];
+          const candles: { close: number; datetime: number }[] = Array.isArray(rawCandles)
+            ? rawCandles.map((c: any) => ({
+                close: c.close ?? c.Close,
+                datetime: c.datetime ?? c.date ?? c.timestamp ?? 0,
+              })).filter((c: any) => c.close > 0 && c.datetime > 0)
+            : [];
+          if (candles.length < 2) {
+            console.warn("[schwab-returns] not enough candles for", symbol, "response keys:", Object.keys(body || {}), "rawCandles length:", Array.isArray(rawCandles) ? rawCandles.length : 0);
+            return;
+          }
+
+          const sorted = candles.slice().sort((a, b) => a.datetime - b.datetime);
+          const latest = sorted[sorted.length - 1];
+          const latestClose = latest.close;
+          if (!latestClose || latestClose <= 0) return;
+
+          function anchorCloseOnOrBefore(startDate: Date): number | null {
+            const targetMs = startDate.getTime();
+            const eligible = sorted.filter((c) => c.datetime <= targetMs);
+            const start = eligible.length > 0 ? eligible[eligible.length - 1] : sorted[0];
+            if (!start || !start.close || start.close <= 0) return null;
+            return start.close;
+          }
+
+          const latestDate = new Date(latest.datetime);
+          const prev =
+            sorted.length >= 2 && sorted[sorted.length - 2].close > 0
+              ? sorted[sorted.length - 2].close
+              : null;
+
+          const w1Anchor = anchorCloseOnOrBefore(
+            new Date(latestDate.getTime() - 7 * 24 * 60 * 60 * 1000)
+          );
+          const m1Date = new Date(latestDate.getTime());
+          m1Date.setUTCMonth(m1Date.getUTCMonth() - 1);
+          const m3Date = new Date(latestDate.getTime());
+          m3Date.setUTCMonth(m3Date.getUTCMonth() - 3);
+          const m6Date = new Date(latestDate.getTime());
+          m6Date.setUTCMonth(m6Date.getUTCMonth() - 6);
+          const y1Date = new Date(latestDate.getTime());
+          y1Date.setUTCFullYear(y1Date.getUTCFullYear() - 1);
+
+          const m1Anchor = anchorCloseOnOrBefore(m1Date);
+          const m3Anchor = anchorCloseOnOrBefore(m3Date);
+          const m6Anchor = anchorCloseOnOrBefore(m6Date);
+          const y1Anchor = anchorCloseOnOrBefore(y1Date);
+
+          const yearStart = new Date(latest.datetime);
+          yearStart.setUTCMonth(0, 1);
+          yearStart.setUTCHours(0, 0, 0, 0);
+          const firstThisYear =
+            sorted.find((c) => c.datetime >= yearStart.getTime()) ?? sorted[0];
+          const ytdAnchor =
+            firstThisYear && firstThisYear.close > 0 ? firstThisYear.close : null;
+
+          anchorsBySymbol[symbol] = {
+            latestClose,
+            prevClose: prev ?? undefined,
+            w1: w1Anchor ?? undefined,
+            m1: m1Anchor ?? undefined,
+            m3: m3Anchor ?? undefined,
+            m6: m6Anchor ?? undefined,
+            y1: y1Anchor ?? undefined,
+            ytd: ytdAnchor ?? undefined,
+          };
+        } catch (innerErr) {
+          console.error("schwab-returns per-symbol error", symbol, innerErr);
         }
-
-        const body: any = await resp.json();
-        if (symbols.indexOf(symbol) === 0) {
-          console.log("[schwab-returns] first symbol response keys:", Object.keys(body || {}), "candles?", Array.isArray(body?.candles) ? body.candles.length : "n/a");
-        }
-        // Schwab returns { candles: [ { open, high, low, close, volume, datetime } ], ... } — we use daily closes.
-        const rawCandles = body?.candles ?? body?.priceHistory ?? [];
-        const candles: { close: number; datetime: number }[] = Array.isArray(rawCandles)
-          ? rawCandles.map((c: any) => ({
-              close: c.close ?? c.Close,
-              datetime: c.datetime ?? c.date ?? c.timestamp ?? 0,
-            })).filter((c: any) => c.close > 0 && c.datetime > 0)
-          : [];
-        if (candles.length < 2) {
-          console.warn("[schwab-returns] not enough candles for", symbol, "response keys:", Object.keys(body || {}), "rawCandles length:", Array.isArray(rawCandles) ? rawCandles.length : 0);
-          continue;
-        }
-
-        const sorted = candles
-          .slice()
-          .sort((a, b) => a.datetime - b.datetime);
-        const latest = sorted[sorted.length - 1];
-        const latestClose = latest.close;
-        if (!latestClose || latestClose <= 0) continue;
-
-        // Helper: close from the last candle ON or BEFORE the given date
-        function anchorCloseOnOrBefore(startDate: Date): number | null {
-          const targetMs = startDate.getTime();
-          const eligible = sorted.filter((c) => c.datetime <= targetMs);
-          const start = eligible.length > 0 ? eligible[eligible.length - 1] : sorted[0];
-          if (!start || !start.close || start.close <= 0) return null;
-          return start.close;
-        }
-
-        const latestDate = new Date(latest.datetime);
-
-        // 1D: one trading day = previous candle vs latest (avoids calendar/same-candle 0% issue)
-        const prev =
-          sorted.length >= 2 && sorted[sorted.length - 2].close > 0
-            ? sorted[sorted.length - 2].close
-            : null;
-
-        // 1W: calendar 7 days back (use last close on or before that date)
-        const w1Anchor = anchorCloseOnOrBefore(
-          new Date(latestDate.getTime() - 7 * 24 * 60 * 60 * 1000)
-        );
-
-        // 1M, 3M, 6M, 1Y: calendar lookbacks using months/years
-        const m1Date = new Date(latestDate.getTime());
-        m1Date.setUTCMonth(m1Date.getUTCMonth() - 1);
-        const m3Date = new Date(latestDate.getTime());
-        m3Date.setUTCMonth(m3Date.getUTCMonth() - 3);
-        const m6Date = new Date(latestDate.getTime());
-        m6Date.setUTCMonth(m6Date.getUTCMonth() - 6);
-        const y1Date = new Date(latestDate.getTime());
-        y1Date.setUTCFullYear(y1Date.getUTCFullYear() - 1);
-
-        const m1Anchor = anchorCloseOnOrBefore(m1Date);
-        const m3Anchor = anchorCloseOnOrBefore(m3Date);
-        const m6Anchor = anchorCloseOnOrBefore(m6Date);
-        const y1Anchor = anchorCloseOnOrBefore(y1Date);
-
-        // YTD: first candle in current calendar year
-        const yearStart = new Date(latest.datetime);
-        yearStart.setUTCMonth(0, 1);
-        yearStart.setUTCHours(0, 0, 0, 0);
-        const firstThisYear =
-          sorted.find((c) => c.datetime >= yearStart.getTime()) ?? sorted[0];
-        const ytdAnchor =
-          firstThisYear && firstThisYear.close > 0 ? firstThisYear.close : null;
-
-        anchorsBySymbol[symbol] = {
-          latestClose,
-          prevClose: prev ?? undefined,
-          w1: w1Anchor ?? undefined,
-          m1: m1Anchor ?? undefined,
-          m3: m3Anchor ?? undefined,
-          m6: m6Anchor ?? undefined,
-          y1: y1Anchor ?? undefined,
-          ytd: ytdAnchor ?? undefined,
-        };
-      } catch (innerErr) {
-        // eslint-disable-next-line no-console
-        console.error("schwab-returns per-symbol error", symbol, innerErr);
-      }
-    }
+      })
+    );
 
     // Use Schwab quotes for current price; compute all returns as currentPrice / anchorClose - 1
     if (symbols.length > 0) {

@@ -1,6 +1,7 @@
 // Vercel serverless: proxy to Schwab Market Data /quotes. Reads token from Supabase.
 
 import { createClient } from "@supabase/supabase-js";
+import { getValidAccessToken } from "./_schwab-utils";
 
 export default async function handler(req: any, res: any) {
   // Allow calls from the Vite dev server (localhost) as well as production.
@@ -47,55 +48,8 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    const expiresAt = tokenRow.expires_at != null
-      ? new Date(tokenRow.expires_at).getTime()
-      : null;
-    const now = Date.now();
-    const bufferMs = 5 * 60 * 1000;
-    const needsRefresh = expiresAt != null && now >= expiresAt - bufferMs;
-
-    let accessToken = tokenRow.access_token as string;
-
-    if (needsRefresh && tokenRow.refresh_token) {
-      const clientId = process.env.SCHWAB_CLIENT_ID;
-      const clientSecret = process.env.SCHWAB_CLIENT_SECRET;
-      if (!clientId || !clientSecret) {
-        res.status(500).json({ error: "Server missing Schwab client credentials." });
-        return;
-      }
-      const authHeader = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-      const refreshBody = new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: tokenRow.refresh_token,
-      });
-      const refreshResp = await fetch("https://api.schwabapi.com/v1/oauth/token", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Authorization: `Basic ${authHeader}`,
-        },
-        body: refreshBody,
-      });
-      if (!refreshResp.ok) {
-        console.error("[schwab-quotes] refresh failed", refreshResp.status);
-        res.status(401).json({
-          error: "Schwab token expired. Run the Schwab login flow again.",
-        });
-        return;
-      }
-      const refreshJson: any = await refreshResp.json();
-      const newExpiresIn = typeof refreshJson.expires_in === "number" ? refreshJson.expires_in : 1800;
-      const newExpiresAt = new Date(now + newExpiresIn * 1000).toISOString();
-      await supabase
-        .from("schwab_tokens")
-        .update({
-          access_token: refreshJson.access_token,
-          expires_at: newExpiresAt,
-          ...(refreshJson.refresh_token != null && { refresh_token: refreshJson.refresh_token }),
-        })
-        .eq("id", "default");
-      accessToken = refreshJson.access_token;
-    } else if (expiresAt != null && now >= expiresAt) {
+    const accessToken = await getValidAccessToken(supabase, tokenRow);
+    if (!accessToken) {
       res.status(401).json({
         error: "Schwab token expired. Run the Schwab login flow again.",
       });
