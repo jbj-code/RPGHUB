@@ -4,7 +4,7 @@
 // fetches chains for the top N underlyings, and ranks by annualised yield.
 
 import { createClient } from "@supabase/supabase-js";
-import { toOCCSymbol, getValidAccessToken } from "./_schwab-utils";
+import { toOCCSymbol, getValidAccessToken } from "./_schwab-utils.js";
 
 const RATE_LIMIT_ERR = "SCHWAB_RATE_LIMIT";
 

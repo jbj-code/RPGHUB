@@ -2,7 +2,7 @@
 // POST body: { portfolioRows: PortfolioRow[], otmVariancePct: number }
 
 import { createClient } from "@supabase/supabase-js";
-import { toOCCSymbol, getValidAccessToken } from "./_schwab-utils";
+import { toOCCSymbol, getValidAccessToken } from "./_schwab-utils.js";
 
 type PortfolioRow = {
   id: string;

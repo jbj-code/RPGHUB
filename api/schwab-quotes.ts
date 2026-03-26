@@ -1,7 +1,7 @@
 // Vercel serverless: proxy to Schwab Market Data /quotes. Reads token from Supabase.
 
 import { createClient } from "@supabase/supabase-js";
-import { getValidAccessToken } from "./_schwab-utils";
+import { getValidAccessToken } from "./_schwab-utils.js";
 
 export default async function handler(req: any, res: any) {
   // Allow calls from the Vite dev server (localhost) as well as production.

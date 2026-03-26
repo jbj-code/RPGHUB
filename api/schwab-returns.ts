@@ -3,7 +3,7 @@
 // for the Stock Comparison page.
 
 import { createClient } from "@supabase/supabase-js";
-import { getValidAccessToken } from "./_schwab-utils";
+import { getValidAccessToken } from "./_schwab-utils.js";
 
 type Returns = {
   "1D": number;
