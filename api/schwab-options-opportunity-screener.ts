@@ -136,7 +136,7 @@ async function fetchEquityQuotesBatched(
     const batch = symbols.slice(i, i + QUOTE_BATCH);
     const url =
       "https://api.schwabapi.com/marketdata/v1/quotes?" +
-      new URLSearchParams({ symbols: batch.join(","), fields: "quote,fundamental" }).toString();
+      new URLSearchParams({ symbols: batch.join(","), fields: "quote,fundamental,reference" }).toString();
     const quotesResp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
     throwIfRateLimited(quotesResp, "equity_quotes");
     if (!quotesResp.ok) {

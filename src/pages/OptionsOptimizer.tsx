@@ -167,7 +167,7 @@ export function formatOptionKey(tr: OptionsTrade): string {
 type OptimizerTableSortKey =
   | "maturity"
   | "strike"
-  | "otmDistance"
+  | "moneyness"
   | "limitPx"
   | "annYield"
   | "premiumPerContract";
@@ -176,13 +176,9 @@ type OptimizerTableSortState =
   | { phase: "none" }
   | { phase: "asc" | "desc"; key: OptimizerTableSortKey };
 
-function getOtmDistancePctForSort(r: RankedResult): number | null {
-  const spot = r.trade.currentPrice;
-  if (!Number.isFinite(spot) || spot <= 0) return null;
-  const isPut = r.trade.optionSide.startsWith("PUT");
-  return isPut
-    ? ((spot - r.strike) / spot) * 100
-    : ((r.strike - spot) / spot) * 100;
+function getMoneynessPctForSort(r: RankedResult): number | null {
+  const m = r.trade.moneynessPct;
+  return typeof m === "number" && Number.isFinite(m) ? m : null;
 }
 
 function getMaturitySortValue(r: RankedResult): number {
@@ -544,9 +540,9 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
         case "strike":
           cmp = a.strike === b.strike ? 0 : a.strike < b.strike ? -1 : 1;
           break;
-        case "otmDistance": {
-          const oa = getOtmDistancePctForSort(a);
-          const ob = getOtmDistancePctForSort(b);
+        case "moneyness": {
+          const oa = getMoneynessPctForSort(a);
+          const ob = getMoneynessPctForSort(b);
           if (oa == null && ob == null) cmp = 0;
           else if (oa == null) cmp = 1;
           else if (ob == null) cmp = -1;
@@ -839,7 +835,8 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
 
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Understanding the columns</p>
               <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
-                <li><strong>OTM Distance %</strong> — how far the strike is from the current price. Positive = out-of-the-money (safer for assignment); negative = in-the-money.</li>
+                <li><strong>1M Performance</strong> — trailing 1-month total return of the underlying from Schwab price history (directional context for ranking).</li>
+                <li><strong>Moneyness</strong> — strike ÷ spot × 100. Below 100% is typically OTM for puts; above 100% is typically OTM for calls. At-the-money is near 100%.</li>
                 <li><strong>Limit Px</strong> — midpoint of the Schwab bid/ask. This is your target fill price; real fills may differ.</li>
                 <li><strong>Ann. Yield</strong> — annualized yield based on strike notional (see above).</li>
                 <li><strong>PoP</strong> — probability the option expires worthless (you keep the full premium). Derived from delta: higher is better for short options.</li>
@@ -1294,7 +1291,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
           <h3 style={sectionTitleStyle}>Ranked results (yield + upside + risk)</h3>
           <p style={{ fontSize: "0.875rem", color: t.colors.textMuted, marginBottom: t.spacing(2) }}>
             Best options by combined yield and underlying upside. Add any row to your trade list below.{" "}
-            <strong>Tip:</strong> click <strong>Maturity</strong>, <strong>Strike</strong>, <strong>OTM Distance %</strong>,{" "}
+            <strong>Tip:</strong> click <strong>Maturity</strong>, <strong>Strike</strong>, <strong>Moneyness</strong>,{" "}
                     <strong>Limit Px</strong>, <strong>Ann. Yield</strong>, or <strong>Premium</strong> to cycle sort: default
             order → ascending → descending.
           </p>
@@ -1337,9 +1334,9 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                   <th style={{ textAlign: "center", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
                     <HelpTooltip
                       theme={t}
-                      text="1M Upside % is the underlying ticker's trailing 1-month price performance from Schwab price history. It is used as a directional context signal in ranking."
+                      text="1M Performance is the underlying ticker's trailing 1-month total return from Schwab price history. It is used as a directional context signal in ranking."
                     >
-                      <span style={{ cursor: "help" }}>1M Upside %</span>
+                      <span style={{ cursor: "help" }}>1M Performance</span>
                     </HelpTooltip>
                   </th>
                   <SortableOptimizerTh
@@ -1352,10 +1349,10 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                   />
                   <SortableOptimizerTh
                     theme={t}
-                    sortKey="otmDistance"
+                    sortKey="moneyness"
                     tableSort={optimizerTableSort}
                     onCycle={cycleOptimizerTableSort}
-                    label="OTM Distance %"
+                    label="Moneyness"
                     textAlign="center"
                   />
                   <SortableOptimizerTh
@@ -1438,25 +1435,16 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                         textAlign: "center",
                         color: (() => {
                           const spot = r.trade.currentPrice;
-                          if (!Number.isFinite(spot) || spot <= 0) return t.colors.textMuted;
+                          const m = r.trade.moneynessPct;
+                          if (!Number.isFinite(spot) || spot <= 0 || !Number.isFinite(m)) return t.colors.textMuted;
                           const isPut = r.trade.optionSide.startsWith("PUT");
-                          const pct = isPut
-                            ? ((spot - r.strike) / spot) * 100
-                            : ((r.strike - spot) / spot) * 100;
-                          return pct >= 0 ? t.colors.success : t.colors.danger;
+                          const otm = isPut ? m < 100 : m > 100;
+                          return otm ? t.colors.success : t.colors.danger;
                         })(),
                         fontWeight: 600,
                       }}
                     >
-                      {(() => {
-                        const spot = r.trade.currentPrice;
-                        if (!Number.isFinite(spot) || spot <= 0) return "—";
-                        const isPut = r.trade.optionSide.startsWith("PUT");
-                        const pct = isPut
-                          ? ((spot - r.strike) / spot) * 100
-                          : ((r.strike - spot) / spot) * 100;
-                        return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
-                      })()}
+                      {Number.isFinite(r.trade.moneynessPct) ? `${r.trade.moneynessPct.toFixed(2)}%` : "—"}
                     </td>
                     <td style={{ padding: t.spacing(2), textAlign: "center" }}>${r.limitPrice.toFixed(2)}</td>
                     <td style={{ padding: t.spacing(2), textAlign: "center", color: t.colors.success, fontWeight: 600 }}>

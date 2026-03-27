@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Theme } from "../theme";
 import {
   getFixedRailsLayoutStyles,
@@ -49,6 +49,12 @@ function formatMoney(n: number): string {
   if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(1)}M`;
   if (abs >= 1_000) return `${sign}$${(abs / 1_000).toFixed(1)}K`;
   return `${sign}$${abs.toFixed(2)}`;
+}
+
+/** Premium per contract: dollar sign, plain integer, no K abbreviation. e.g. $2,275 or $340 */
+function formatPremium(n: number): string {
+  const rounded = Math.round(Math.abs(n));
+  return (n < 0 ? "−$" : "$") + rounded.toLocaleString("en-US");
 }
 
 function formatPct(n: number | null): string {
@@ -326,6 +332,14 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
   const [warnings, setWarnings] = useState<string[]>([]);
   const [resultsByOtmPct, setResultsByOtmPct] = useState<Record<number, RankedOption[]>>({});
   const [lastCopiedOpportunityKey, setLastCopiedOpportunityKey] = useState<string | null>(null);
+  const [showInfoModal, setShowInfoModal] = useState(false);
+
+  useEffect(() => {
+    if (!showInfoModal) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setShowInfoModal(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showInfoModal]);
 
   const hasResults = OTM_LEVELS.some((l) => (resultsByOtmPct[l] ?? []).length > 0);
 
@@ -376,22 +390,128 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
 
       {/* ── Fixed header ── */}
       <div style={fixedRails.topHeader}>
-        <h2 style={titleStyle}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
-            <span
-              className="material-symbols-outlined"
-              style={{ fontSize: "1.5rem", color: t.colors.secondary, lineHeight: 1, display: "inline-flex" }}
-              aria-hidden
-            >
-              search
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+          <h2 style={titleStyle}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: "1.5rem", color: t.colors.secondary, lineHeight: 1, display: "inline-flex" }}
+                aria-hidden
+              >
+                search
+              </span>
+              Options Opportunities
             </span>
-            Options Opportunities
-          </span>
-        </h2>
+          </h2>
+          <button
+            type="button"
+            onClick={() => setShowInfoModal(true)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 28,
+              height: 28,
+              padding: 0,
+              border: "none",
+              borderRadius: "50%",
+              backgroundColor: "transparent",
+              color: t.colors.secondary,
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+            aria-label="How this page works"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 26 }} aria-hidden>info</span>
+          </button>
+        </div>
         <p style={{ ...descStyle, marginTop: t.spacing(1), marginBottom: 0 }}>
           Scan US equities for highest annualized option yields at 5%, 10%, 15%, and 20% OTM levels using live Schwab data.
         </p>
       </div>
+
+      {showInfoModal && (
+        <>
+          <div
+            role="presentation"
+            style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.4)", zIndex: 1000 }}
+            onClick={() => setShowInfoModal(false)}
+          />
+          <div
+            role="dialog"
+            aria-labelledby="opportunities-info-title"
+            aria-modal="true"
+            style={{
+              position: "fixed",
+              left: "50%",
+              top: "50%",
+              transform: "translate(-50%, -50%)",
+              zIndex: 1001,
+              backgroundColor: t.colors.surface,
+              borderRadius: t.radius.lg,
+              padding: t.spacing(5),
+              maxWidth: 560,
+              width: "90%",
+              maxHeight: "85vh",
+              overflowY: "auto",
+              boxShadow: "0 12px 40px rgba(15, 42, 54, 0.2)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: t.spacing(3) }}>
+              <h3 id="opportunities-info-title" style={{ ...sectionTitleStyle, marginBottom: 0, color: t.colors.secondary }}>How Options Opportunities works</h3>
+              <button
+                type="button"
+                onClick={() => setShowInfoModal(false)}
+                style={{ padding: t.spacing(0.5), border: "none", background: "none", color: t.colors.textMuted, cursor: "pointer" }}
+                aria-label="Close"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 22 }}>close</span>
+              </button>
+            </div>
+            <div style={{ color: t.colors.text, fontSize: "0.88rem", lineHeight: 1.75 }}>
+
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>What this page does</p>
+              <p style={{ marginBottom: t.spacing(3) }}>
+                Options Opportunities scans a broad universe of US equities (S&P 500, NASDAQ 100, major ETFs, and live Schwab movers) for the highest-yielding short option opportunities at four standard OTM levels: <strong>5%, 10%, 15%, and 20%</strong> out-of-the-money. Results are ranked by annualized yield within each OTM bucket.
+              </p>
+
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>How the scan works</p>
+              <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
+                <li><strong>Universe</strong> — starts with ~660 hardcoded tickers (S&P 500, NASDAQ 100, major ETFs) and supplements with live Schwab top movers to catch high-volatility candidates on the day.</li>
+                <li><strong>Market cap filter</strong> — symbols are sorted by market cap (largest first) so the most liquid names are always scanned first. You can set a minimum market cap to exclude smaller, less-liquid stocks.</li>
+                <li><strong>Option chain fetch</strong> — for each symbol, we pull the option chain for your chosen expiration and locate the strike closest to each OTM % target (5/10/15/20% away from the current price).</li>
+                <li><strong>Limit price</strong> — the midpoint of the bid/ask spread for that strike, representing the realistic fill price.</li>
+              </ul>
+
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>How ranking works</p>
+              <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
+                <li><strong>Annualized Yield</strong> — <em>(limit price ÷ strike) × (365 ÷ DTE)</em>. Normalizes premium across different expirations so a 30-day and a 60-day option can be compared fairly.</li>
+                <li><strong>1M Performance</strong> — the underlying's trailing 1-month price return. Useful context when deciding if a stock's recent momentum aligns with selling puts (bullish) or calls (bearish).</li>
+                <li>Within each OTM bucket, results are sorted by annualized yield — highest yield at the top.</li>
+              </ul>
+
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Scan parameters</p>
+              <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
+                <li><strong>Option Type</strong> — Puts (most common for cash-secured selling) or Calls (for covered calls).</li>
+                <li><strong>Expiration</strong> — the target expiry date. Monthly expirations (3rd Friday) tend to have the best liquidity.</li>
+                <li><strong>Monthly Only</strong> — filters the expiry dropdown to standard monthly expirations only.</li>
+                <li><strong>Min Market Cap</strong> — exclude micro/small caps with potentially wide bid/ask spreads. Default $500M.</li>
+              </ul>
+
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Table columns</p>
+              <ul style={{ margin: 0, marginBottom: t.spacing(2), paddingLeft: t.spacing(5) }}>
+                <li><strong>Company</strong> — ticker and company name from Schwab.</li>
+                <li><strong>1M Perf</strong> — trailing 1-month price return of the underlying.</li>
+                <li><strong>Strike</strong> — the option strike closest to the target OTM %.</li>
+                <li><strong>Bid</strong> — current bid price for the option (per share).</li>
+                <li><strong>Ann. Yield</strong> — annualized yield based on limit price (mid of bid/ask) and strike notional.</li>
+                <li><strong>Premium</strong> — total premium received per contract (limit price × 100 shares), rounded to the nearest dollar.</li>
+              </ul>
+
+            </div>
+          </div>
+        </>
+      )}
 
       {/* ── Left rail: Scan Parameters ── */}
       <div style={{ ...fixedRails.leftRail, borderRadius: 0, border: "none", borderRight: `1px solid ${t.colors.border}` }}>
@@ -666,7 +786,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                               <td style={{ ...tdNumStyle, color: t.colors.success }}>
                                 {r.annYieldPct.toFixed(2)}%
                               </td>
-                              <td style={tdNumStyle}>{formatMoney(r.premiumPerContract)}</td>
+                              <td style={tdNumStyle}>{formatPremium(r.premiumPerContract)}</td>
                               <td style={{ ...tdStyle, textAlign: "center" }}>
                                 <button
                                   type="button"
