@@ -116,8 +116,13 @@ export function Home({ theme: t }: HomeProps) {
     },
     {
       title: "To-Dos",
-      href: "https://docs.google.com/document/d/1duuz5pVr8q98FVOJBRtcYgKMx_NX2mFLudLSt1424Uo/edit?tab=t.0#heading=h.y4mjsdfsqn2q",
+      href: "https://docs.google.com/document/d/1wDfjDq4P8CSTVVgCevH8HYkFZ7xShEMf1mfIVNBry0Y/edit?tab=t.0#heading=h.y4mjsdfsqn2q",
       faviconDomain: "docs.google.com",
+    },
+    {
+      title: "Arena AI",
+      href: "https://arena.ai/leaderboard",
+      faviconDomain: "arena.ai",
     },
   ];
 

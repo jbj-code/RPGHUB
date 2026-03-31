@@ -3,6 +3,7 @@ import type { Theme } from "../theme";
 import {
   getFixedRailsLayoutStyles,
   getPrimaryActionButtonStyle,
+  getRailFooterActionButtonLayout,
   getDropdownTriggerStyle,
   getDropdownPanelStyle,
   getDropdownOptionStyle,
@@ -12,6 +13,7 @@ import {
   PAGE_LAYOUT,
 } from "../theme";
 import { createPortal } from "react-dom";
+import { OPPORTUNITY_BUCKETS, type OpportunityBucket } from "../lib/opportunityBuckets";
 
 const SCHWAB_API_BASE =
   (import.meta.env.VITE_SCHWAB_API_BASE as string) || "https://therpghub.vercel.app";
@@ -221,7 +223,9 @@ const otmLabels: Record<number, { headline: string; detail: string }> = {
 export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportunitiesProps) {
   const fixedRails = getFixedRailsLayoutStyles(t, {
     sidebarWidth,
-    rightRailWidth: 0,
+    leftRailWidth: 286,
+    rightRailWidth: 256,
+    headerHeight: 104,
   });
 
   const titleStyle: React.CSSProperties = {
@@ -333,6 +337,12 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
   const [resultsByOtmPct, setResultsByOtmPct] = useState<Record<number, RankedOption[]>>({});
   const [lastCopiedOpportunityKey, setLastCopiedOpportunityKey] = useState<string | null>(null);
   const [showInfoModal, setShowInfoModal] = useState(false);
+  const [bucketId, setBucketId] = useState<string>(OPPORTUNITY_BUCKETS[0]!.id);
+
+  const activeBucket: OpportunityBucket = useMemo(
+    () => OPPORTUNITY_BUCKETS.find((b) => b.id === bucketId) ?? OPPORTUNITY_BUCKETS[0]!,
+    [bucketId]
+  );
 
   useEffect(() => {
     if (!showInfoModal) return;
@@ -350,18 +360,23 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
     setResultsByOtmPct({});
     setScanning(true);
     try {
+      const payload: Record<string, unknown> = {
+        optionType,
+        expiration,
+        otmLevels: Array.from(OTM_LEVELS),
+        topN: 10,
+        minMarketCap,
+        strikeTolerancePct: 1.25,
+        monthlyOnly,
+      };
+      if (activeBucket.symbols.length > 0) {
+        payload.universeSymbols = activeBucket.symbols;
+      }
+
       const res = await fetch(`${SCHWAB_API_BASE}/api/schwab-options-opportunity-screener`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          optionType,
-          expiration,
-          otmLevels: Array.from(OTM_LEVELS),
-          topN: 5,
-          minMarketCap,
-          strikeTolerancePct: 1.25,
-          monthlyOnly,
-        }),
+        body: JSON.stringify(payload),
       });
 
       let json: ScreenerResponse & { error?: string } = { resultsByOtmPct: {}, message: null, warnings: [] };
@@ -427,6 +442,12 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
         </div>
         <p style={{ ...descStyle, marginTop: t.spacing(1), marginBottom: 0 }}>
           Scan US equities for highest annualized option yields at 5%, 10%, 15%, and 20% OTM levels using live Schwab data.
+          {activeBucket.symbols.length > 0 ? (
+            <>
+              {" "}
+              <strong>Universe:</strong> {activeBucket.label} ({activeBucket.symbols.length} tickers).
+            </>
+          ) : null}
         </p>
       </div>
 
@@ -477,7 +498,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
 
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>How the scan works</p>
               <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
-                <li><strong>Universe</strong> — starts with ~660 hardcoded tickers (S&P 500, NASDAQ 100, major ETFs) and supplements with live Schwab top movers to catch high-volatility candidates on the day.</li>
+                <li><strong>Universe</strong> — default scan uses ~660 hardcoded tickers (S&P 500, NASDAQ 100, major ETFs) plus live Schwab top movers. You can narrow to a <strong>bucket</strong> from the right panel (e.g. Climate / Energy transition); buckets do not add movers.</li>
                 <li><strong>Market cap filter</strong> — symbols are sorted by market cap (largest first) so the most liquid names are always scanned first. You can set a minimum market cap to exclude smaller, less-liquid stocks.</li>
                 <li><strong>Option chain fetch</strong> — for each symbol, we pull the option chain for your chosen expiration and locate the strike closest to each OTM % target (5/10/15/20% away from the current price).</li>
                 <li><strong>Limit price</strong> — the midpoint of the bid/ask spread for that strike, representing the realistic fill price.</li>
@@ -514,19 +535,44 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
       )}
 
       {/* ── Left rail: Scan Parameters ── */}
-      <div style={{ ...fixedRails.leftRail, borderRadius: 0, border: "none", borderRight: `1px solid ${t.colors.border}` }}>
+      <aside style={fixedRails.leftRail}>
+        <div
+          className="options-opportunities-scan-card"
+          style={{
+            ...fixedRails.railPanel,
+            minHeight: 0,
+            flex: 1,
+          }}
+        >
         <div
           style={{
-            flex: 1,
-            overflowY: "auto",
-            padding: t.spacing(3),
+            ...fixedRails.railBody,
             display: "flex",
             flexDirection: "column",
             gap: t.spacing(4),
-            scrollbarWidth: "none",
           }}
         >
           <h3 style={{ ...sectionTitleStyle, marginBottom: 0 }}>Scan Parameters</h3>
+
+          <div
+            style={{
+              fontSize: "0.78rem",
+              color: t.colors.textMuted,
+              lineHeight: 1.45,
+              padding: `${t.spacing(2)} ${t.spacing(2)}`,
+              borderRadius: t.radius.md,
+              border: `1px solid ${t.colors.border}`,
+              backgroundColor: t.colors.background,
+            }}
+          >
+            <strong style={{ color: t.colors.text }}>Universe</strong>
+            <div>{activeBucket.label}</div>
+            {activeBucket.symbols.length === 0 ? (
+              <div style={{ marginTop: t.spacing(1) }}>Full list + Schwab movers. Change buckets in the right panel.</div>
+            ) : (
+              <div style={{ marginTop: t.spacing(1) }}>{activeBucket.symbols.length} tickers — movers excluded.</div>
+            )}
+          </div>
 
           {/* Option Type */}
           <div>
@@ -611,7 +657,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                 theme={t}
                 text="Only scan stocks with at least this market cap. Larger companies tend to have tighter bid/ask spreads and better option liquidity."
               >
-                <span style={{ cursor: "help", borderBottom: `1px dotted ${t.colors.textMuted}` }}>
+                <span style={{ cursor: "help" }}>
                   Min Market Cap ($)
                 </span>
               </HelpTooltip>
@@ -652,15 +698,11 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
 
         {/* Sticky footer: scan button */}
         <div
-          style={{
-            padding: t.spacing(3),
-            borderTop: `1px solid ${t.colors.border}`,
-            backgroundColor: t.colors.surface,
-          }}
+          style={fixedRails.railFooter}
         >
           <button
             type="button"
-            style={{ ...primaryBtn, width: "100%", justifyContent: "center" }}
+            style={{ ...primaryBtn, ...getRailFooterActionButtonLayout() }}
             onClick={onScan}
             disabled={scanning}
             aria-disabled={scanning}
@@ -675,18 +717,11 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
             )}
           </button>
         </div>
-      </div>
+        </div>
+      </aside>
 
       {/* ── Content area: OTM tables ── */}
-      <div
-        style={{
-          ...fixedRails.contentWrap,
-          marginRight: fixedRails.panelGapPx,
-          padding: t.spacing(4),
-          overflowY: "auto",
-          height: `calc(100vh - ${fixedRails.headerHeight}px)`,
-        }}
-      >
+      <div style={fixedRails.contentWrap}>
         {!hasResults && !scanning && !scanError && (
           <div
             className="page-card"
@@ -859,6 +894,91 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
           </div>
         )}
       </div>
+
+      <aside style={fixedRails.rightRail}>
+        <div
+          className="page-card"
+          style={{
+            ...fixedRails.railPanel,
+            gap: t.spacing(2),
+            overflow: "hidden",
+          }}
+        >
+          <h3 style={{ ...sectionTitleStyle, marginBottom: 0 }}>Universe buckets</h3>
+          <p style={{ margin: 0, fontSize: "0.78rem", color: t.colors.textMuted, lineHeight: 1.45 }}>
+            Choose a ticker set for this scan. Buckets restrict the scan to those symbols only (no index movers).
+          </p>
+          <div
+            style={{
+              flex: 1,
+              overflowY: "auto",
+              display: "flex",
+              flexDirection: "column",
+              gap: t.spacing(2),
+              paddingRight: t.spacing(1),
+              scrollbarWidth: "thin",
+            }}
+          >
+            {OPPORTUNITY_BUCKETS.map((bucket) => {
+              const selected = bucket.id === bucketId;
+              return (
+                <div key={bucket.id}>
+                  <button
+                    type="button"
+                    onClick={() => setBucketId(bucket.id)}
+                    style={{
+                      width: "100%",
+                      textAlign: "left",
+                      padding: `${t.spacing(2)} ${t.spacing(2)}`,
+                      borderRadius: t.radius.md,
+                      border: `1px solid ${selected ? t.colors.primary : t.colors.border}`,
+                      backgroundColor: selected ? `${t.colors.primary}14` : t.colors.background,
+                      cursor: "pointer",
+                      fontFamily: t.typography.fontFamily,
+                      transition: "border-color 0.15s ease, background-color 0.15s ease",
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, fontSize: "0.88rem", color: t.colors.text }}>{bucket.label}</div>
+                    <div style={{ fontSize: "0.75rem", color: t.colors.textMuted, marginTop: t.spacing(0.5) }}>
+                      {bucket.description}
+                    </div>
+                    <div style={{ fontSize: "0.72rem", color: t.colors.primary, marginTop: t.spacing(1), fontWeight: 600 }}>
+                      {bucket.symbols.length === 0 ? "Full universe + movers" : `${bucket.symbols.length} tickers`}
+                    </div>
+                  </button>
+                  {bucket.symbols.length > 0 ? (
+                    <details style={{ marginTop: t.spacing(1), marginLeft: t.spacing(1) }}>
+                      <summary
+                        style={{
+                          fontSize: "0.72rem",
+                          color: t.colors.textMuted,
+                          cursor: "pointer",
+                          userSelect: "none",
+                        }}
+                      >
+                        View tickers
+                      </summary>
+                      <div
+                        style={{
+                          marginTop: t.spacing(1),
+                          fontSize: "0.7rem",
+                          color: t.colors.textMuted,
+                          fontFamily: "ui-monospace, monospace",
+                          lineHeight: 1.5,
+                          maxHeight: 120,
+                          overflowY: "auto",
+                        }}
+                      >
+                        {bucket.symbols.join(", ")}
+                      </div>
+                    </details>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </aside>
 
     </section>
   );

@@ -5,6 +5,7 @@ import {
   getFixedRailsLayoutStyles,
   getPrimaryActionButtonStyle,
   getPrimaryButtonStyle,
+  getRailFooterActionButtonLayout,
   PAGE_LAYOUT,
   getDropdownTriggerStyle,
   getDropdownPanelStyle,
@@ -721,7 +722,6 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
   const fixedRails = getFixedRailsLayoutStyles(t, {
     sidebarWidth,
     headerHeight: 104,
-    panelGapPx: Number(t.spacing(3).replace("px", "")),
   });
 
   return (
@@ -861,23 +861,21 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
       )}
 
       {/* —— Portfolio Tickers (Define what you want) —— */}
-      <div
-        className="options-optimizer-card"
+      <aside
         style={{
-          ...cardStyle,
           ...fixedRails.leftRail,
-          borderRadius: 0,
-          border: "none",
-          borderRight: `1px solid ${t.colors.border}`,
-          boxShadow: "none",
-          marginBottom: 0,
-          padding: t.spacing(3),
-          overflow: "visible",
-          display: "flex",
-          flexDirection: "column",
           zIndex: portfolioDropdownId ? 3000 : 6,
         }}
       >
+        <div
+          className="options-optimizer-card"
+          style={{
+            ...fixedRails.railPanel,
+            overflow: "visible",
+            minHeight: 0,
+            flex: 1,
+          }}
+        >
         <h3 style={sectionTitleStyle}>Inputs</h3>
         <div
           style={{
@@ -1225,27 +1223,26 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
         </div>
         <div
           style={{
+            ...fixedRails.railFooter,
             marginTop: t.spacing(3),
-            borderTop: `1px solid ${t.colors.border}`,
-            paddingTop: t.spacing(3),
             display: "flex",
             flexDirection: "column",
             gap: t.spacing(2),
-            backgroundColor: t.colors.surface,
+            position: "sticky",
+            bottom: 0,
+            zIndex: 2,
           }}
         >
-          <button type="button" style={{ ...secondaryBtnStyle, width: "100%" }} onClick={addPortfolioRow}>
+          <button
+            type="button"
+            style={{ ...secondaryBtnStyle, ...getRailFooterActionButtonLayout() }}
+            onClick={addPortfolioRow}
+          >
             + Add Contract
           </button>
           <button
             type="button"
-            style={{
-              ...primaryBtn,
-              width: "100%",
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
+            style={{ ...primaryBtn, ...getRailFooterActionButtonLayout() }}
             onClick={runOptimize}
             disabled={optimizeLoading}
             aria-label="Optimize Portfolio"
@@ -1275,7 +1272,8 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
             </p>
           )}
         </div>
-      </div>
+        </div>
+      </aside>
 
       <div style={fixedRails.contentWrap}>
       {/* —— Ranked results —— */}
@@ -1644,16 +1642,8 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
         <div
           className="page-card"
           style={{
-            margin: 0,
-            borderRadius: 0,
-            border: "none",
-            borderLeft: `1px solid ${t.colors.border}`,
-            boxShadow: "none",
-            padding: t.spacing(3),
-            display: "flex",
-            flexDirection: "column",
+            ...fixedRails.railPanel,
             gap: t.spacing(2),
-            height: "100%",
           }}
         >
           <h3 style={{ ...sectionTitleStyle, marginBottom: t.spacing(1) }}>Trade list</h3>

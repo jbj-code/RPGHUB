@@ -15,6 +15,7 @@ import {
   RaiseAi,
   AssignmentCheck,
   Website,
+  Extractor,
 } from "./pages";
 import { OptionsPricing } from "./pages/OptionsPricing";
 
@@ -35,7 +36,8 @@ export type Page =
   | "raise-ai"
   | "email-crm"
   | "assignment-check"
-  | "website";
+  | "website"
+  | "extractor";
 
 function App() {
   const [unlocked, setUnlocked] = useState(false);
@@ -107,6 +109,7 @@ function App() {
             {page === "rankinator" && <Rankinator theme={t} />}
             {page === "raise-ai" && <RaiseAi theme={t} />}
             {page === "assignment-check" && <AssignmentCheck theme={t} />}
+            {page === "extractor" && <Extractor theme={t} />}
             {page === "email-crm" && (
               <Suspense
                 fallback={

@@ -179,6 +179,26 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/** Non-empty validated list from client → scan only these symbols (no movers merge). */
+function normalizeClientUniverse(raw: unknown): string[] | null {
+  if (raw == null) return null;
+  if (!Array.isArray(raw)) return null;
+  if (raw.length === 0) return null;
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of raw) {
+    const s = String(item ?? "")
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, "");
+    if (!s || !/^[A-Z][A-Z0-9.-]{0,14}$/.test(s)) continue;
+    if (seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out.length > 0 ? out : null;
+}
+
 function formatSchwabSymbol(args: {
   ticker: string;
   expiry: string;
@@ -258,21 +278,38 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    // 1) Build universe: hardcoded base + live Schwab movers (parallel)
-    const [moversRows] = await Promise.allSettled([fetchMovers(accessToken)]);
-    const moverSymbols: UniverseRow[] =
-      moversRows.status === "fulfilled" ? moversRows.value : [];
+    let clientUniverse: string[] | null = null;
+    if (body.universeSymbols !== undefined && body.universeSymbols !== null) {
+      if (!Array.isArray(body.universeSymbols)) {
+        res.status(400).json({ error: "universeSymbols must be an array of ticker strings." });
+        return;
+      }
+      clientUniverse = normalizeClientUniverse(body.universeSymbols);
+      if (body.universeSymbols.length > 0 && (clientUniverse == null || clientUniverse.length === 0)) {
+        res.status(400).json({ error: "No valid ticker symbols in universeSymbols." });
+        return;
+      }
+    }
 
-    // Merge: base universe first, then add any mover symbols not already present
-    const baseSet = new Set(UNIVERSE_SYMBOLS);
-    const allRows: UniverseRow[] = [
-      ...UNIVERSE_SYMBOLS.map((s) => ({ symbol: s, company: "" })),
-      ...moverSymbols.filter((m) => !baseSet.has(m.symbol)),
-    ];
+    // 1) Build universe: custom ticker list OR hardcoded base + live Schwab movers
+    let allRows: UniverseRow[];
+    const companyBySymbol: Record<string, string> = {};
+
+    if (clientUniverse && clientUniverse.length > 0) {
+      allRows = clientUniverse.map((s) => ({ symbol: s, company: "" }));
+    } else {
+      const [moversRows] = await Promise.allSettled([fetchMovers(accessToken)]);
+      const moverSymbols: UniverseRow[] =
+        moversRows.status === "fulfilled" ? moversRows.value : [];
+      const baseSet = new Set(UNIVERSE_SYMBOLS);
+      allRows = [
+        ...UNIVERSE_SYMBOLS.map((s) => ({ symbol: s, company: "" })),
+        ...moverSymbols.filter((m) => !baseSet.has(m.symbol)),
+      ];
+      for (const r of moverSymbols) companyBySymbol[r.symbol] = r.company;
+    }
 
     const tickers = allRows.map((r) => r.symbol);
-    const companyBySymbol: Record<string, string> = {};
-    for (const r of moverSymbols) companyBySymbol[r.symbol] = r.company;
 
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
@@ -321,6 +358,9 @@ export default async function handler(req: any, res: any) {
     }
 
     const warnings: string[] = [];
+    if (clientUniverse && clientUniverse.length > 0) {
+      warnings.push("Using a custom ticker bucket — Schwab index movers are not merged in.");
+    }
 
     // 3) Filter by price and optionally market cap
     let effectiveTickers = tickers.filter((t) => currentPriceByTicker[t] > 0);

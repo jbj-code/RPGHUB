@@ -448,6 +448,53 @@ body {
   margin-right: 0.5rem;
 }
 
+/* ---- Extractor: copy/download hover same as Options Builder ---- */
+.extractor-page .extractor-copy-table,
+.extractor-page .extractor-download-csv {
+  transition: color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+.extractor-page .extractor-process {
+  transition: transform 0.15s ease, box-shadow 0.2s ease, opacity 0.15s ease;
+}
+.extractor-page .extractor-process:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(68, 193, 193, 0.28);
+}
+.extractor-page .extractor-process:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+}
+.extractor-page .extractor-process:disabled {
+  opacity: 0.55;
+  cursor: not-allowed !important;
+}
+.extractor-page .extractor-dropzone {
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+.extractor-page .extractor-dropzone:hover {
+  border-color: rgba(68, 193, 193, 0.75) !important;
+  box-shadow: 0 0 0 2px rgba(68, 193, 193, 0.12);
+}
+.extractor-page .extractor-copy-table:hover,
+.extractor-page .extractor-download-csv:hover {
+  color: var(--checkbox-primary, #44c1c1) !important;
+  background: rgba(68, 193, 193, 0.1) !important;
+}
+.extractor-page .extractor-copy-table:active,
+.extractor-page .extractor-download-csv:active {
+  transform: scale(0.92);
+  background: rgba(68, 193, 193, 0.2) !important;
+}
+.extractor-page .extractor-clear {
+  transition: color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+.extractor-page .extractor-clear:hover {
+  color: var(--checkbox-primary, #44c1c1) !important;
+  background: rgba(68, 193, 193, 0.08) !important;
+}
+.extractor-page .extractor-clear:active {
+  transform: scale(0.98);
+}
+
 /* ---- Options Builder: copy/download hover same as Options Pricing ---- */
 .options-builder-page .options-builder-copy-table,
 .options-builder-page .options-builder-download-csv {

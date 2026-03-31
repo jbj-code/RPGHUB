@@ -4,6 +4,7 @@ import {
   getFixedRailsLayoutStyles,
   getPrimaryActionButtonStyle,
   getPrimaryButtonStyle,
+  getRailFooterActionButtonLayout,
   PAGE_LAYOUT,
 } from "../theme";
 import { SIDEBAR_WIDTH } from "../components/NavBar";
@@ -75,7 +76,6 @@ export function StockComparison({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Stoc
     leftRailWidth: 286,
     rightRailWidth: 256,
     headerHeight: 104,
-    panelGapPx: Number(t.spacing(3).replace("px", "")),
   });
 
   const titleStyle: React.CSSProperties = {
@@ -440,15 +440,7 @@ export function StockComparison({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Stoc
           className="page-card"
           style={{
             ...inputsCardStyle,
-            marginBottom: 0,
-            height: "100%",
-            display: "flex",
-            flexDirection: "column",
-            borderRadius: 0,
-            border: "none",
-            borderRight: `1px solid ${t.colors.border}`,
-            boxShadow: "none",
-            padding: t.spacing(3),
+            ...fixedRails.railPanel,
           }}
         >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: t.spacing(3) }}>
@@ -580,11 +572,8 @@ export function StockComparison({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Stoc
                 type="button"
                 style={{
                   ...actionButtonStyle,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
+                  ...getRailFooterActionButtonLayout(),
                   whiteSpace: "nowrap",
-                  width: "100%",
                 }}
                 onClick={refreshReturns}
                 disabled={loading || allTickersForFetch.length === 0}
@@ -838,12 +827,9 @@ export function StockComparison({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Stoc
           className="page-card"
           style={{
             ...presetsCardStyle,
+            ...fixedRails.railPanel,
             marginBottom: t.spacing(2),
-            borderRadius: 0,
-            border: "none",
-            borderLeft: `1px solid ${t.colors.border}`,
-            boxShadow: "none",
-            padding: t.spacing(3),
+            height: "auto",
           }}
         >
           <div
@@ -909,12 +895,9 @@ export function StockComparison({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Stoc
           className="page-card"
           style={{
             ...presetsCardStyle,
+            ...fixedRails.railPanel,
             marginBottom: 0,
-            borderRadius: 0,
-            border: "none",
-            borderLeft: `1px solid ${t.colors.border}`,
-            boxShadow: "none",
-            padding: t.spacing(3),
+            height: "auto",
           }}
         >
           <h3 style={{ ...cardTitleStyleNoMargin, marginBottom: t.spacing(2) }}>Presets</h3>

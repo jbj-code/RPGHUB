@@ -145,6 +145,7 @@ export function NavBar({
       label: "Assignment Check",
       icon: "schedule",
     },
+    { page: "extractor", label: "Extractor", icon: "document_scanner" },
     { page: "email-crm", label: "Email CRM", icon: "contacts" },
     { page: "todos", label: "To-Dos", icon: "checklist" },
     {

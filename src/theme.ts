@@ -48,6 +48,9 @@ export function getFixedRailsLayoutStyles(
   topHeader: CSSProperties;
   leftRail: CSSProperties;
   rightRail: CSSProperties;
+  railPanel: CSSProperties;
+  railBody: CSSProperties;
+  railFooter: CSSProperties;
   contentWrap: CSSProperties;
 } {
   const leftRailWidth = options.leftRailWidth ?? 286;
@@ -110,6 +113,30 @@ export function getFixedRailsLayoutStyles(
       flexDirection: "column",
       zIndex: 6,
       animation: "rails-fade-in 0.4s ease-out 0.1s both",
+    },
+    railPanel: {
+      margin: 0,
+      borderRadius: 0,
+      border: "none",
+      boxShadow: "none",
+      padding: t.spacing(3),
+      display: "flex",
+      flexDirection: "column",
+      height: "100%",
+      backgroundColor: t.colors.surface,
+    },
+    railBody: {
+      flex: 1,
+      overflowY: "auto",
+      overflowX: "hidden",
+      scrollbarWidth: "none",
+    },
+    railFooter: {
+      padding: `${t.spacing(3)} 0 0`,
+      backgroundColor: t.colors.surface,
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "stretch",
     },
     contentWrap: {
       marginTop: headerHeight + panelGapPx,
@@ -176,6 +203,18 @@ export function getPrimaryActionButtonStyle(t: Theme): CSSProperties {
   return {
     ...getPrimaryButtonStyle(t),
     padding: `${t.spacing(2.5)} ${t.spacing(4.5)}`,
+  };
+}
+
+/** Merge with primary or secondary rail-footer CTA styles so width matches across rail pages. */
+export function getRailFooterActionButtonLayout(): CSSProperties {
+  return {
+    width: "100%",
+    minWidth: 0,
+    boxSizing: "border-box",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
   };
 }
 
