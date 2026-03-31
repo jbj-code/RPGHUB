@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import type { Theme } from "../theme";
 import { assets, PAGE_LAYOUT, INTERACTIVE_CARD_CLASS } from "../theme";
+import { isSupabaseConfigured, supabase } from "../lib/supabaseClient";
 
 const GOOGLE_DRIVE_FOLDER =
   "https://drive.google.com/drive/folders/1tlymeBDbGkdWzXDs0D_QHcB2nE0kC83Y?usp=drive_link";
@@ -19,7 +21,36 @@ function faviconUrl(domain: string, size = 64): string {
 
 type HomeProps = { theme: Theme };
 
+type QuickLinkItem =
+  | { title: string; href: string; faviconDomain: string }
+  | { title: "To-Dos"; href: string; icon: "document-blue" };
+
 export function Home({ theme: t }: HomeProps) {
+  /** URL comes only from Supabase (`app_settings.home_todos_url`). Empty until loaded or if misconfigured. */
+  const [todosUrl, setTodosUrl] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadTodosUrlFromSupabase() {
+      if (!isSupabaseConfigured || !supabase) return;
+      const { data, error } = await supabase
+        .from("app_settings")
+        .select("value")
+        .eq("key", "home_todos_url")
+        .maybeSingle();
+      if (cancelled || error) return;
+      const nextUrl =
+        typeof data?.value === "string" && data.value.trim().length > 0
+          ? data.value.trim()
+          : "";
+      setTodosUrl(nextUrl);
+    }
+    void loadTodosUrlFromSupabase();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const wrapStyle: React.CSSProperties = {
     display: "flex",
     flexDirection: "column",
@@ -83,7 +114,7 @@ export function Home({ theme: t }: HomeProps) {
 
   const iconSize = 40;
 
-  const quickLinks = [
+  const quickLinks: QuickLinkItem[] = [
     {
       title: "Drive",
       href: GOOGLE_DRIVE_FOLDER,
@@ -114,11 +145,7 @@ export function Home({ theme: t }: HomeProps) {
       href: EMPOWER_LOGIN,
       faviconDomain: "empower-retirement.com",
     },
-    {
-      title: "To-Dos",
-      href: "https://docs.google.com/document/d/1wDfjDq4P8CSTVVgCevH8HYkFZ7xShEMf1mfIVNBry0Y/edit?tab=t.0#heading=h.y4mjsdfsqn2q",
-      faviconDomain: "docs.google.com",
-    },
+    { title: "To-Dos", href: todosUrl, icon: "document-blue" },
     {
       title: "Arena AI",
       href: "https://arena.ai/leaderboard",
@@ -152,25 +179,49 @@ export function Home({ theme: t }: HomeProps) {
 
       <section className="home-section home-quick-links" style={cardsWrapStyle} aria-label="Quick links">
         <div style={cardsGridStyle}>
-          {quickLinks.map((link) => (
+          {quickLinks.map((link) => {
+            const isTodos = link.title === "To-Dos";
+            const href = isTodos ? (link.href.trim() || "#") : link.href;
+            return (
             <a
               key={link.title}
-              href={link.href}
-              target="_blank"
-              rel="noopener noreferrer"
+              href={href}
+              target={isTodos && !link.href.trim() ? undefined : "_blank"}
+              rel={isTodos && !link.href.trim() ? undefined : "noopener noreferrer"}
+              onClick={isTodos && !link.href.trim() ? (e) => e.preventDefault() : undefined}
+              aria-disabled={isTodos && !link.href.trim() ? true : undefined}
               className={`home-quick-link-card page-card ${INTERACTIVE_CARD_CLASS}`}
               style={cardStyle}
             >
-              <img
-                src={faviconUrl(link.faviconDomain)}
-                alt=""
-                width={iconSize}
-                height={iconSize}
-                style={{ objectFit: "contain", flexShrink: 0 }}
-              />
+              {"icon" in link && link.icon === "document-blue" ? (
+                <span
+                  className="material-symbols-outlined"
+                  style={{
+                    fontSize: iconSize,
+                    width: iconSize,
+                    height: iconSize,
+                    lineHeight: 1,
+                    color: "#1a73e8",
+                    flexShrink: 0,
+                    fontVariationSettings: '"FILL" 0, "wght" 400, "GRAD" 0, "opsz" 40',
+                  }}
+                  aria-hidden
+                >
+                  description
+                </span>
+              ) : (
+                <img
+                  src={faviconUrl((link as { faviconDomain: string }).faviconDomain)}
+                  alt=""
+                  width={iconSize}
+                  height={iconSize}
+                  style={{ objectFit: "contain", flexShrink: 0 }}
+                />
+              )}
               <span style={cardTitleStyle}>{link.title}</span>
             </a>
-          ))}
+            );
+          })}
         </div>
       </section>
     </div>

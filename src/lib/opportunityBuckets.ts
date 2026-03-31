@@ -22,7 +22,6 @@ export const OPPORTUNITY_BUCKETS: OpportunityBucket[] = [
     symbols: [
       "GE",
       "VRT",
-      "XOM",
       "AVGO",
       "GEV",
       "VG",
@@ -36,7 +35,6 @@ export const OPPORTUNITY_BUCKETS: OpportunityBucket[] = [
       "UNP",
       "MLM",
       "CAT",
-      "LNG",
       "PWR",
       "VST",
       "MSFT",
