@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Theme } from "../theme";
-import { assets, PAGE_LAYOUT, INTERACTIVE_CARD_CLASS } from "../theme";
+import { assets, PAGE_LAYOUT, INTERACTIVE_CARD_CLASS, getPrimaryActionButtonStyle } from "../theme";
 
 const API_BASE =
   (import.meta.env.VITE_SCHWAB_API_BASE as string) || "https://therpghub.vercel.app";
@@ -30,6 +30,11 @@ type QuickLinkItem =
 export function Home({ theme: t }: HomeProps) {
   /** URL from Supabase via server API (`app_settings.home_todos_url`) — same pattern as site password. */
   const [todosUrl, setTodosUrl] = useState("");
+  const [todosEditorOpen, setTodosEditorOpen] = useState(false);
+  const [todosDraft, setTodosDraft] = useState("");
+  const [todosPassword, setTodosPassword] = useState("");
+  const [todosEditError, setTodosEditError] = useState<string | null>(null);
+  const [todosSaving, setTodosSaving] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -54,6 +59,37 @@ export function Home({ theme: t }: HomeProps) {
       cancelled = true;
     };
   }, []);
+
+  async function saveTodosUrl() {
+    setTodosEditError(null);
+    setTodosSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/app-settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          key: "home_todos_url",
+          value: todosDraft.trim(),
+          password: todosPassword,
+        }),
+      });
+      const j = (await res.json().catch(() => ({}))) as { error?: string; value?: string };
+      if (!res.ok) {
+        setTodosEditError(typeof j.error === "string" ? j.error : "Could not save.");
+        return;
+      }
+      const next = typeof j.value === "string" && j.value.trim() ? j.value.trim() : todosDraft.trim();
+      setTodosUrl(next);
+      setTodosPassword("");
+      setTodosEditorOpen(false);
+    } catch {
+      setTodosEditError("Network error.");
+    } finally {
+      setTodosSaving(false);
+    }
+  }
+
+  const primaryBtn = getPrimaryActionButtonStyle(t);
 
   const wrapStyle: React.CSSProperties = {
     display: "flex",
@@ -226,6 +262,142 @@ export function Home({ theme: t }: HomeProps) {
             </a>
             );
           })}
+        </div>
+
+        <div
+          style={{
+            maxWidth: 900,
+            margin: `${t.spacing(3)} auto 0`,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: t.spacing(2),
+          }}
+        >
+          {!todosEditorOpen ? (
+            <button
+              type="button"
+              onClick={() => {
+                setTodosDraft(todosUrl);
+                setTodosEditError(null);
+                setTodosPassword("");
+                setTodosEditorOpen(true);
+              }}
+              style={{
+                border: "none",
+                background: "none",
+                cursor: "pointer",
+                fontFamily: t.typography.fontFamily,
+                fontSize: "0.875rem",
+                color: t.colors.primary,
+                fontWeight: 600,
+                textDecoration: "underline",
+                textUnderlineOffset: 3,
+              }}
+            >
+              Update weekly To-Dos link
+            </button>
+          ) : (
+            <div
+              role="region"
+              aria-label="Edit To-Dos link"
+              style={{
+                width: "100%",
+                maxWidth: 440,
+                padding: t.spacing(4),
+                backgroundColor: t.colors.surface,
+                borderRadius: t.radius.lg,
+                border: `1px solid ${t.colors.border}`,
+                boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+                display: "flex",
+                flexDirection: "column",
+                gap: t.spacing(3),
+                textAlign: "left",
+              }}
+            >
+              <p style={{ margin: 0, fontSize: "0.875rem", color: t.colors.textMuted, lineHeight: 1.5 }}>
+                Paste the new Google Doc URL. You must enter the same site password you use to log in.
+              </p>
+              <label style={{ display: "flex", flexDirection: "column", gap: t.spacing(1) }}>
+                <span style={{ fontSize: "0.72rem", color: t.colors.textMuted, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>
+                  To-Dos URL
+                </span>
+                <input
+                  type="url"
+                  value={todosDraft}
+                  onChange={(e) => setTodosDraft(e.target.value)}
+                  placeholder="https://docs.google.com/..."
+                  autoComplete="off"
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    padding: `${t.spacing(2)} ${t.spacing(3)}`,
+                    borderRadius: t.radius.md,
+                    border: `1px solid ${t.colors.border}`,
+                    fontSize: t.typography.baseFontSize,
+                    fontFamily: t.typography.fontFamily,
+                    backgroundColor: t.colors.background,
+                    color: t.colors.text,
+                  }}
+                />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: t.spacing(1) }}>
+                <span style={{ fontSize: "0.72rem", color: t.colors.textMuted, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>
+                  Site password
+                </span>
+                <input
+                  type="password"
+                  value={todosPassword}
+                  onChange={(e) => setTodosPassword(e.target.value)}
+                  autoComplete="current-password"
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    padding: `${t.spacing(2)} ${t.spacing(3)}`,
+                    borderRadius: t.radius.md,
+                    border: `1px solid ${t.colors.border}`,
+                    fontSize: t.typography.baseFontSize,
+                    fontFamily: t.typography.fontFamily,
+                    backgroundColor: t.colors.background,
+                    color: t.colors.text,
+                  }}
+                />
+              </label>
+              {todosEditError && (
+                <p style={{ margin: 0, fontSize: "0.85rem", color: t.colors.danger, fontWeight: 600 }}>
+                  {todosEditError}
+                </p>
+              )}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: t.spacing(2) }}>
+                <button
+                  type="button"
+                  disabled={todosSaving}
+                  onClick={() => void saveTodosUrl()}
+                  style={{ ...primaryBtn, opacity: todosSaving ? 0.7 : 1, cursor: todosSaving ? "wait" : "pointer" }}
+                >
+                  {todosSaving ? "Saving…" : "Save link"}
+                </button>
+                <button
+                  type="button"
+                  disabled={todosSaving}
+                  onClick={() => setTodosEditorOpen(false)}
+                  style={{
+                    padding: `${t.spacing(2.5)} ${t.spacing(3)}`,
+                    fontSize: "0.875rem",
+                    fontWeight: 600,
+                    color: t.colors.textMuted,
+                    background: "none",
+                    border: `1px solid ${t.colors.border}`,
+                    borderRadius: t.radius.md,
+                    cursor: "pointer",
+                    fontFamily: t.typography.fontFamily,
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </section>
     </div>
