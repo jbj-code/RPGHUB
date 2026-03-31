@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import type { Theme } from "../theme";
 import { assets, PAGE_LAYOUT, INTERACTIVE_CARD_CLASS } from "../theme";
-import { isSupabaseConfigured, supabase } from "../lib/supabaseClient";
+
+const API_BASE =
+  (import.meta.env.VITE_SCHWAB_API_BASE as string) || "https://therpghub.vercel.app";
 
 const GOOGLE_DRIVE_FOLDER =
   "https://drive.google.com/drive/folders/1tlymeBDbGkdWzXDs0D_QHcB2nE0kC83Y?usp=drive_link";
@@ -26,26 +28,28 @@ type QuickLinkItem =
   | { title: "To-Dos"; href: string; icon: "document-blue" };
 
 export function Home({ theme: t }: HomeProps) {
-  /** URL comes only from Supabase (`app_settings.home_todos_url`). Empty until loaded or if misconfigured. */
+  /** URL from Supabase via server API (`app_settings.home_todos_url`) — same pattern as site password. */
   const [todosUrl, setTodosUrl] = useState("");
 
   useEffect(() => {
     let cancelled = false;
-    async function loadTodosUrlFromSupabase() {
-      if (!isSupabaseConfigured || !supabase) return;
-      const { data, error } = await supabase
-        .from("app_settings")
-        .select("value")
-        .eq("key", "home_todos_url")
-        .maybeSingle();
-      if (cancelled || error) return;
-      const nextUrl =
-        typeof data?.value === "string" && data.value.trim().length > 0
-          ? data.value.trim()
-          : "";
-      setTodosUrl(nextUrl);
+    async function loadTodosUrl() {
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/app-settings?key=${encodeURIComponent("home_todos_url")}`
+        );
+        if (cancelled || !res.ok) return;
+        const data = (await res.json()) as { value?: string | null };
+        const next =
+          typeof data?.value === "string" && data.value.trim().length > 0
+            ? data.value.trim()
+            : "";
+        setTodosUrl(next);
+      } catch {
+        /* ignore */
+      }
     }
-    void loadTodosUrlFromSupabase();
+    void loadTodosUrl();
     return () => {
       cancelled = true;
     };
