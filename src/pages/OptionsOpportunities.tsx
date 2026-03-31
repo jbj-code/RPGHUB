@@ -336,6 +336,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
   const [warnings, setWarnings] = useState<string[]>([]);
   const [resultsByOtmPct, setResultsByOtmPct] = useState<Record<number, RankedOption[]>>({});
   const [lastCopiedOpportunityKey, setLastCopiedOpportunityKey] = useState<string | null>(null);
+  const [lastScanAt, setLastScanAt] = useState<Date | null>(null);
   const [showInfoModal, setShowInfoModal] = useState(false);
   const [bucketId, setBucketId] = useState<string>(OPPORTUNITY_BUCKETS[0]!.id);
 
@@ -366,7 +367,8 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
         otmLevels: Array.from(OTM_LEVELS),
         topN: 10,
         minMarketCap,
-        strikeTolerancePct: 1.25,
+        // % points: listed strike OTM distance must be within this of target (wider grid / $ strikes).
+        strikeTolerancePct: 3,
         monthlyOnly,
       };
       if (activeBucket.symbols.length > 0) {
@@ -393,6 +395,10 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
       setWarnings(json.warnings ?? []);
       setScanError(json.message ? String(json.message) : null);
       setResultsByOtmPct(json.resultsByOtmPct ?? {});
+      if (res.ok) {
+        const hasAnyOtm = OTM_LEVELS.some((l) => (json.resultsByOtmPct?.[l] ?? []).length > 0);
+        if (hasAnyOtm) setLastScanAt(new Date());
+      }
     } catch (err: any) {
       setScanError(err?.message ? String(err.message) : "Unexpected error scanning from Schwab.");
     } finally {
@@ -881,17 +887,34 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
 
         {/* Footer */}
         {hasResults && (
-          <div
+          <footer
             style={{
+              marginTop: t.spacing(3),
               paddingTop: t.spacing(3),
               paddingBottom: t.spacing(6),
               borderTop: `1px solid ${t.colors.border}`,
               fontSize: "0.75rem",
               color: t.colors.textMuted,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: t.spacing(2),
             }}
           >
-            Market data provided by Charles Schwab. Yields are annualized and based on bid price. Top 5 names per OTM level, ranked by annualized yield.
-          </div>
+            <span>Market data provided by Charles Schwab.</span>
+            {lastScanAt && (
+              <span>
+                Data as of{" "}
+                {lastScanAt.toLocaleString(undefined, {
+                  year: "numeric",
+                  month: "short",
+                  day: "2-digit",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </span>
+            )}
+          </footer>
         )}
       </div>
 

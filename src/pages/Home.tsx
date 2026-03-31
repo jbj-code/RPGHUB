@@ -60,6 +60,15 @@ export function Home({ theme: t }: HomeProps) {
     };
   }, []);
 
+  useEffect(() => {
+    if (!todosEditorOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && !todosSaving) setTodosEditorOpen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [todosEditorOpen, todosSaving]);
+
   async function saveTodosUrl() {
     setTodosEditError(null);
     setTodosSaving(true);
@@ -91,6 +100,13 @@ export function Home({ theme: t }: HomeProps) {
 
   const primaryBtn = getPrimaryActionButtonStyle(t);
 
+  function openTodosEditor() {
+    setTodosDraft(todosUrl);
+    setTodosEditError(null);
+    setTodosPassword("");
+    setTodosEditorOpen(true);
+  }
+
   const wrapStyle: React.CSSProperties = {
     display: "flex",
     flexDirection: "column",
@@ -121,7 +137,8 @@ export function Home({ theme: t }: HomeProps) {
     maxWidth: PAGE_LAYOUT.maxWidth,
     width: "100%",
     margin: "0 auto",
-    padding: `0 ${t.spacing(4)} ${t.spacing(6)}`,
+    /* Extra horizontal inset so the To-Dos edit control (absolute, left of the first card) stays inside the padded area. */
+    padding: `0 ${t.spacing(12)} ${t.spacing(6)}`,
   };
 
   const cardsGridStyle: React.CSSProperties = {
@@ -154,7 +171,9 @@ export function Home({ theme: t }: HomeProps) {
 
   const iconSize = 40;
 
-  const quickLinks: QuickLinkItem[] = [
+  const todosLink: QuickLinkItem = { title: "To-Dos", href: todosUrl, icon: "document-blue" };
+
+  const quickLinksAfterTodos: Extract<QuickLinkItem, { title: string }>[] = [
     {
       title: "Drive",
       href: GOOGLE_DRIVE_FOLDER,
@@ -185,7 +204,6 @@ export function Home({ theme: t }: HomeProps) {
       href: EMPOWER_LOGIN,
       faviconDomain: "empower-retirement.com",
     },
-    { title: "To-Dos", href: todosUrl, icon: "document-blue" },
     {
       title: "Arena AI",
       href: "https://arena.ai/leaderboard",
@@ -219,96 +237,164 @@ export function Home({ theme: t }: HomeProps) {
 
       <section className="home-section home-quick-links" style={cardsWrapStyle} aria-label="Quick links">
         <div style={cardsGridStyle}>
-          {quickLinks.map((link) => {
-            const isTodos = link.title === "To-Dos";
-            const href = isTodos ? (link.href.trim() || "#") : link.href;
-            return (
-            <a
-              key={link.title}
-              href={href}
-              target={isTodos && !link.href.trim() ? undefined : "_blank"}
-              rel={isTodos && !link.href.trim() ? undefined : "noopener noreferrer"}
-              onClick={isTodos && !link.href.trim() ? (e) => e.preventDefault() : undefined}
-              aria-disabled={isTodos && !link.href.trim() ? true : undefined}
-              className={`home-quick-link-card page-card ${INTERACTIVE_CARD_CLASS}`}
-              style={cardStyle}
-            >
-              {"icon" in link && link.icon === "document-blue" ? (
-                <span
-                  className="material-symbols-outlined"
-                  style={{
-                    fontSize: iconSize,
-                    width: iconSize,
-                    height: iconSize,
-                    lineHeight: 1,
-                    color: "#1a73e8",
-                    flexShrink: 0,
-                    fontVariationSettings: '"FILL" 0, "wght" 400, "GRAD" 0, "opsz" 40',
-                  }}
-                  aria-hidden
-                >
-                  description
-                </span>
-              ) : (
-                <img
-                  src={faviconUrl((link as { faviconDomain: string }).faviconDomain)}
-                  alt=""
-                  width={iconSize}
-                  height={iconSize}
-                  style={{ objectFit: "contain", flexShrink: 0 }}
-                />
-              )}
-              <span style={cardTitleStyle}>{link.title}</span>
-            </a>
-            );
-          })}
-        </div>
-
-        <div
-          style={{
-            maxWidth: 900,
-            margin: `${t.spacing(3)} auto 0`,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            gap: t.spacing(2),
-          }}
-        >
-          {!todosEditorOpen ? (
+          <div style={{ position: "relative", minWidth: 0, width: "100%" }}>
             <button
               type="button"
-              onClick={() => {
-                setTodosDraft(todosUrl);
-                setTodosEditError(null);
-                setTodosPassword("");
-                setTodosEditorOpen(true);
-              }}
+              onClick={openTodosEditor}
+              className="home-todos-edit-btn"
+              aria-label="Edit To-Dos link"
+              title="Edit To-Dos link"
               style={{
+                position: "absolute",
+                right: "100%",
+                marginRight: t.spacing(2),
+                top: 0,
+                bottom: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 44,
+                minWidth: 44,
+                padding: 0,
                 border: "none",
                 background: "none",
                 cursor: "pointer",
+                color: t.colors.textMuted,
                 fontFamily: t.typography.fontFamily,
-                fontSize: "0.875rem",
-                color: t.colors.primary,
-                fontWeight: 600,
-                textDecoration: "underline",
-                textUnderlineOffset: 3,
+                zIndex: 1,
+                borderRadius: t.radius.md,
               }}
             >
-              Update weekly To-Dos link
+              <span className="material-symbols-outlined" style={{ fontSize: 28, lineHeight: 1 }} aria-hidden>
+                edit
+              </span>
             </button>
-          ) : (
+            <a
+              href={todosLink.href.trim() || "#"}
+              target={!todosLink.href.trim() ? undefined : "_blank"}
+              rel={!todosLink.href.trim() ? undefined : "noopener noreferrer"}
+              onClick={!todosLink.href.trim() ? (e) => e.preventDefault() : undefined}
+              aria-disabled={!todosLink.href.trim() ? true : undefined}
+              className={`home-quick-link-card page-card ${INTERACTIVE_CARD_CLASS}`}
+              style={cardStyle}
+            >
+              <span
+                className="material-symbols-outlined"
+                style={{
+                  fontSize: iconSize,
+                  width: iconSize,
+                  height: iconSize,
+                  lineHeight: 1,
+                  color: "#1a73e8",
+                  flexShrink: 0,
+                  fontVariationSettings: '"FILL" 0, "wght" 400, "GRAD" 0, "opsz" 40',
+                }}
+                aria-hidden
+              >
+                description
+              </span>
+              <span style={cardTitleStyle}>{todosLink.title}</span>
+            </a>
+          </div>
+
+          {quickLinksAfterTodos.map((link) => (
+            <a
+              key={link.title}
+              href={link.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`home-quick-link-card page-card ${INTERACTIVE_CARD_CLASS}`}
+              style={cardStyle}
+            >
+              <img
+                src={faviconUrl(link.faviconDomain)}
+                alt=""
+                width={iconSize}
+                height={iconSize}
+                style={{ objectFit: "contain", flexShrink: 0 }}
+              />
+              <span style={cardTitleStyle}>{link.title}</span>
+            </a>
+          ))}
+        </div>
+      </section>
+
+      {todosEditorOpen && (
+        <>
+          <div
+            role="presentation"
+            style={{
+              position: "fixed",
+              inset: 0,
+              backgroundColor: "rgba(0,0,0,0.4)",
+              zIndex: 1000,
+            }}
+            onClick={() => {
+              if (!todosSaving) setTodosEditorOpen(false);
+            }}
+            onKeyDown={(e) => e.key === "Escape" && !todosSaving && setTodosEditorOpen(false)}
+          />
+          <div
+            role="dialog"
+            aria-labelledby="home-todos-edit-title"
+            aria-modal="true"
+            style={{
+              position: "fixed",
+              left: "50%",
+              top: "50%",
+              transform: "translate(-50%, -50%)",
+              zIndex: 1001,
+              backgroundColor: t.colors.surface,
+              borderRadius: t.radius.lg,
+              padding: t.spacing(5),
+              maxWidth: 480,
+              width: "90%",
+              maxHeight: "85vh",
+              overflowY: "auto",
+              boxShadow: "0 12px 40px rgba(15, 42, 54, 0.2)",
+            }}
+          >
             <div
-              role="region"
-              aria-label="Edit To-Dos link"
               style={{
-                width: "100%",
-                maxWidth: 440,
-                padding: t.spacing(4),
-                backgroundColor: t.colors.surface,
-                borderRadius: t.radius.lg,
-                border: `1px solid ${t.colors.border}`,
-                boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                marginBottom: t.spacing(3),
+              }}
+            >
+              <h3
+                id="home-todos-edit-title"
+                style={{
+                  fontFamily: t.typography.fontFamily,
+                  fontWeight: t.typography.headingWeight,
+                  fontSize: "0.85rem",
+                  margin: 0,
+                  color: t.colors.secondary,
+                }}
+              >
+                Update To-Dos link
+              </h3>
+              <button
+                type="button"
+                disabled={todosSaving}
+                onClick={() => setTodosEditorOpen(false)}
+                style={{
+                  padding: t.spacing(0.5),
+                  border: "none",
+                  background: "none",
+                  color: t.colors.textMuted,
+                  cursor: todosSaving ? "not-allowed" : "pointer",
+                  opacity: todosSaving ? 0.5 : 1,
+                }}
+                aria-label="Close"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 22 }}>
+                  close
+                </span>
+              </button>
+            </div>
+            <div
+              style={{
                 display: "flex",
                 flexDirection: "column",
                 gap: t.spacing(3),
@@ -319,7 +405,15 @@ export function Home({ theme: t }: HomeProps) {
                 Paste the new Google Doc URL. You must enter the same site password you use to log in.
               </p>
               <label style={{ display: "flex", flexDirection: "column", gap: t.spacing(1) }}>
-                <span style={{ fontSize: "0.72rem", color: t.colors.textMuted, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>
+                <span
+                  style={{
+                    fontSize: "0.72rem",
+                    color: t.colors.textMuted,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em",
+                    fontWeight: 600,
+                  }}
+                >
                   To-Dos URL
                 </span>
                 <input
@@ -342,7 +436,15 @@ export function Home({ theme: t }: HomeProps) {
                 />
               </label>
               <label style={{ display: "flex", flexDirection: "column", gap: t.spacing(1) }}>
-                <span style={{ fontSize: "0.72rem", color: t.colors.textMuted, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600 }}>
+                <span
+                  style={{
+                    fontSize: "0.72rem",
+                    color: t.colors.textMuted,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em",
+                    fontWeight: 600,
+                  }}
+                >
                   Site password
                 </span>
                 <input
@@ -397,9 +499,9 @@ export function Home({ theme: t }: HomeProps) {
                 </button>
               </div>
             </div>
-          )}
-        </div>
-      </section>
+          </div>
+        </>
+      )}
     </div>
   );
 }

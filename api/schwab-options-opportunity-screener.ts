@@ -457,13 +457,15 @@ export default async function handler(req: any, res: any) {
     };
     const specs: OptionSpec[] = [];
 
+    /** Pick listed strike nearest target OTM; only true OTM legs (puts: strike < spot, calls: strike > spot). */
     const chooseStrike = (args: {
       strikes: number[];
       spot: number;
       targetOtmPct: number;
       side: "C" | "P";
+      strikeTolerancePct: number;
     }): number | null => {
-      const { strikes, spot, targetOtmPct, side } = args;
+      const { strikes, spot, targetOtmPct, side, strikeTolerancePct } = args;
       if (strikes.length === 0 || spot <= 0) return null;
       let best: { strike: number; diff: number } | null = null;
       for (const strike of strikes) {
@@ -472,11 +474,20 @@ export default async function handler(req: any, res: any) {
             ? ((spot - strike) / spot) * 100
             : ((strike - spot) / spot) * 100;
         if (!Number.isFinite(distPct)) continue;
+        // Short-premium scan: only out-of-the-money by standard definition (not ITM).
+        if (side === "P") {
+          if (strike >= spot) continue;
+        } else {
+          if (strike <= spot) continue;
+        }
+        if (distPct <= 0) continue;
         const diff = Math.abs(distPct - targetOtmPct);
         if (!best || diff < best.diff) best = { strike, diff };
-        if (diff === 0) return strike;
+        if (diff === 0 && diff <= strikeTolerancePct) return strike;
       }
-      return best?.strike ?? null;
+      if (!best) return null;
+      if (best.diff > strikeTolerancePct) return null;
+      return best.strike;
     };
 
     const CHAIN_CONCURRENCY = 10;
@@ -494,7 +505,8 @@ export default async function handler(req: any, res: any) {
             strategy: "SINGLE",
             fromDate: fromStr,
             toDate: toStr,
-            strikeCount: "20",
+            // Wider ladder so 15–20% OTM isn’t forced onto the same few ITM/near-ATM strikes.
+            strikeCount: "80",
           });
 
           const chainResp = await fetch(
@@ -537,7 +549,13 @@ export default async function handler(req: any, res: any) {
           if (strikes.length === 0) return;
 
           for (const otmPct of otmLevels) {
-            const chosen = chooseStrike({ strikes, spot, targetOtmPct: otmPct, side: type });
+            const chosen = chooseStrike({
+              strikes,
+              spot,
+              targetOtmPct: otmPct,
+              side: type,
+              strikeTolerancePct,
+            });
             if (!chosen) continue;
             specs.push({ ticker, expiry: expiration, type, otmPct, strike: chosen, currentPrice: spot });
           }

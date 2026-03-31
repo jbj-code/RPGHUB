@@ -276,6 +276,21 @@ body {
   transform: translateY(0) scale(0.99);
   box-shadow: 0 2px 8px rgba(68, 193, 193, 0.2);
 }
+
+/* Home: ghost pencil next to To-Dos (outside card, no border) */
+.home-todos-edit-btn {
+  transition: color 0.15s ease, transform 0.15s ease, opacity 0.15s ease;
+}
+.home-todos-edit-btn:hover {
+  color: #44c1c1;
+}
+.home-todos-edit-btn:focus-visible {
+  outline: 2px solid rgba(68, 193, 193, 0.85);
+  outline-offset: 2px;
+}
+.home-todos-edit-btn:active {
+  transform: scale(0.96);
+}
 @keyframes home-hero-fade {
   from {
     opacity: 0;
