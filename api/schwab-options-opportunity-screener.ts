@@ -155,6 +155,7 @@ type RankedOption = {
   company: string;
   oneMonthPerfPct: number | null;
   otmPct: number;
+  currentPrice: number;
   strike: number;
   bid: number;
   ask: number;
@@ -162,6 +163,10 @@ type RankedOption = {
   limitPrice: number;
   annYieldPct: number;
   premiumPerContract: number;
+  /** Schwab implied vol when present (%), else null. */
+  impliedVolPct: number | null;
+  /** ~20 trading-day annualized realized vol from daily closes (%), else null. */
+  realizedVol20dPct: number | null;
   /** Internal composite score used for ranking (higher is better). */
   score: number;
   schwabSymbol: string;
@@ -174,6 +179,7 @@ type OptionQuoteLite = {
   delta?: number;
   openInterest?: number;
   totalVolume?: number;
+  impliedVolPct?: number | null;
 };
 
 function clamp(n: number, lo: number, hi: number): number {
@@ -206,6 +212,59 @@ function daysBetween(from: Date, to: Date): number {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/** Annualized realized vol (%) from daily closes: sample stdev of log returns × √252. */
+function annualizedRealizedVolPctFromCloses(closes: number[]): number | null {
+  const c = closes.filter((x) => typeof x === "number" && x > 0);
+  if (c.length < 12) return null;
+  const tail = c.length > 22 ? c.slice(-22) : c;
+  const rets: number[] = [];
+  for (let i = 1; i < tail.length; i++) {
+    const a = tail[i - 1]!;
+    const b = tail[i]!;
+    if (a <= 0 || b <= 0) continue;
+    rets.push(Math.log(b / a));
+  }
+  if (rets.length < 10) return null;
+  const n = rets.length;
+  const mean = rets.reduce((s, x) => s + x, 0) / n;
+  const v = rets.reduce((s, x) => s + (x - mean) ** 2, 0) / Math.max(n - 1, 1);
+  const sd = Math.sqrt(v);
+  return sd * Math.sqrt(252) * 100;
+}
+
+const numField = (x: unknown): number | undefined =>
+  typeof x === "number" && Number.isFinite(x) ? x : undefined;
+
+/** Normalize Schwab IV to percent (e.g. 28.5). Accepts decimal (0–3) or percent (3–400). */
+function impliedVolPercentFromQuote(src: any): number | null {
+  const candidates = [
+    numField(src?.volatility),
+    numField(src?.impliedVolatility),
+    numField(src?.implied_volatility),
+    numField(src?.theoreticalOptionVol),
+  ];
+  for (const v of candidates) {
+    if (v == null || v <= 0) continue;
+    if (v > 0 && v <= 3) return v * 100;
+    if (v > 3 && v < 450) return v;
+  }
+  return null;
+}
+
+/**
+ * Tilt score using IV vs short realized vol (same underlying).
+ * Sell: boost when IV > RV (rich premium). Buy: boost when RV > IV (implied relatively cheap vs recent move).
+ */
+function volIvRvMultiplier(isBuyToOpen: boolean, ivPct: number | null, rvPct: number | null): number {
+  if (ivPct == null || rvPct == null || ivPct < 0.75 || rvPct < 0.75) return 1;
+  if (isBuyToOpen) {
+    const r = rvPct / ivPct;
+    return clamp(1 + 0.24 * (r - 1), 0.78, 1.32);
+  }
+  const r = ivPct / rvPct;
+  return clamp(1 + 0.24 * (r - 1), 0.78, 1.32);
 }
 
 /** Non-empty validated list from client → scan only these symbols (no movers merge). */
@@ -463,8 +522,9 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    // 4) 1-month price performance, parallel batches of 10
+    // 4) 1-month price performance + ~20d realized vol, parallel batches of 10
     const upsideByTicker: Record<string, number | null> = {};
+    const realizedVol20dPctByTicker: Record<string, number | null> = {};
     const HISTORY_CONCURRENCY = 10;
     for (let hi = 0; hi < effectiveTickers.length; hi += HISTORY_CONCURRENCY) {
       await Promise.allSettled(
@@ -483,16 +543,26 @@ export default async function handler(req: any, res: any) {
               { headers: { Authorization: `Bearer ${accessToken}` } }
             );
             throwIfRateLimited(histResp, "pricehistory");
-            if (!histResp.ok) { upsideByTicker[symbol] = null; return; }
+            if (!histResp.ok) {
+              upsideByTicker[symbol] = null;
+              realizedVol20dPctByTicker[symbol] = null;
+              return;
+            }
             const histBody: any = await histResp.json();
             const candles = histBody?.candles ?? [];
             if (!Array.isArray(candles) || candles.length < 2) {
               upsideByTicker[symbol] = null;
+              realizedVol20dPctByTicker[symbol] = null;
               return;
             }
             const sorted = candles
               .slice()
               .sort((a: any, b: any) => (a.datetime ?? 0) - (b.datetime ?? 0));
+            const closes = sorted
+              .map((c: any) => (typeof c?.close === "number" ? c.close : NaN))
+              .filter((x: number) => Number.isFinite(x) && x > 0);
+            realizedVol20dPctByTicker[symbol] = annualizedRealizedVolPctFromCloses(closes);
+
             const latest = sorted[sorted.length - 1];
             const latestClose = latest?.close ?? 0;
             const oneMonthAgo = new Date(today);
@@ -506,6 +576,7 @@ export default async function handler(req: any, res: any) {
                 : null;
           } catch {
             upsideByTicker[symbol] = null;
+            realizedVol20dPctByTicker[symbol] = null;
           }
         })
       );
@@ -519,6 +590,8 @@ export default async function handler(req: any, res: any) {
       otmPct: number;
       strike: number;
       currentPrice: number;
+      /** IV from chain contract when quote omits it (same normalization as quotes). */
+      impliedVolPctFromChain?: number | null;
     };
     const specs: OptionSpec[] = [];
 
@@ -622,7 +695,30 @@ export default async function handler(req: any, res: any) {
               strikeTolerancePct,
             });
             if (!chosen) continue;
-            specs.push({ ticker, expiry: expiration, type, otmPct, strike: chosen, currentPrice: spot });
+            let contractsRaw: any = strikesObjForExpiry[String(chosen)];
+            if (!Array.isArray(contractsRaw) || contractsRaw.length === 0) {
+              for (const [sk, arr] of Object.entries<any>(strikesObjForExpiry)) {
+                if (Number(sk) === chosen && Array.isArray(arr) && arr.length > 0) {
+                  contractsRaw = arr;
+                  break;
+                }
+              }
+            }
+            let impliedVolPctFromChain: number | null = null;
+            if (Array.isArray(contractsRaw) && contractsRaw.length > 0) {
+              const c0 = contractsRaw[0];
+              impliedVolPctFromChain =
+                c0 && typeof c0 === "object" ? impliedVolPercentFromQuote(c0) : null;
+            }
+            specs.push({
+              ticker,
+              expiry: expiration,
+              type,
+              otmPct,
+              strike: chosen,
+              currentPrice: spot,
+              impliedVolPctFromChain,
+            });
           }
         })
       );
@@ -678,6 +774,7 @@ export default async function handler(req: any, res: any) {
           delta: num(src.delta),
           openInterest: num(src.openInterest) ?? num(src.open_interest),
           totalVolume: num(src.totalVolume) ?? num(src.total_volume) ?? num(src.volume),
+          impliedVolPct: impliedVolPercentFromQuote(src),
         };
       }
     }
@@ -685,6 +782,8 @@ export default async function handler(req: any, res: any) {
     // 7) Build and rank results by OTM level
     const resultsByOtmPct: Record<number, RankedOption[]> = {};
     const liquidityFiltered = { spread: 0, oi: 0 };
+    let rankedRowsWithIv = 0;
+    let rankedRowsWithoutIv = 0;
 
     for (const spec of specs) {
       const key = `${spec.ticker} ${spec.expiry} ${spec.strike} ${spec.type}`;
@@ -732,9 +831,15 @@ export default async function handler(req: any, res: any) {
         0.05,
         1
       );
-      const score = isBuyToOpen
+      const ivPct = quote?.impliedVolPct ?? spec.impliedVolPctFromChain ?? null;
+      const rvPct = realizedVol20dPctByTicker[spec.ticker] ?? null;
+      const volMult = volIvRvMultiplier(isBuyToOpen, ivPct, rvPct);
+      const baseScore = isBuyToOpen
         ? ((probITM * 100) / Math.max(annAbs, 0.05)) * liqScore
         : annAbs * Math.pow(1 - probITM, 1.35) * liqScore;
+      const score = baseScore * volMult;
+      if (ivPct != null) rankedRowsWithIv++;
+      else rankedRowsWithoutIv++;
 
       const occSymbol = toOCCSymbol(spec.ticker, spec.expiry, spec.type, spec.strike);
       const schwabSymbol = formatSchwabSymbol({
@@ -754,16 +859,25 @@ export default async function handler(req: any, res: any) {
             ? null
             : round2(upsideByTicker[spec.ticker]!),
         otmPct: spec.otmPct,
+        currentPrice: round2(spec.currentPrice),
         strike: round2(spec.strike),
         bid: round2(bid),
         ask: round2(ask > 0 ? ask : bid),
         limitPrice: round2(optionPrice),
         annYieldPct: round2(annYieldPct),
         premiumPerContract: round2(premiumPerContract),
+        impliedVolPct: ivPct == null ? null : round2(ivPct),
+        realizedVol20dPct: rvPct == null ? null : round2(rvPct),
         score: round2(score),
         schwabSymbol,
         occSymbol,
       });
+    }
+
+    if (rankedRowsWithoutIv > 0 && rankedRowsWithIv === 0) {
+      warnings.push(
+        "Implied volatility was not available on option quotes or chain contracts; IV vs 20d realized-vol adjustment was skipped."
+      );
     }
 
     if (liquidityFiltered.spread > 0) {

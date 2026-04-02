@@ -27,12 +27,15 @@ type RankedOption = {
   company: string;
   oneMonthPerfPct: number | null;
   otmPct: number;
+  currentPrice: number;
   strike: number;
   bid: number;
   ask?: number;
   limitPrice?: number;
   annYieldPct: number;
   premiumPerContract: number;
+  impliedVolPct?: number | null;
+  realizedVol20dPct?: number | null;
   schwabSymbol: string;
   occSymbol: string;
 };
@@ -66,6 +69,16 @@ function formatPremium(n: number): string {
 function formatPct(n: number | null): string {
   if (n == null || !Number.isFinite(n)) return "—";
   return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
+}
+
+function formatVolPct(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return "—";
+  return `${n.toFixed(1)}%`;
+}
+
+function formatStrikePrice(n: number): string {
+  if (!Number.isFinite(n)) return "—";
+  return Number.isInteger(n) ? `$${n.toLocaleString("en-US")}` : `$${n.toFixed(2)}`;
 }
 
 function toISODateUTC(d: Date): string {
@@ -351,6 +364,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
     () => OPPORTUNITY_BUCKETS.find((b) => b.id === bucketId) ?? OPPORTUNITY_BUCKETS[0]!,
     [bucketId]
   );
+  const isFullUniverse = activeBucket.symbols.length === 0;
 
   useEffect(() => {
     if (!showInfoModal) return;
@@ -379,11 +393,11 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
         expiration,
         otmLevels: Array.from(OTM_LEVELS),
         topN: 10,
-        minMarketCap,
         // % points: listed strike OTM distance must be within this of target (wider grid / $ strikes).
         strikeTolerancePct: 3,
         monthlyOnly,
       };
+      if (isFullUniverse) payload.minMarketCap = minMarketCap;
       if (activeBucket.symbols.length > 0) {
         payload.universeSymbols = activeBucket.symbols;
       }
@@ -463,7 +477,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
           </button>
         </div>
         <p style={{ ...descStyle, marginTop: t.spacing(1), marginBottom: 0 }}>
-          Scan US equities for highest annualized option yields at 5%, 10%, 15%, and 20% OTM levels using live Schwab data.
+          Scan US equities and ETFs for risk-adjusted options opportunities at 5%, 10%, 15%, and 20% OTM using live Schwab data (liquidity + probability + annualized return/debit).
           {activeBucket.symbols.length > 0 ? (
             <>
               {" "}
@@ -532,7 +546,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
               <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
                 <li><strong>Base metric</strong> — <em>(option price ÷ strike) × (365 ÷ DTE)</em> (annualized). This normalizes premium/debit across expirations.</li>
                 <li><strong>1M Performance</strong> — the underlying's trailing 1-month price return. Useful context when deciding if a stock's recent momentum aligns with selling puts (bullish) or calls (bearish).</li>
-                <li><strong>Composite score</strong> — combines annualized return/debit, estimated ITM probability (delta proxy), and liquidity quality (spread, open interest, volume).</li>
+                <li><strong>Composite score</strong> — combines annualized return/debit, estimated ITM probability (delta proxy), liquidity quality (spread, open interest, volume), and an <strong>IV vs 20-day realized vol</strong> tilt when Schwab returns implied vol (richer IV vs RV helps sells; relatively cheaper IV vs RV helps long premium buys).</li>
                 <li>Within each OTM bucket, both modes rank by this score: sell mode favors high return with lower assignment risk; buy mode favors better probability-per-debit with tighter markets.</li>
               </ul>
 
@@ -550,6 +564,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                 <li><strong>Company</strong> — ticker and company name from Schwab.</li>
                 <li><strong>1M Perf</strong> — trailing 1-month price return of the underlying.</li>
                 <li><strong>Strike</strong> — the option strike closest to the target OTM %.</li>
+                <li><strong>IV / RV 20d</strong> — Schwab implied vol (when present) vs ~20 trading-day annualized realized vol on the underlying from daily closes.</li>
                 <li><strong>Bid / Ask</strong> — primary column matches your position (bid for selling, ask for buying); secondary line shows the other quote.</li>
                 <li><strong>Ann. yield / Ann. debit %</strong> — annualized option price ÷ strike × (365÷DTE); sell mode maximizes it, buy mode minimizes it.</li>
                 <li><strong>Premium / Debit</strong> — dollars per contract (×100 shares); debits show negative in the table copy helper.</li>
@@ -716,7 +731,8 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
             </label>
           </div>
 
-          {/* Min Market Cap */}
+          {/* Min Market Cap (full universe only) */}
+          {isFullUniverse ? (
           <div>
             <span style={labelStyle}>
               <HelpTooltip
@@ -743,6 +759,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
               />
             </div>
           </div>
+          ) : null}
 
           {/* Warnings */}
           {warnings.length > 0 && (
@@ -838,7 +855,21 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                         <th style={thStyle}>Ticker</th>
                         <th style={thStyle}>Company</th>
                         <th style={thNumStyle}>1M Perf</th>
+                        <th style={thNumStyle}>Px</th>
                         <th style={thNumStyle}>Strike</th>
+                        <th style={thNumStyle}>
+                          <HelpTooltip
+                            theme={t}
+                            text="Schwab implied volatility on the contract when returned; used with RV 20d in the ranking tilt."
+                          >
+                            <span style={{ cursor: "help" }}>IV</span>
+                          </HelpTooltip>
+                        </th>
+                        <th style={thNumStyle}>
+                          <HelpTooltip theme={t} text="Annualized ~20-day realized vol from daily closes on the underlying.">
+                            <span style={{ cursor: "help" }}>RV 20d</span>
+                          </HelpTooltip>
+                        </th>
                         <th style={thNumStyle}>{tableQuotePrimary}</th>
                         <th style={thNumStyle}>{tableAnnLabel}</th>
                         <th style={thNumStyle}>{tablePremLabel}</th>
@@ -848,7 +879,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                     <tbody>
                       {arr.length === 0 ? (
                         <tr>
-                          <td colSpan={9} style={{ ...tdStyle, color: t.colors.textMuted }}>
+                          <td colSpan={12} style={{ ...tdStyle, color: t.colors.textMuted }}>
                             No results for this OTM level
                           </td>
                         </tr>
@@ -884,7 +915,10 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                               >
                                 {formatPct(r.oneMonthPerfPct)}
                               </td>
-                              <td style={tdNumStyle}>${r.strike.toFixed(2)}</td>
+                              <td style={tdNumStyle}>{formatStrikePrice(r.currentPrice)}</td>
+                              <td style={tdNumStyle}>{formatStrikePrice(r.strike)}</td>
+                              <td style={{ ...tdNumStyle, color: t.colors.textMuted }}>{formatVolPct(r.impliedVolPct ?? null)}</td>
+                              <td style={{ ...tdNumStyle, color: t.colors.textMuted }}>{formatVolPct(r.realizedVol20dPct ?? null)}</td>
                               <td style={tdNumStyle}>
                                 {(() => {
                                   const bid = r.bid;
