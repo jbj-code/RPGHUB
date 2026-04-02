@@ -157,11 +157,40 @@ type RankedOption = {
   otmPct: number;
   strike: number;
   bid: number;
+  ask: number;
+  /** Bid when selling to open, ask when buying to open — used for yield / cost %. */
+  limitPrice: number;
   annYieldPct: number;
   premiumPerContract: number;
+  /** Internal composite score used for ranking (higher is better). */
+  score: number;
   schwabSymbol: string;
   occSymbol: string;
 };
+
+type OptionQuoteLite = {
+  bid?: number;
+  ask?: number;
+  delta?: number;
+  openInterest?: number;
+  totalVolume?: number;
+};
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, n));
+}
+
+function toEpochMs(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) {
+    // Some feeds return epoch seconds for date-ish values.
+    return v > 1e12 ? v : v > 1e9 ? v * 1000 : null;
+  }
+  if (typeof v === "string") {
+    const d = new Date(v);
+    if (!Number.isNaN(d.getTime())) return d.getTime();
+  }
+  return null;
+}
 
 function toExpiryYYYYMMDD(expKey: string): string {
   const datePart = expKey.split(":")[0].trim();
@@ -230,6 +259,15 @@ export default async function handler(req: any, res: any) {
   const type: "P" | "C" =
     optionType === "calls" || optionType === "call" || optionType === "c" ? "C" : "P";
 
+  const positionRaw = body.positionSide ?? body.position ?? "write";
+  const positionNorm = String(positionRaw).toLowerCase();
+  /** Sell to open (collect premium) vs buy to open (pay debit). */
+  const isBuyToOpen =
+    positionNorm === "buy" ||
+    positionNorm === "long" ||
+    positionNorm === "buytoopen" ||
+    positionNorm === "buy_to_open";
+
   const expiration = typeof body.expiration === "string" ? body.expiration : "";
   const isValidExpiry = /^\d{4}-\d{2}-\d{2}$/.test(expiration);
   const expiryDate = isValidExpiry ? new Date(expiration + "T00:00:00Z") : null;
@@ -248,6 +286,7 @@ export default async function handler(req: any, res: any) {
   const topN = Number(body.topN) || 5;
   const strikeTolerancePct = Number(body.strikeTolerancePct) || 1.25;
   const minMarketCap = body.minMarketCap != null ? Number(body.minMarketCap) : null;
+  const includeEarnings = Boolean(body.includeEarnings ?? false);
   // Internal cap prevents Schwab rate-limit (HTTP 429) and Vercel timeouts.
   // Not exposed to the UI — we always scan the broadest set we can safely handle.
   const MAX_UNDERLYINGS = 150;
@@ -322,6 +361,7 @@ export default async function handler(req: any, res: any) {
 
     const currentPriceByTicker: Record<string, number> = {};
     const marketCapByTicker: Record<string, number | null> = {};
+    const earningsDateMsByTicker: Record<string, number | null> = {};
 
     for (const sym of tickers) {
       const q = quotesBody[sym] ?? quotesBody[sym.replace(/\s+/g, "")];
@@ -344,6 +384,14 @@ export default async function handler(req: any, res: any) {
         (typeof src?.market_cap === "number" ? src.market_cap : null);
       marketCapByTicker[sym] =
         typeof mcCandidate === "number" && Number.isFinite(mcCandidate) ? mcCandidate : null;
+
+      const earningsCandidate =
+        fund?.nextEarningsDate ??
+        fund?.nextEarningDate ??
+        src?.nextEarningsDate ??
+        src?.nextEarningDate ??
+        null;
+      earningsDateMsByTicker[sym] = toEpochMs(earningsCandidate);
 
       // Extract company name from Schwab quote description (prefer mover name if already set)
       if (!companyBySymbol[sym]) {
@@ -387,6 +435,23 @@ export default async function handler(req: any, res: any) {
     // Safety cap to avoid Schwab rate-limits and Vercel timeouts
     if (effectiveTickers.length > MAX_UNDERLYINGS) {
       effectiveTickers = effectiveTickers.slice(0, MAX_UNDERLYINGS);
+    }
+
+    if (!includeEarnings) {
+      const startMs = today.getTime();
+      const endMs = expiryDate.getTime();
+      const before = effectiveTickers.length;
+      effectiveTickers = effectiveTickers.filter((t) => {
+        const ems = earningsDateMsByTicker[t];
+        if (ems == null) return true;
+        return !(ems >= startMs && ems <= endMs);
+      });
+      const removed = before - effectiveTickers.length;
+      if (removed > 0) {
+        warnings.push(
+          `Skipped ${removed} symbol${removed === 1 ? "" : "s"} with earnings before expiration.`
+        );
+      }
     }
 
     if (effectiveTickers.length === 0) {
@@ -573,7 +638,7 @@ export default async function handler(req: any, res: any) {
     }
 
     // 6) Option quotes (batched, 50 per request)
-    const optionQuotes: Record<string, { bid?: number; ask?: number }> = {};
+    const optionQuotes: Record<string, OptionQuoteLite> = {};
     const BATCH = 50;
 
     const occToSpecKeyMap = new Map<string, string>();
@@ -610,25 +675,66 @@ export default async function handler(req: any, res: any) {
         optionQuotes[key] = {
           bid: num(src.bidPrice) ?? num(src.bid),
           ask: num(src.askPrice) ?? num(src.ask),
+          delta: num(src.delta),
+          openInterest: num(src.openInterest) ?? num(src.open_interest),
+          totalVolume: num(src.totalVolume) ?? num(src.total_volume) ?? num(src.volume),
         };
       }
     }
 
     // 7) Build and rank results by OTM level
     const resultsByOtmPct: Record<number, RankedOption[]> = {};
+    const liquidityFiltered = { spread: 0, oi: 0 };
 
     for (const spec of specs) {
       const key = `${spec.ticker} ${spec.expiry} ${spec.strike} ${spec.type}`;
       const quote = optionQuotes[key];
       const bid = quote?.bid ?? 0;
-      const ask = quote?.ask ?? bid;
-      if (bid <= 0 && ask <= 0) continue;
+      const ask = quote?.ask ?? 0;
+      const optionPrice = isBuyToOpen
+        ? ask > 0
+          ? ask
+          : bid
+        : bid > 0
+          ? bid
+          : ask;
+      if (optionPrice <= 0) continue;
+      const askUsed = ask > 0 ? ask : bid;
+      const bidUsed = bid > 0 ? bid : ask;
+      const spread = askUsed > 0 && bidUsed > 0 ? askUsed - bidUsed : 0;
+      const mid = askUsed > 0 && bidUsed > 0 ? (askUsed + bidUsed) / 2 : optionPrice;
+      const spreadPct = mid > 0 ? spread / mid : 0;
+      const maxSpreadPct = isBuyToOpen ? 0.32 : 0.25;
+      if (spreadPct > maxSpreadPct) {
+        liquidityFiltered.spread++;
+        continue;
+      }
+      const oi = quote?.openInterest ?? null;
+      if (oi != null && oi < 50) {
+        liquidityFiltered.oi++;
+        continue;
+      }
 
-      const optionPrice = bid > 0 ? bid : ask;
-      const premiumPerContract = optionPrice * 100;
+      const premiumPerContract = (isBuyToOpen ? -1 : 1) * optionPrice * 100;
       const notional = spec.strike * 100;
       const yieldPct = notional !== 0 ? (premiumPerContract / notional) * 100 : 0;
       const annYieldPct = yieldPct * (365 / dte);
+      const annAbs = Math.abs(annYieldPct);
+      const rawDelta = quote?.delta;
+      const probITM = rawDelta != null
+        ? clamp(Math.abs(rawDelta), 0.02, 0.98)
+        : clamp(0.5 * Math.exp(-Math.abs(spec.currentPrice - spec.strike) / Math.max(spec.currentPrice, 1) * 12), 0.02, 0.98);
+      const volume = quote?.totalVolume ?? 0;
+      const liqScore = clamp(
+        (1 - clamp(spreadPct / Math.max(maxSpreadPct, 0.0001), 0, 1)) * 0.55 +
+          clamp((oi ?? 100) / 600, 0, 1) * 0.3 +
+          clamp(volume / 300, 0, 1) * 0.15,
+        0.05,
+        1
+      );
+      const score = isBuyToOpen
+        ? ((probITM * 100) / Math.max(annAbs, 0.05)) * liqScore
+        : annAbs * Math.pow(1 - probITM, 1.35) * liqScore;
 
       const occSymbol = toOCCSymbol(spec.ticker, spec.expiry, spec.type, spec.strike);
       const schwabSymbol = formatSchwabSymbol({
@@ -649,22 +755,51 @@ export default async function handler(req: any, res: any) {
             : round2(upsideByTicker[spec.ticker]!),
         otmPct: spec.otmPct,
         strike: round2(spec.strike),
-        bid: round2(bid || ask),
+        bid: round2(bid),
+        ask: round2(ask > 0 ? ask : bid),
+        limitPrice: round2(optionPrice),
         annYieldPct: round2(annYieldPct),
         premiumPerContract: round2(premiumPerContract),
+        score: round2(score),
         schwabSymbol,
         occSymbol,
       });
     }
 
+    if (liquidityFiltered.spread > 0) {
+      warnings.push(
+        `Excluded ${liquidityFiltered.spread} illiquid contracts with wide bid/ask spread.`
+      );
+    }
+    if (liquidityFiltered.oi > 0) {
+      warnings.push(
+        `Excluded ${liquidityFiltered.oi} contracts with very low open interest.`
+      );
+    }
+
     for (const otmPct of otmLevels) {
       const arr = resultsByOtmPct[otmPct] ?? [];
-      arr.sort((a, b) => b.annYieldPct - a.annYieldPct);
+      arr.sort((a, b) =>
+        b.score !== a.score
+          ? b.score - a.score
+          : isBuyToOpen
+            ? a.annYieldPct - b.annYieldPct
+            : b.annYieldPct - a.annYieldPct
+      );
       arr.slice(0, topN).forEach((r, idx) => (r.rank = idx + 1));
       resultsByOtmPct[otmPct] = arr.slice(0, topN);
     }
 
-    res.status(200).json({ resultsByOtmPct, message: null, warnings, expiration, optionType: type, dte });
+    const positionSide = isBuyToOpen ? "buy" : "write";
+    res.status(200).json({
+      resultsByOtmPct,
+      message: null,
+      warnings,
+      expiration,
+      optionType: type,
+      dte,
+      positionSide,
+    });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
 

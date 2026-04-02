@@ -19,6 +19,7 @@ const SCHWAB_API_BASE =
   (import.meta.env.VITE_SCHWAB_API_BASE as string) || "https://therpghub.vercel.app";
 
 type OptionType = "puts" | "calls";
+type PositionSide = "write" | "buy";
 
 type RankedOption = {
   rank: number;
@@ -28,6 +29,8 @@ type RankedOption = {
   otmPct: number;
   strike: number;
   bid: number;
+  ask?: number;
+  limitPrice?: number;
   annYieldPct: number;
   premiumPerContract: number;
   schwabSymbol: string;
@@ -41,6 +44,7 @@ type ScreenerResponse = {
   expiration?: string;
   optionType?: "P" | "C";
   dte?: number;
+  positionSide?: "write" | "buy";
 };
 
 const OTM_LEVELS = [5, 10, 15, 20] as const;
@@ -326,6 +330,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
   const expirations = useMemo(() => getMonthlyThirdFridayExpirations(18), []);
 
   const [optionType, setOptionType] = useState<OptionType>("puts");
+  const [positionSide, setPositionSide] = useState<PositionSide>("write");
   const [monthlyOnly, setMonthlyOnly] = useState(true);
   const [expiration, setExpiration] = useState<string>(expirations[0]?.value ?? "");
   const [openId, setOpenId] = useState<string | null>(null);
@@ -337,6 +342,8 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
   const [resultsByOtmPct, setResultsByOtmPct] = useState<Record<number, RankedOption[]>>({});
   const [lastCopiedOpportunityKey, setLastCopiedOpportunityKey] = useState<string | null>(null);
   const [lastScanAt, setLastScanAt] = useState<Date | null>(null);
+  /** Matches the scan that produced current tables (so labels stay correct if you change controls). */
+  const [outcomePositionSide, setOutcomePositionSide] = useState<PositionSide>("write");
   const [showInfoModal, setShowInfoModal] = useState(false);
   const [bucketId, setBucketId] = useState<string>(OPPORTUNITY_BUCKETS[0]!.id);
 
@@ -354,6 +361,11 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
 
   const hasResults = OTM_LEVELS.some((l) => (resultsByOtmPct[l] ?? []).length > 0);
 
+  const tableQuotePrimary = outcomePositionSide === "buy" ? "Ask" : "Bid";
+  const tableQuoteSecondary = outcomePositionSide === "buy" ? "Bid" : "Ask";
+  const tableAnnLabel = outcomePositionSide === "buy" ? "Ann. debit %" : "Ann. yield";
+  const tablePremLabel = outcomePositionSide === "buy" ? "Debit" : "Premium";
+
   async function onScan() {
     if (!expiration) return;
     setScanError(null);
@@ -363,6 +375,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
     try {
       const payload: Record<string, unknown> = {
         optionType,
+        positionSide,
         expiration,
         otmLevels: Array.from(OTM_LEVELS),
         topN: 10,
@@ -397,7 +410,10 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
       setResultsByOtmPct(json.resultsByOtmPct ?? {});
       if (res.ok) {
         const hasAnyOtm = OTM_LEVELS.some((l) => (json.resultsByOtmPct?.[l] ?? []).length > 0);
-        if (hasAnyOtm) setLastScanAt(new Date());
+        if (hasAnyOtm) {
+          setLastScanAt(new Date());
+          setOutcomePositionSide(positionSide);
+        }
       }
     } catch (err: any) {
       setScanError(err?.message ? String(err.message) : "Unexpected error scanning from Schwab.");
@@ -499,27 +515,31 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
 
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>What this page does</p>
               <p style={{ marginBottom: t.spacing(3) }}>
-                Options Opportunities scans a broad universe of US equities (S&P 500, NASDAQ 100, major ETFs, and live Schwab movers) for the highest-yielding short option opportunities at four standard OTM levels: <strong>5%, 10%, 15%, and 20%</strong> out-of-the-money. Results are ranked by annualized yield within each OTM bucket.
+                Options Opportunities scans a broad universe of US equities (S&P 500, NASDAQ 100, major ETFs, and live Schwab movers) at four standard OTM levels: <strong>5%, 10%, 15%, and 20%</strong>. It supports both <strong>sell to open</strong> and <strong>buy to open</strong> workflows and ranks opportunities using a composite risk-adjusted score (not premium alone).
               </p>
 
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>How the scan works</p>
               <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
                 <li><strong>Universe</strong> — default scan uses ~660 hardcoded tickers (S&P 500, NASDAQ 100, major ETFs) plus live Schwab top movers. You can narrow to a <strong>bucket</strong> from the right panel (e.g. Climate / Energy transition); buckets do not add movers.</li>
-                <li><strong>Market cap filter</strong> — symbols are sorted by market cap (largest first) so the most liquid names are always scanned first. You can set a minimum market cap to exclude smaller, less-liquid stocks.</li>
+                <li><strong>Market cap filter</strong> — symbols are sorted by market cap (largest first) so the most liquid names are scanned first. You can set a minimum market cap to exclude smaller, less-liquid stocks.</li>
                 <li><strong>Option chain fetch</strong> — for each symbol, we pull the option chain for your chosen expiration and locate the strike closest to each OTM % target (5/10/15/20% away from the current price).</li>
-                <li><strong>Limit price</strong> — the midpoint of the bid/ask spread for that strike, representing the realistic fill price.</li>
+                <li><strong>Quote used</strong> — <strong>Bid</strong> for sell to open, <strong>ask</strong> for buy to open (natural limit side for each).</li>
+                <li><strong>Risk filters</strong> — contracts with very wide bid/ask spread or very low open interest are excluded before ranking.</li>
+                <li><strong>Earnings window</strong> — by default, symbols with earnings before expiration are skipped to reduce event risk.</li>
               </ul>
 
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>How ranking works</p>
               <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
-                <li><strong>Annualized Yield</strong> — <em>(limit price ÷ strike) × (365 ÷ DTE)</em>. Normalizes premium across different expirations so a 30-day and a 60-day option can be compared fairly.</li>
+                <li><strong>Base metric</strong> — <em>(option price ÷ strike) × (365 ÷ DTE)</em> (annualized). This normalizes premium/debit across expirations.</li>
                 <li><strong>1M Performance</strong> — the underlying's trailing 1-month price return. Useful context when deciding if a stock's recent momentum aligns with selling puts (bullish) or calls (bearish).</li>
-                <li>Within each OTM bucket, results are sorted by annualized yield — highest yield at the top.</li>
+                <li><strong>Composite score</strong> — combines annualized return/debit, estimated ITM probability (delta proxy), and liquidity quality (spread, open interest, volume).</li>
+                <li>Within each OTM bucket, both modes rank by this score: sell mode favors high return with lower assignment risk; buy mode favors better probability-per-debit with tighter markets.</li>
               </ul>
 
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Scan parameters</p>
               <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
-                <li><strong>Option Type</strong> — Puts (most common for cash-secured selling) or Calls (for covered calls).</li>
+                <li><strong>Option Type</strong> — Puts or calls (OTM strikes only).</li>
+                <li><strong>Position</strong> — <em>Write (sell to open)</em> uses bid and optimizes for risk-adjusted premium; <em>Buy (long)</em> uses ask and optimizes for probability-per-debit with liquidity constraints.</li>
                 <li><strong>Expiration</strong> — the target expiry date. Monthly expirations (3rd Friday) tend to have the best liquidity.</li>
                 <li><strong>Monthly Only</strong> — filters the expiry dropdown to standard monthly expirations only.</li>
                 <li><strong>Min Market Cap</strong> — exclude micro/small caps with potentially wide bid/ask spreads. Default $500M.</li>
@@ -530,9 +550,9 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                 <li><strong>Company</strong> — ticker and company name from Schwab.</li>
                 <li><strong>1M Perf</strong> — trailing 1-month price return of the underlying.</li>
                 <li><strong>Strike</strong> — the option strike closest to the target OTM %.</li>
-                <li><strong>Bid</strong> — current bid price for the option (per share).</li>
-                <li><strong>Ann. Yield</strong> — annualized yield based on limit price (mid of bid/ask) and strike notional.</li>
-                <li><strong>Premium</strong> — total premium received per contract (limit price × 100 shares), rounded to the nearest dollar.</li>
+                <li><strong>Bid / Ask</strong> — primary column matches your position (bid for selling, ask for buying); secondary line shows the other quote.</li>
+                <li><strong>Ann. yield / Ann. debit %</strong> — annualized option price ÷ strike × (365÷DTE); sell mode maximizes it, buy mode minimizes it.</li>
+                <li><strong>Premium / Debit</strong> — dollars per contract (×100 shares); debits show negative in the table copy helper.</li>
               </ul>
 
             </div>
@@ -609,6 +629,46 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
             </div>
           </div>
 
+          {/* Write vs buy */}
+          <div>
+            <span style={labelStyle}>
+              <HelpTooltip
+                theme={t}
+                text="Write (sell to open): rank by highest annualized premium collected — uses bid. Buy (buy to open): rank by lowest annualized debit vs strike — uses ask, best for comparing opening long premium at each OTM."
+              >
+                <span style={{ cursor: "help" }}>Position</span>
+              </HelpTooltip>
+            </span>
+            <div style={{ display: "flex", gap: t.spacing(2) }}>
+              {(
+                [
+                  { v: "write" as const, label: "Write (sell)" },
+                  { v: "buy" as const, label: "Buy (long)" },
+                ] as const
+              ).map(({ v, label }) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setPositionSide(v)}
+                  aria-pressed={positionSide === v}
+                  style={{
+                    flex: 1,
+                    padding: `${t.spacing(2)} ${t.spacing(2)}`,
+                    borderRadius: t.radius.md,
+                    border: `1px solid ${positionSide === v ? t.colors.primary : t.colors.border}`,
+                    backgroundColor: positionSide === v ? `${t.colors.primary}18` : t.colors.background,
+                    color: positionSide === v ? t.colors.primary : t.colors.text,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    fontSize: "0.78rem",
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Target Expiration */}
           <div>
             <span style={labelStyle}>Target Expiration</span>
@@ -661,7 +721,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
             <span style={labelStyle}>
               <HelpTooltip
                 theme={t}
-                text="Only scan stocks with at least this market cap. Larger companies tend to have tighter bid/ask spreads and better option liquidity."
+                text="Filters out names whose market cap from Schwab is below this level (when cap is available). Sorting always prefers larger-cap names first up to the scan limit. ETFs and missing cap: rows with no cap data still pass the filter — for a small ETF-only bucket, min cap often does little; for the full stock universe it mainly drops small names and improves average liquidity."
               >
                 <span style={{ cursor: "help" }}>
                   Min Market Cap ($)
@@ -718,8 +778,10 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                 <span className="options-pricing-fetch-spinner" aria-hidden />
                 Scanning…
               </span>
+            ) : positionSide === "buy" ? (
+              "Run scan (buy to open)"
             ) : (
-              "Scan for Highest Yields"
+              "Run scan (sell to open)"
             )}
           </button>
         </div>
@@ -746,7 +808,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
             <span className="material-symbols-outlined" style={{ fontSize: 36, opacity: 0.4 }} aria-hidden>
               search
             </span>
-            <p style={{ margin: 0, fontWeight: 600 }}>Configure your scan parameters and click Scan for Highest Yields</p>
+            <p style={{ margin: 0, fontWeight: 600 }}>Configure parameters and click Run scan</p>
             <p style={{ margin: 0, fontSize: "0.85rem" }}>
               Results will appear here grouped by OTM level (5%, 10%, 15%, 20%)
             </p>
@@ -777,9 +839,9 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                         <th style={thStyle}>Company</th>
                         <th style={thNumStyle}>1M Perf</th>
                         <th style={thNumStyle}>Strike</th>
-                        <th style={thNumStyle}>Bid</th>
-                        <th style={thNumStyle}>Ann. Yield</th>
-                        <th style={thNumStyle}>Premium</th>
+                        <th style={thNumStyle}>{tableQuotePrimary}</th>
+                        <th style={thNumStyle}>{tableAnnLabel}</th>
+                        <th style={thNumStyle}>{tablePremLabel}</th>
                         <th style={{ ...thStyle, textAlign: "center", borderTopRightRadius: t.radius.md }}>Action</th>
                       </tr>
                     </thead>
@@ -823,8 +885,35 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                                 {formatPct(r.oneMonthPerfPct)}
                               </td>
                               <td style={tdNumStyle}>${r.strike.toFixed(2)}</td>
-                              <td style={tdNumStyle}>${r.bid.toFixed(2)}</td>
-                              <td style={{ ...tdNumStyle, color: t.colors.success }}>
+                              <td style={tdNumStyle}>
+                                {(() => {
+                                  const bid = r.bid;
+                                  const ask = r.ask ?? r.bid;
+                                  const primary = outcomePositionSide === "buy" ? ask : bid;
+                                  const secondary = outcomePositionSide === "buy" ? bid : ask;
+                                  return (
+                                    <>
+                                      <span style={{ fontWeight: 700 }}>${primary.toFixed(2)}</span>
+                                      <span
+                                        style={{
+                                          display: "block",
+                                          fontSize: "0.72rem",
+                                          color: t.colors.textMuted,
+                                          fontWeight: 500,
+                                        }}
+                                      >
+                                        {tableQuoteSecondary} ${secondary.toFixed(2)}
+                                      </span>
+                                    </>
+                                  );
+                                })()}
+                              </td>
+                              <td
+                                style={{
+                                  ...tdNumStyle,
+                                  color: outcomePositionSide === "buy" ? t.colors.text : t.colors.success,
+                                }}
+                              >
                                 {r.annYieldPct.toFixed(2)}%
                               </td>
                               <td style={tdNumStyle}>{formatPremium(r.premiumPerContract)}</td>

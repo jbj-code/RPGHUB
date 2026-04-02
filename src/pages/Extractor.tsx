@@ -13,13 +13,10 @@ type ExtractorProps = { theme: Theme };
 const ACCEPT = ".pdf,application/pdf,image/png,image/jpeg,image/webp,image/gif";
 
 const DISPLAY_HEADERS: { key: keyof Omit<FundScheduleRow, "id">; label: string }[] = [
-  { key: "fund", label: "Fund" },
-  { key: "valuationPeriod", label: "Valuation Period" },
-  { key: "reportingPeriod", label: "Reporting Period" },
-  { key: "fundVintageYear", label: "Fund Vintage Year" },
-  { key: "company", label: "Company" },
-  { key: "amountInvested", label: "Amount Invested" },
-  { key: "companyValuation", label: "Company Valuation" },
+  { key: "company", label: "Company / Investment" },
+  { key: "shares", label: "Shares" },
+  { key: "amountInvested", label: "Cost" },
+  { key: "companyValuation", label: "Fair value (FMV)" },
 ];
 
 function rowsToTsv(rows: FundScheduleRow[]): string {
