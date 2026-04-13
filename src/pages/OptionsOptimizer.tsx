@@ -829,14 +829,14 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
               </p>
               <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
                 <li><strong>Annualized Yield (50%)</strong> — premium ÷ strike notional × (365 ÷ DTE). This is the return on actual capital at risk (cash to cover a short put, or shares for a short call), annualized. Higher is better.</li>
-                <li><strong>Directional Momentum (50% of base)</strong> — the underlying's trailing 1-month return, adjusted for trade direction. Upside helps short puts &amp; long calls; downside helps short calls &amp; long puts. Capped at ±50% so extreme single-month moves don't dominate.</li>
+                <li><strong>Directional Momentum (50% of base)</strong> — the underlying's trailing ~1-month return (start: daily close from Schwab history; end: same live equity quote snapshot as spot), adjusted for trade direction. Upside helps short puts &amp; long calls; downside helps short calls &amp; long puts. Capped at ±50% so extreme single-month moves don't dominate.</li>
                 <li><strong>Risk adjustment</strong> — for short options, we use <strong>Probability of Profit (PoP)</strong> from the Schwab-quoted delta: <em>PoP = (1 − |delta|) × 100</em>. Options above 70% PoP get a score boost; below 50% (near/in-the-money) get a penalty. When Schwab doesn't return a delta, we fall back to tiered OTM-distance penalties.</li>
               </ul>
 
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Understanding the columns</p>
               <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
-                <li><strong>1M Performance</strong> — trailing 1-month total return of the underlying from Schwab price history (directional context for ranking).</li>
-                <li><strong>Moneyness</strong> — strike ÷ spot × 100. Below 100% is typically OTM for puts; above 100% is typically OTM for calls. At-the-money is near 100%.</li>
+                <li><strong>1M Performance</strong> — ~1-month total return: baseline close from daily history vs current price from the equity quote at request time (directional context for ranking).</li>
+                <li><strong>Moneyness</strong> — strike ÷ spot × 100, using the same underlying quote snapshot as the rest of the run. �� Below 100% is typically OTM for puts; above 100% is typically OTM for calls. At-the-money is near 100%.</li>
                 <li><strong>Limit Px</strong> — midpoint of the Schwab bid/ask. This is your target fill price; real fills may differ.</li>
                 <li><strong>Ann. Yield</strong> — annualized yield based on strike notional (see above).</li>
                 <li><strong>PoP</strong> — probability the option expires worthless (you keep the full premium). Derived from delta: higher is better for short options.</li>
@@ -1332,7 +1332,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                   <th style={{ textAlign: "center", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
                     <HelpTooltip
                       theme={t}
-                      text="1M Performance is the underlying ticker's trailing 1-month total return from Schwab price history. It is used as a directional context signal in ranking."
+                      text="1M Performance is ~1-month total return: start from Schwab daily history (close on/after ~1 month ago), end from the live equity quote at request time (same snapshot as spot). Used in ranking."
                     >
                       <span style={{ cursor: "help" }}>1M Performance</span>
                     </HelpTooltip>

@@ -570,10 +570,11 @@ export default async function handler(req: any, res: any) {
             const targetMs = oneMonthAgo.getTime();
             const start = sorted.find((c: any) => (c.datetime ?? 0) >= targetMs) ?? sorted[0];
             const startClose = start?.close ?? 0;
+            const livePx = currentPriceByTicker[symbol];
+            const endPx =
+              typeof livePx === "number" && livePx > 0 ? livePx : latestClose;
             upsideByTicker[symbol] =
-              startClose > 0 && latestClose > 0
-                ? (latestClose / startClose - 1) * 100
-                : null;
+              startClose > 0 && endPx > 0 ? (endPx / startClose - 1) * 100 : null;
           } catch {
             upsideByTicker[symbol] = null;
             realizedVol20dPctByTicker[symbol] = null;

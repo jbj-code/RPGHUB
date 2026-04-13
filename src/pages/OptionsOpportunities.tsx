@@ -545,7 +545,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>How ranking works</p>
               <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
                 <li><strong>Base metric</strong> — <em>(option price ÷ strike) × (365 ÷ DTE)</em> (annualized). This normalizes premium/debit across expirations.</li>
-                <li><strong>1M Performance</strong> — the underlying's trailing 1-month price return. Useful context when deciding if a stock's recent momentum aligns with selling puts (bullish) or calls (bearish).</li>
+                <li><strong>1M Performance</strong> — ~1-month price return: baseline close from daily history vs current equity quote at scan time. Useful context when deciding if a stock's recent momentum aligns with selling puts (bullish) or calls (bearish).</li>
                 <li><strong>Composite score</strong> — combines annualized return/debit, estimated ITM probability (delta proxy), liquidity quality (spread, open interest, volume), and an <strong>IV vs 20-day realized vol</strong> tilt when Schwab returns implied vol (richer IV vs RV helps sells; relatively cheaper IV vs RV helps long premium buys).</li>
                 <li>Within each OTM bucket, both modes rank by this score: sell mode favors high return with lower assignment risk; buy mode favors better probability-per-debit with tighter markets.</li>
               </ul>
@@ -562,7 +562,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Table columns</p>
               <ul style={{ margin: 0, marginBottom: t.spacing(2), paddingLeft: t.spacing(5) }}>
                 <li><strong>Company</strong> — ticker and company name from Schwab.</li>
-                <li><strong>1M Perf</strong> — trailing 1-month price return of the underlying.</li>
+                <li><strong>1M Perf</strong> — ~1-month return (history start anchor vs live quote at scan time).</li>
                 <li><strong>Strike</strong> — the option strike closest to the target OTM %.</li>
                 <li><strong>IV / RV 20d</strong> — Schwab implied vol (when present) vs ~20 trading-day annualized realized vol on the underlying from daily closes.</li>
                 <li><strong>Bid / Ask</strong> — primary column matches your position (bid for selling, ask for buying); secondary line shows the other quote.</li>

@@ -1,4 +1,5 @@
-// Options Optimizer: uses Schwab chains (expirations + strikes), quotes (underlying + options), and price history (1M return).
+// Options Optimizer: uses Schwab chains (expirations + strikes), quotes (underlying + options), and price history
+// for the ~1M return *start* anchor; the *end* price is the live equity quote (same snapshot as spot/moneyness).
 // POST body: { portfolioRows: PortfolioRow[], otmVariancePct: number }
 
 import { createClient } from "@supabase/supabase-js";
@@ -264,7 +265,7 @@ export default async function handler(req: any, res: any) {
       if (typeof p === "number" && p > 0) currentPriceByTicker[sym] = p;
     }
 
-    // 2) 1M return per ticker (price history) — parallel, 2-month window is sufficient for 1M lookback
+    // 2) ~1M return per ticker: start = daily close on/after ~1 month ago; end = live equity quote (step 1), else last daily close.
     const upsideByTicker: Record<string, number> = {};
     await Promise.allSettled(
       tickers.map(async (symbol) => {
@@ -295,8 +296,11 @@ export default async function handler(req: any, res: any) {
           const targetMs = oneMonthAgo.getTime();
           const start = sorted.find((c: any) => (c.datetime ?? 0) >= targetMs) ?? sorted[0];
           const startClose = start?.close ?? 0;
-          if (startClose > 0 && latestClose > 0) {
-            upsideByTicker[symbol] = (latestClose / startClose - 1) * 100;
+          const livePx = currentPriceByTicker[symbol];
+          const endPx =
+            typeof livePx === "number" && livePx > 0 ? livePx : latestClose;
+          if (startClose > 0 && endPx > 0) {
+            upsideByTicker[symbol] = (endPx / startClose - 1) * 100;
           }
         } catch {
           /* ignore per-ticker failures */
