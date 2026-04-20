@@ -504,7 +504,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
   const fetchTradeIdentifiers = useCallback(async (tradeId: string, tr: OptionsTrade) => {
     setFetchingFigiForId(tradeId);
     try {
-      const resp = await fetch("/api/fetch-trade-identifiers", {
+      const resp = await fetch("/api/schwab-quotes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
