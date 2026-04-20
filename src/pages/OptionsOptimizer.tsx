@@ -146,6 +146,34 @@ function formatPrice(n: number): string {
   return Number.isInteger(n) ? `$${n.toFixed(0)}` : `$${n.toFixed(2)}`;
 }
 
+function formatDateForSheets(raw: string): string {
+  if (!raw) return "";
+  const normalized = raw.includes("T") ? raw : `${raw}T00:00:00Z`;
+  const d = new Date(normalized);
+  if (!Number.isFinite(d.getTime())) return raw;
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const yyyy = d.getUTCFullYear();
+  return `${mm}/${dd}/${yyyy}`;
+}
+
+function formatSheetNumber(n: number): string {
+  if (!Number.isFinite(n)) return "";
+  return n.toFixed(2);
+}
+
+function formatTradeForSheetsExport(tr: OptionsTrade): string {
+  return [
+    tr.figi ?? "",
+    tr.ticker,
+    formatDateForSheets(tr.maturity),
+    formatSheetNumber(tr.strikePrice),
+    tr.optionSide,
+    formatSheetNumber(tr.currentBid),
+    formatSheetNumber(tr.currentAsk),
+  ].join("\t");
+}
+
 /** Schwab-style symbol: TICKER MM/DD/YYYY Strike C|P */
 export function formatSchwabSymbol(tr: OptionsTrade): string {
   const d = new Date(tr.maturity + "Z");
@@ -501,10 +529,10 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
   const [expandedTradeId, setExpandedTradeId] = useState<string | null>(null);
   const [fetchingFigiForId, setFetchingFigiForId] = useState<string | null>(null);
   const [figiStatusById, setFigiStatusById] = useState<Record<string, { ok: boolean; msg: string }>>({});
+  const [exportingTradeList, setExportingTradeList] = useState(false);
+  const [tradeListExportCopied, setTradeListExportCopied] = useState(false);
 
-  const fetchTradeIdentifiers = useCallback(async (tradeId: string, tr: OptionsTrade) => {
-    setFetchingFigiForId(tradeId);
-    setFigiStatusById((prev) => ({ ...prev, [tradeId]: { ok: true, msg: "" } }));
+  const requestTradeIdentifiers = useCallback(async (tr: OptionsTrade) => {
     try {
       const resp = await fetch("/api/schwab", {
         method: "POST",
@@ -519,28 +547,99 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
       });
       const data = await resp.json();
       if (!resp.ok) {
-        setFigiStatusById((prev) => ({ ...prev, [tradeId]: { ok: false, msg: data?.error ?? `Error ${resp.status}` } }));
-        return;
+        return { ok: false as const, msg: data?.error ?? `Error ${resp.status}` };
       }
       if (data.figi) {
-        setTrades((prev) =>
-          prev.map((t) =>
-            t.id === tradeId ? { ...t, figi: data.figi, cusip: data.cusip ?? t.cusip } : t
-          )
-        );
-        setFigiStatusById((prev) => ({ ...prev, [tradeId]: { ok: true, msg: "" } }));
+        return { ok: true as const, figi: data.figi as string, cusip: (data.cusip ?? null) as string | null, msg: "" };
       } else {
         const noMatchMsg = data?.occSymbol
           ? `No FIGI found for ${data.occSymbol}`
           : (data?.message ?? "No FIGI found for this contract.");
-        setFigiStatusById((prev) => ({ ...prev, [tradeId]: { ok: false, msg: noMatchMsg } }));
+        return { ok: false as const, msg: noMatchMsg };
       }
     } catch (err: any) {
-      setFigiStatusById((prev) => ({ ...prev, [tradeId]: { ok: false, msg: `Fetch error: ${err?.message ?? String(err)}` } }));
-    } finally {
-      setFetchingFigiForId(null);
+      return { ok: false as const, msg: `Fetch error: ${err?.message ?? String(err)}` };
     }
   }, []);
+
+  const fetchTradeIdentifiers = useCallback(async (tradeId: string, tr: OptionsTrade) => {
+    setFetchingFigiForId(tradeId);
+    setFigiStatusById((prev) => ({ ...prev, [tradeId]: { ok: true, msg: "" } }));
+    const result = await requestTradeIdentifiers(tr);
+    if (result.ok) {
+      setTrades((prev) =>
+        prev.map((t) =>
+          t.id === tradeId ? { ...t, figi: result.figi, cusip: result.cusip ?? t.cusip } : t
+        )
+      );
+      setFigiStatusById((prev) => ({ ...prev, [tradeId]: { ok: true, msg: "" } }));
+    } else {
+      setFigiStatusById((prev) => ({ ...prev, [tradeId]: { ok: false, msg: result.msg } }));
+    }
+    setFetchingFigiForId(null);
+  }, [requestTradeIdentifiers]);
+
+  const exportTradesForSheets = useCallback(async () => {
+    if (trades.length === 0 || exportingTradeList) return;
+    setExportingTradeList(true);
+
+    const statusUpdates: Record<string, { ok: boolean; msg: string }> = {};
+    const figiUpdates = new Map<string, { figi: string; cusip: string | null }>();
+
+    try {
+      const missingFigiTrades = trades.filter((tr) => !tr.figi);
+      for (const tr of missingFigiTrades) {
+        let result = await requestTradeIdentifiers(tr);
+        if (!result.ok) {
+          // Quick retry to reduce transient API/network misses.
+          result = await requestTradeIdentifiers(tr);
+        }
+        if (result.ok) {
+          figiUpdates.set(tr.id, { figi: result.figi, cusip: result.cusip });
+          statusUpdates[tr.id] = { ok: true, msg: "" };
+        } else {
+          statusUpdates[tr.id] = { ok: false, msg: result.msg };
+        }
+      }
+
+      if (Object.keys(statusUpdates).length > 0) {
+        setFigiStatusById((prev) => ({ ...prev, ...statusUpdates }));
+      }
+
+      const exportTrades = trades.map((tr) => {
+        const update = figiUpdates.get(tr.id);
+        if (!update) return tr;
+        return { ...tr, figi: update.figi, cusip: update.cusip ?? tr.cusip };
+      });
+
+      const missingAfterFetch = exportTrades.filter((tr) => !tr.figi);
+      if (missingAfterFetch.length > 0) {
+        window.alert(
+          `Could not fetch FIGI for ${missingAfterFetch.length} trade${missingAfterFetch.length === 1 ? "" : "s"} yet. Please retry export.`
+        );
+        return;
+      }
+
+      if (figiUpdates.size > 0) {
+        setTrades((prev) =>
+          prev.map((tr) => {
+            const update = figiUpdates.get(tr.id);
+            if (!update) return tr;
+            return { ...tr, figi: update.figi, cusip: update.cusip ?? tr.cusip };
+          })
+        );
+      }
+
+      const text = exportTrades.map((tr) => formatTradeForSheetsExport(tr)).join("\n");
+      await navigator.clipboard.writeText(text);
+      setTradeListExportCopied(true);
+      window.setTimeout(() => {
+        setTradeListExportCopied(false);
+      }, 1800);
+    } finally {
+      setExportingTradeList(false);
+    }
+  }, [trades, exportingTradeList, requestTradeIdentifiers]);
 
   useEffect(() => {
     if (!showOptimizeForModal) return;
@@ -1530,6 +1629,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                             cursor: "pointer",
                             color: t.colors.primary,
                             borderRadius: "50%",
+                            position: "relative",
                           }}
                         >
                           <span
@@ -1693,7 +1793,78 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
             gap: t.spacing(2),
           }}
         >
-          <h3 style={{ ...sectionTitleStyle, marginBottom: t.spacing(1) }}>Trade list</h3>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: t.spacing(1) }}>
+            <h3 style={{ ...sectionTitleStyle, marginBottom: t.spacing(1) }}>Trade list</h3>
+            <button
+              type="button"
+              onClick={() => void exportTradesForSheets()}
+              title="Copy for Google Sheets"
+              aria-label="Copy trade list for Google Sheets"
+              disabled={trades.length === 0 || exportingTradeList}
+              className="options-optimizer-copy-symbol"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 30,
+                height: 30,
+                padding: 0,
+                border: "none",
+                background: "none",
+                cursor: trades.length === 0 || exportingTradeList ? "not-allowed" : "pointer",
+                color: "#000000",
+                borderRadius: "50%",
+                position: "relative",
+                opacity: trades.length === 0 || exportingTradeList ? 0.45 : 1,
+                flexShrink: 0,
+              }}
+            >
+              {exportingTradeList ? (
+                <span
+                  className="options-pricing-fetch-spinner"
+                  style={{
+                    color: t.colors.primary,
+                    marginRight: 0,
+                    width: 18,
+                    height: 18,
+                    borderWidth: 2,
+                  }}
+                  aria-hidden
+                />
+              ) : (
+                <>
+                  <span
+                    className="material-symbols-outlined"
+                    style={{
+                      fontSize: 20,
+                      position: "absolute",
+                      opacity: tradeListExportCopied ? 0 : 1,
+                      transition: "opacity 0.2s ease",
+                      pointerEvents: "none",
+                      color: "#000000",
+                    }}
+                    aria-hidden
+                  >
+                    content_copy
+                  </span>
+                  <span
+                    className="material-symbols-outlined"
+                    style={{
+                      fontSize: 20,
+                      position: "absolute",
+                      opacity: tradeListExportCopied ? 1 : 0,
+                      transition: "opacity 0.2s ease",
+                      pointerEvents: "none",
+                      color: t.colors.primary,
+                    }}
+                    aria-hidden
+                  >
+                    check_circle
+                  </span>
+                </>
+              )}
+            </button>
+          </div>
           {trades.length > 0 && (
             <span style={{ fontSize: "0.875rem", color: t.colors.textMuted }}>
               {trades.length} trade{trades.length !== 1 ? "s" : ""}

@@ -42,7 +42,7 @@ export function NavBar({
     flexDirection: "column",
     fontFamily: t.typography.fontFamily,
     overflowX: "hidden",
-    overflowY: "auto",
+    overflowY: "hidden",
     transition: "width 0.25s ease, min-width 0.25s ease",
   };
 
@@ -76,10 +76,13 @@ export function NavBar({
 
   const navStyle: CSSProperties = {
     flex: 1,
+    minHeight: 0,
     padding: compact ? t.spacing(2) : t.spacing(3),
     display: "flex",
     flexDirection: "column",
     gap: t.spacing(1),
+    overflowY: "auto",
+    overflowX: "hidden",
   };
 
   const linkStyle = (active: boolean): CSSProperties => ({
