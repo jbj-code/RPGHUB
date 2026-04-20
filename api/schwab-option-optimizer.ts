@@ -475,6 +475,15 @@ export default async function handler(req: any, res: any) {
       });
       if (!qResp.ok) continue;
       const qBody: any = await qResp.json();
+      // DEBUG: log the raw keys/structure of the first option response so we can find where cusip lives.
+      if (i === 0 && occSymbols[0]) {
+        const firstKey = occSymbols[0];
+        const firstQ = qBody[firstKey] ?? qBody[firstKey.replace(/\s+/g, "")];
+        console.log("[optimizer] first OCC key:", firstKey);
+        console.log("[optimizer] top-level keys in quote object:", firstQ ? Object.keys(firstQ) : "NOT FOUND");
+        if (firstQ?.reference) console.log("[optimizer] reference keys:", Object.keys(firstQ.reference));
+        console.log("[optimizer] q.cusip:", firstQ?.cusip, "| q.reference.cusip:", firstQ?.reference?.cusip);
+      }
       for (let j = 0; j < batch.length; j++) {
         const spec = batch[j];
         const occ = occSymbols[j];
