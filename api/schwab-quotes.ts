@@ -52,7 +52,7 @@ export default async function handler(req: any, res: any) {
       const figiResp = await fetch("https://api.openfigi.com/v3/mapping", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-OPENFIGI-APIKEY": apiKey },
-        body: JSON.stringify([{ idType: "OCC", idValue: occSymbol }]),
+        body: JSON.stringify([{ idType: "OCC_SYMBOL", idValue: occSymbol }]),
       });
       if (!figiResp.ok) {
         const errText = await figiResp.text().catch(() => "");

@@ -534,8 +534,8 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
           : (data?.message ?? "No FIGI found for this contract.");
         setFigiStatusById((prev) => ({ ...prev, [tradeId]: { ok: false, msg: noMatchMsg } }));
       }
-    } catch (err) {
-      setFigiStatusById((prev) => ({ ...prev, [tradeId]: { ok: false, msg: "Network error — could not reach server." } }));
+    } catch (err: any) {
+      setFigiStatusById((prev) => ({ ...prev, [tradeId]: { ok: false, msg: `Fetch error: ${err?.message ?? String(err)}` } }));
     } finally {
       setFetchingFigiForId(null);
     }
