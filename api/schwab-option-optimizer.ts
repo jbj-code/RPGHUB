@@ -514,15 +514,20 @@ export default async function handler(req: any, res: any) {
     await Promise.allSettled(
       Array.from({ length: Math.ceil(allOccs.length / BATCH) }, (_, bi) =>
         allOccs.slice(bi * BATCH, bi * BATCH + BATCH)
-      ).map(async (batch) => {
+      ).map(async (batch, batchIdx) => {
         try {
-          const iResp = await fetch(
+          const url =
             "https://api.schwabapi.com/marketdata/v1/instruments?" +
-              new URLSearchParams({ symbols: batch.join(","), projection: "symbol-search" }).toString(),
-            { headers: { Authorization: `Bearer ${accessToken}` } }
-          );
-          if (!iResp.ok) return;
-          const iBody: any = await iResp.json();
+            new URLSearchParams({ symbols: batch.join(","), projection: "symbol-search" }).toString();
+          const iResp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+          const iBody: any = iResp.ok ? await iResp.json() : null;
+          // DEBUG: log the first batch so we can see what instruments returns for OCC symbols.
+          if (batchIdx === 0) {
+            console.log("[optimizer][instruments] HTTP status:", iResp.status);
+            console.log("[optimizer][instruments] first OCC sent:", batch[0]);
+            console.log("[optimizer][instruments] raw response:", JSON.stringify(iBody)?.slice(0, 500));
+          }
+          if (!iResp.ok || !iBody) return;
           // Response is either an array of instruments or { instruments: [...] }.
           const list: any[] = Array.isArray(iBody)
             ? iBody
@@ -540,7 +545,9 @@ export default async function handler(req: any, res: any) {
               cusipByOcc[sym.replace(/\s+/g, "")] = cusip;
             }
           }
-        } catch { /* ignore per-batch failures */ }
+        } catch (e) {
+          console.log("[optimizer][instruments] error:", String(e));
+        }
       })
     );
 
