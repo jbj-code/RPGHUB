@@ -5,13 +5,30 @@
 import { createClient } from "@supabase/supabase-js";
 import { getValidAccessToken } from "./_schwab-utils.js";
 
+/**
+ * Builds a 21-character OCC option symbol.
+ * Format: TTTTTT YYMMDD C/P SSSSSSSS
+ *   TTTTTT  — ticker left-justified, space-padded to 6 chars
+ *   YYMMDD  — expiry (expiry arg must be YYYY-MM-DD)
+ *   C or P  — call/put
+ *   SSSSSSSS — strike * 1000, zero-padded to 8 digits
+ * Example: SPY $674 Call 2025-11-06 → "SPY   251106C00674000"
+ */
+function buildOccSymbol(ticker: string, expiry: string, strike: number, cp: "C" | "P"): string {
+  const tickerPadded = ticker.slice(0, 6).padEnd(6, " ");
+  const [yyyy, mm, dd] = expiry.split("-");
+  const yy = yyyy.slice(2);
+  const strikeStr = Math.round(strike * 1000).toString().padStart(8, "0");
+  return `${tickerPadded}${yy}${mm}${dd}${cp}${strikeStr}`;
+}
+
 export default async function handler(req: any, res: any) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") { res.status(200).end(); return; }
 
-  // ── POST: OpenFIGI per-contract FIGI lookup ──────────────────────────────
+  // ── POST: OpenFIGI per-contract FIGI lookup via OCC symbol ───────────────
   if (req.method === "POST") {
     const { ticker, expiry, strike, putCall } = req.body ?? {};
     if (!ticker || !expiry || strike == null || !putCall) {
@@ -24,17 +41,18 @@ export default async function handler(req: any, res: any) {
       return;
     }
     try {
+      // Build the OCC 21-char option symbol, e.g. "SPY   251106C00674000"
+      // expiry is YYYY-MM-DD from Schwab
+      const occSymbol = buildOccSymbol(
+        String(ticker).trim().toUpperCase(),
+        String(expiry),
+        Number(strike),
+        putCall === "Call" ? "C" : "P"
+      );
       const figiResp = await fetch("https://api.openfigi.com/v3/mapping", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-OPENFIGI-APIKEY": apiKey },
-        body: JSON.stringify([{
-          idType: "TICKER",
-          idValue: String(ticker).trim().toUpperCase(),
-          exchCode: "US",
-          securityType2: putCall === "Call" ? "Call" : "Put",
-          strike: Number(strike),
-          expiration: String(expiry),
-        }]),
+        body: JSON.stringify([{ idType: "OCC", idValue: occSymbol }]),
       });
       if (!figiResp.ok) {
         const errText = await figiResp.text().catch(() => "");
@@ -44,20 +62,12 @@ export default async function handler(req: any, res: any) {
       const body: any[] = await figiResp.json();
       const matches: any[] = body?.[0]?.data ?? [];
       if (matches.length === 0) {
-        res.status(200).json({ figi: null, cusip: null, message: "No match found in OpenFIGI." });
+        res.status(200).json({ figi: null, cusip: null, occSymbol, message: `No match found in OpenFIGI for OCC symbol: ${occSymbol}` });
         return;
       }
-      // Pick best match: prefer description containing the strike and expiry year.
-      const strikeStr = String(Number(strike));
-      const expiryYear = String(expiry).slice(2, 4);
-      const scored = matches.map((m: any) => {
-        const desc: string = (m.securityDescription ?? "").toUpperCase();
-        return { ...m, _score: (desc.includes(strikeStr) ? 2 : 0) + (desc.includes(expiryYear) ? 1 : 0) };
-      });
-      scored.sort((a: any, b: any) => b._score - a._score);
-      const best = scored[0];
+      const best = matches[0];
       const figi = typeof best.figi === "string" && best.figi.length > 0 ? best.figi : null;
-      res.status(200).json({ figi, cusip: null });
+      res.status(200).json({ figi, cusip: null, occSymbol });
     } catch (err) {
       console.error("schwab-quotes FIGI error", err);
       res.status(500).json({ error: "Unexpected error calling OpenFIGI." });

@@ -500,9 +500,11 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
   const [lastCopiedTradeId, setLastCopiedTradeId] = useState<string | null>(null);
   const [expandedTradeId, setExpandedTradeId] = useState<string | null>(null);
   const [fetchingFigiForId, setFetchingFigiForId] = useState<string | null>(null);
+  const [figiStatusById, setFigiStatusById] = useState<Record<string, { ok: boolean; msg: string }>>({});
 
   const fetchTradeIdentifiers = useCallback(async (tradeId: string, tr: OptionsTrade) => {
     setFetchingFigiForId(tradeId);
+    setFigiStatusById((prev) => ({ ...prev, [tradeId]: { ok: true, msg: "" } }));
     try {
       const resp = await fetch("/api/schwab-quotes", {
         method: "POST",
@@ -515,15 +517,25 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
         }),
       });
       const data = await resp.json();
-      setTrades((prev) =>
-        prev.map((t) =>
-          t.id === tradeId
-            ? { ...t, figi: data.figi ?? t.figi, cusip: data.cusip ?? t.cusip }
-            : t
-        )
-      );
-    } catch {
-      // silently ignore
+      if (!resp.ok) {
+        setFigiStatusById((prev) => ({ ...prev, [tradeId]: { ok: false, msg: data?.error ?? `Error ${resp.status}` } }));
+        return;
+      }
+      if (data.figi) {
+        setTrades((prev) =>
+          prev.map((t) =>
+            t.id === tradeId ? { ...t, figi: data.figi, cusip: data.cusip ?? t.cusip } : t
+          )
+        );
+        setFigiStatusById((prev) => ({ ...prev, [tradeId]: { ok: true, msg: "" } }));
+      } else {
+        const noMatchMsg = data?.occSymbol
+          ? `No FIGI found for ${data.occSymbol}`
+          : (data?.message ?? "No FIGI found for this contract.");
+        setFigiStatusById((prev) => ({ ...prev, [tradeId]: { ok: false, msg: noMatchMsg } }));
+      }
+    } catch (err) {
+      setFigiStatusById((prev) => ({ ...prev, [tradeId]: { ok: false, msg: "Network error — could not reach server." } }));
     } finally {
       setFetchingFigiForId(null);
     }
@@ -1782,7 +1794,13 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                           </div>
                         )}
                       </div>
-                      <div style={{ marginTop: t.spacing(2), display: "flex", justifyContent: "center", gap: t.spacing(1.5) }}>
+                      <div style={{ marginTop: t.spacing(2), display: "flex", flexDirection: "column", alignItems: "center", gap: t.spacing(1) }}>
+                        {figiStatusById[tr.id]?.msg && (
+                          <div style={{ fontSize: "0.7rem", color: figiStatusById[tr.id].ok ? t.colors.success : t.colors.danger, textAlign: "center" }}>
+                            {figiStatusById[tr.id].msg}
+                          </div>
+                        )}
+                        <div style={{ display: "flex", justifyContent: "center", gap: t.spacing(1.5) }}>
                         <button
                           type="button"
                           onClick={() => fetchTradeIdentifiers(tr.id, tr)}
@@ -1800,6 +1818,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                         >
                           Remove
                         </button>
+                        </div>
                       </div>
                     </div>
                   )}
