@@ -28,6 +28,7 @@ type BuilderRowOutput = {
   yieldAtCurrentPrice: number;
   annualizedYieldPct: number;
   valueOfSharesAtStrike: number;
+  cusip?: string | null;
 };
 
 
@@ -145,7 +146,7 @@ export default async function handler(req: any, res: any) {
 
     const occResp = await fetch(
       "https://api.schwabapi.com/marketdata/v1/quotes?" +
-        new URLSearchParams({ symbols: occSymbols.join(",") }).toString(),
+        new URLSearchParams({ symbols: occSymbols.join(","), fields: "quote,reference" }).toString(),
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
     const occBody: any = occResp.ok ? await occResp.json() : {};
@@ -180,19 +181,39 @@ export default async function handler(req: any, res: any) {
         bySymbol.get(occ) ??
         bySymbol.get(occ.replace(/\s+/g, "")) ??
         (occBody && typeof occBody === "object" ? (occBody as any)[occ] : undefined);
-      const src = q?.quote ?? q?.optionContract ?? q;
+      const src = q?.quote ?? q?.optionContract ?? q?.option ?? q;
       const bid =
-        typeof src?.bidPrice === "number"
+        typeof src?.bidPrice === "number" && src.bidPrice > 0
           ? src.bidPrice
-          : typeof src?.bid === "number"
+          : typeof src?.bid === "number" && src.bid > 0
             ? src.bid
             : undefined;
       const ask =
-        typeof src?.askPrice === "number"
+        typeof src?.askPrice === "number" && src.askPrice > 0
           ? src.askPrice
-          : typeof src?.ask === "number"
+          : typeof src?.ask === "number" && src.ask > 0
             ? src.ask
             : undefined;
+      // Fallback prices for illiquid / far-out options where bid/ask may be 0.
+      const last =
+        typeof src?.lastPrice === "number" && src.lastPrice > 0
+          ? src.lastPrice
+          : typeof src?.last === "number" && src.last > 0
+            ? src.last
+            : undefined;
+      const mark =
+        typeof src?.markPrice === "number" && src.markPrice > 0
+          ? src.markPrice
+          : typeof src?.mark === "number" && src.mark > 0
+            ? src.mark
+            : undefined;
+
+      // CUSIP from the reference sub-object.
+      const ref = q?.reference ?? null;
+      const cusip =
+        typeof ref?.cusip === "string" && ref.cusip.length > 0
+          ? ref.cusip
+          : null;
 
       const expiryDate = new Date(maturity + "T00:00:00Z");
       const dte = Math.max(
@@ -208,16 +229,19 @@ export default async function handler(req: any, res: any) {
       const isSell = row.action === "Sell to Open";
       let limitPrice: number | undefined;
       if (row.limitPriceMethod === "mid") {
-        if (typeof bid === "number" && typeof ask === "number" && bid > 0 && ask > 0) {
+        if (bid != null && ask != null) {
           limitPrice = (bid + ask) / 2;
-        } else if (typeof bid === "number" && bid > 0) {
+        } else if (bid != null) {
           limitPrice = bid;
-        } else if (typeof ask === "number" && ask > 0) {
+        } else if (ask != null) {
           limitPrice = ask;
+        } else {
+          // Fall back to last or mark for illiquid / far-expiry options.
+          limitPrice = last ?? mark;
         }
       } else {
-        if (typeof bid === "number" && bid > 0) limitPrice = bid;
-        else if (typeof ask === "number" && ask > 0) limitPrice = ask;
+        // "bid" method: prefer bid, then ask, then last, then mark.
+        limitPrice = bid ?? ask ?? last ?? mark;
       }
 
       if (!limitPrice || limitPrice <= 0) return;
@@ -231,8 +255,7 @@ export default async function handler(req: any, res: any) {
       // Match boss's sheet: moneyness = Strike / Current Price (as %)
       const moneynessPct = (strike / currentPrice) * 100;
 
-      const effectiveBid =
-        typeof bid === "number" && bid > 0 ? bid : limitPrice;
+      const effectiveBid = bid ?? limitPrice;
       const pctOffBid =
         effectiveBid > 0 ? ((limitPrice / effectiveBid - 1) * 100) : 0;
 
@@ -246,13 +269,14 @@ export default async function handler(req: any, res: any) {
         optionSide: `${row.putCall.toUpperCase()} - ${row.action.toUpperCase()}`,
         pctOffBid,
         optionLimitPrice: limitPrice,
-        currentBid: typeof bid === "number" && bid > 0 ? bid : limitPrice,
-        currentAsk: typeof ask === "number" && ask > 0 ? ask : limitPrice,
+        currentBid: bid ?? limitPrice,
+        currentAsk: ask ?? limitPrice,
         contracts,
         premiumReceived: premium,
         yieldAtCurrentPrice,
         annualizedYieldPct,
         valueOfSharesAtStrike: (isSell ? 1 : -1) * notional,
+        cusip,
       });
     });
 

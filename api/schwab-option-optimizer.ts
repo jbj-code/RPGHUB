@@ -51,6 +51,7 @@ export type OptionsTrade = {
   yieldAtCurrentPrice: number;
   annualizedYieldPct: number;
   valueOfSharesAtStrike: number;
+  cusip?: string | null;
 };
 
 export type RankedResult = {
@@ -334,11 +335,16 @@ export default async function handler(req: any, res: any) {
           row.targetMode === "expiry" &&
           typeof row.targetExpiry === "string" &&
           /^\d{4}-\d{2}-\d{2}$/.test(row.targetExpiry);
-        const fromDate = usingExactExpiry
+        // For expiry mode: use a ±7 day window so we always catch the real listed expiry
+        // (e.g. user types 2028-01-17 but the LEAPS is actually the 3rd Friday 2028-01-21).
+        const targetExpDate = usingExactExpiry
           ? new Date(`${row.targetExpiry}T00:00:00.000Z`)
+          : null;
+        const fromDate = usingExactExpiry
+          ? addDays(targetExpDate!, -7)
           : addDays(today, Math.max(1, row.days - 14));
         const toDate = usingExactExpiry
-          ? new Date(`${row.targetExpiry}T00:00:00.000Z`)
+          ? addDays(targetExpDate!, 7)
           : addDays(today, row.days + 35);
         const fromStr = fromDate.toISOString().slice(0, 10);
         const toStr = toDate.toISOString().slice(0, 10);
@@ -350,8 +356,8 @@ export default async function handler(req: any, res: any) {
           strategy: "SINGLE",
           fromDate: fromStr,
           toDate: toStr,
-          // Slightly wider strike coverage improves match rates for ETFs/smaller names.
-          strikeCount: "40",
+          // Large strikeCount ensures deep OTM and far-out expiry strikes are included.
+          strikeCount: "200",
         });
         const chainResp = await fetch(
           `https://api.schwabapi.com/marketdata/v1/chains?${params}`,
@@ -368,10 +374,27 @@ export default async function handler(req: any, res: any) {
         const pctMax = (row.otmPct + otmVariancePct) / 100;
         const isOTM = (row.moneyness ?? "OTM") === "OTM";
 
+        // For expiry mode: snap to the single expiry closest to the target date within ±7 days.
+        let closestExpiry: string | null = null;
+        if (usingExactExpiry && targetExpDate != null) {
+          let minDiff = Infinity;
+          for (const expKey of Object.keys(expMap)) {
+            const expiry = toExpiryYYYYMMDD(expKey);
+            const diff = Math.abs(
+              new Date(expiry + "Z").getTime() - targetExpDate.getTime()
+            );
+            if (diff < minDiff) {
+              minDiff = diff;
+              closestExpiry = expiry;
+            }
+          }
+        }
+
         for (const [expKey, strikesObj] of Object.entries<any>(expMap)) {
           const expiry = toExpiryYYYYMMDD(expKey);
           if (row.monthly && !isThirdFridayMonthlyExpiry(expiry)) continue;
-          if (usingExactExpiry && expiry !== row.targetExpiry) continue;
+          // In expiry mode: only keep the single closest expiry to the target date.
+          if (usingExactExpiry && expiry !== closestExpiry) continue;
           const expDate = new Date(expiry + "Z");
           const dte = daysBetween(today, expDate);
           if (!usingExactExpiry && (dte < Math.max(1, row.days - 14) || dte > row.days + 35)) continue;
@@ -437,7 +460,7 @@ export default async function handler(req: any, res: any) {
       if (q.option && typeof q.option === "object") return q.option;
       return q.quote ?? q.optionContract ?? q;
     };
-    const optionQuotes: Record<string, { bid: number; ask: number; modeled: number; delta: number | null }> = {};
+    const optionQuotes: Record<string, { bid: number; ask: number; modeled: number; delta: number | null; cusip: string | null }> = {};
     for (let i = 0; i < optionSpecs.length; i += BATCH) {
       const batch = optionSpecs.slice(i, i + BATCH);
       const occSymbols = batch.map((o) =>
@@ -445,7 +468,7 @@ export default async function handler(req: any, res: any) {
       );
       const qUrl =
         "https://api.schwabapi.com/marketdata/v1/quotes?" +
-        new URLSearchParams({ symbols: occSymbols.join(",") }).toString();
+        new URLSearchParams({ symbols: occSymbols.join(","), fields: "quote,reference" }).toString();
       const qResp = await fetch(qUrl, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
@@ -475,8 +498,14 @@ export default async function handler(req: any, res: any) {
           typeof src.delta === "number" && Number.isFinite(src.delta)
             ? src.delta
             : null;
+        // CUSIP lives in the reference sub-object of the quote response.
+        const ref = q?.reference ?? null;
+        const cusip =
+          typeof ref?.cusip === "string" && ref.cusip.length > 0
+            ? ref.cusip
+            : null;
         const key = `${spec.underlying} ${spec.expiry} ${spec.strike} ${spec.type}`;
-        optionQuotes[key] = { bid, ask, modeled, delta };
+        optionQuotes[key] = { bid, ask, modeled, delta, cusip };
       }
     }
 
@@ -599,6 +628,7 @@ export default async function handler(req: any, res: any) {
         yieldAtCurrentPrice: Math.round(yieldAtCurrentPrice * 100) / 100,
         annualizedYieldPct: Math.round(annualizedYieldPct * 100) / 100,
         valueOfSharesAtStrike: (isSell ? 1 : -1) * notional,
+        cusip: quote?.cusip ?? null,
       };
 
       const upsidePct = upsideByTicker[spec.underlying] ?? 0;
