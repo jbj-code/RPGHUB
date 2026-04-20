@@ -514,45 +514,6 @@ export default async function handler(req: any, res: any) {
     // CUSIP note: Schwab's /quotes and /instruments endpoints do not return cusip for option
     // contracts. The underlying equity's cusip (fetched in step 1 via reference) is used instead.
 
-    // 4b-ii) Per-contract FIGI lookup via OpenFIGI (free API, 100 items per request with key).
-    const figiByKey: Record<string, string> = {};
-    const openFigiApiKey = process.env.OPENFIGI_API_KEY;
-    if (openFigiApiKey && optionSpecs.length > 0) {
-      const FIGI_BATCH = 100;
-      for (let i = 0; i < optionSpecs.length; i += FIGI_BATCH) {
-        const batch = optionSpecs.slice(i, i + FIGI_BATCH);
-        try {
-          const requests = batch.map((spec) => ({
-            idType: "TICKER",
-            idValue: spec.underlying,
-            exchCode: "US",
-            securityType2: spec.type === "P" ? "Put" : "Call",
-            strike: spec.strike,
-            expiration: spec.expiry,
-          }));
-          const figiResp = await fetch("https://api.openfigi.com/v3/mapping", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-OPENFIGI-APIKEY": openFigiApiKey,
-            },
-            body: JSON.stringify(requests),
-          });
-          if (!figiResp.ok) continue;
-          const figiBody: any[] = await figiResp.json();
-          for (let j = 0; j < batch.length; j++) {
-            const spec = batch[j]!;
-            const result = figiBody[j];
-            const figi = result?.data?.[0]?.figi;
-            if (typeof figi === "string" && figi.length > 0) {
-              const key = `${spec.underlying} ${spec.expiry} ${spec.strike} ${spec.type}`;
-              figiByKey[key] = figi;
-            }
-          }
-        } catch { /* ignore per-batch failures */ }
-      }
-    }
-
     // 4b) Optional roll-mode BTC quote lookup for each row's current short leg.
     const closePriceByRowId: Record<string, number> = {};
     if (rollMode) {
@@ -673,7 +634,7 @@ export default async function handler(req: any, res: any) {
         annualizedYieldPct: Math.round(annualizedYieldPct * 100) / 100,
         valueOfSharesAtStrike: (isSell ? 1 : -1) * notional,
         cusip: cusipByTicker[spec.underlying] ?? null,
-        figi: figiByKey[`${spec.underlying} ${spec.expiry} ${spec.strike} ${spec.type}`] ?? null,
+        figi: null, // populated on demand via the "Fetch FIGI" button in the trade list
       };
 
       const upsidePct = upsideByTicker[spec.underlying] ?? 0;

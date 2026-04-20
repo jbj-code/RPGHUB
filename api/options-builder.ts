@@ -175,45 +175,6 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    // Per-contract FIGI via OpenFIGI (100 items per request with API key).
-    const figiByOcc: Record<string, string> = {};
-    const openFigiApiKey = process.env.OPENFIGI_API_KEY;
-    if (openFigiApiKey && rows.length > 0) {
-      const FIGI_BATCH = 100;
-      for (let i = 0; i < rows.length; i += FIGI_BATCH) {
-        const batch = rows.slice(i, i + FIGI_BATCH);
-        try {
-          const requests = batch.map((r) => ({
-            idType: "TICKER",
-            idValue: r.ticker.trim().toUpperCase(),
-            exchCode: "US",
-            securityType2: r.putCall === "Call" ? "Call" : "Put",
-            strike: Number(r.strike),
-            expiration: r.maturity,
-          }));
-          const figiResp = await fetch("https://api.openfigi.com/v3/mapping", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-OPENFIGI-APIKEY": openFigiApiKey,
-            },
-            body: JSON.stringify(requests),
-          });
-          if (figiResp.ok) {
-            const figiBody: any[] = await figiResp.json();
-            for (let j = 0; j < batch.length; j++) {
-              const occ = occSymbols[i + j]!;
-              const figi = figiBody[j]?.data?.[0]?.figi;
-              if (typeof figi === "string" && figi.length > 0) {
-                figiByOcc[occ] = figi;
-                figiByOcc[occ.replace(/\s+/g, "")] = figi;
-              }
-            }
-          }
-        } catch { /* ignore */ }
-      }
-    }
-
     const out: BuilderRowOutput[] = [];
 
     rows.forEach((row, idx) => {
@@ -319,7 +280,7 @@ export default async function handler(req: any, res: any) {
         annualizedYieldPct,
         valueOfSharesAtStrike: (isSell ? 1 : -1) * notional,
         cusip,
-        figi: figiByOcc[occ] ?? figiByOcc[occ.replace(/\s+/g, "")] ?? null,
+        figi: null, // populated on demand via the "Fetch FIGI" button in the trade list
       });
     });
 

@@ -499,6 +499,35 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
   const [lastAddedTradeId, setLastAddedTradeId] = useState<string | null>(null);
   const [lastCopiedTradeId, setLastCopiedTradeId] = useState<string | null>(null);
   const [expandedTradeId, setExpandedTradeId] = useState<string | null>(null);
+  const [fetchingFigiForId, setFetchingFigiForId] = useState<string | null>(null);
+
+  const fetchTradeIdentifiers = useCallback(async (tradeId: string, tr: OptionsTrade) => {
+    setFetchingFigiForId(tradeId);
+    try {
+      const resp = await fetch("/api/fetch-trade-identifiers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ticker: tr.ticker,
+          expiry: tr.maturity,
+          strike: tr.strikePrice,
+          putCall: tr.optionSide.startsWith("CALL") ? "Call" : "Put",
+        }),
+      });
+      const data = await resp.json();
+      setTrades((prev) =>
+        prev.map((t) =>
+          t.id === tradeId
+            ? { ...t, figi: data.figi ?? t.figi, cusip: data.cusip ?? t.cusip }
+            : t
+        )
+      );
+    } catch {
+      // silently ignore
+    } finally {
+      setFetchingFigiForId(null);
+    }
+  }, []);
 
   useEffect(() => {
     if (!showOptimizeForModal) return;
@@ -1753,11 +1782,20 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                           </div>
                         )}
                       </div>
-                      <div style={{ marginTop: t.spacing(2), display: "flex", justifyContent: "center" }}>
+                      <div style={{ marginTop: t.spacing(2), display: "flex", justifyContent: "center", gap: t.spacing(1.5) }}>
+                        <button
+                          type="button"
+                          onClick={() => fetchTradeIdentifiers(tr.id, tr)}
+                          disabled={fetchingFigiForId === tr.id}
+                          style={{ ...secondaryBtnStyle, padding: `${t.spacing(0.5)} ${t.spacing(2)}`, fontSize: "0.75rem", opacity: fetchingFigiForId === tr.id ? 0.6 : 1 }}
+                          aria-label="Fetch FIGI"
+                        >
+                          {fetchingFigiForId === tr.id ? "Fetching…" : "Fetch FIGI"}
+                        </button>
                         <button
                           type="button"
                           onClick={() => removeTrade(tr.id)}
-                          style={{ ...secondaryBtnStyle, padding: `${t.spacing(0.5)} ${t.spacing(3)}`, fontSize: "0.75rem", color: t.colors.danger, borderColor: t.colors.danger }}
+                          style={{ ...secondaryBtnStyle, padding: `${t.spacing(0.5)} ${t.spacing(2)}`, fontSize: "0.75rem", color: t.colors.danger, borderColor: t.colors.danger }}
                           aria-label="Remove trade"
                         >
                           Remove
