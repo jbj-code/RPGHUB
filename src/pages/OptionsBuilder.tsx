@@ -545,10 +545,10 @@ export function OptionsBuilder({ theme: t }: OptionsBuilderProps) {
                   contracts: Number(r.contracts),
                   limitPriceMethod: r.limitPriceMethod,
                 }));
-                const res = await fetch(`${SCHWAB_API_BASE}/api/options-builder`, {
+                const res = await fetch(`${SCHWAB_API_BASE}/api/schwab`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ rows: payload }),
+                  body: JSON.stringify({ action: "build", rows: payload }),
                 });
                 const data = await res.json();
                 if (!res.ok) {

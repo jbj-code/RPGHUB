@@ -4,7 +4,7 @@
 // (largest/most-liquid first), fetches chains for the top underlyings, and ranks by annualised yield.
 
 import { createClient } from "@supabase/supabase-js";
-import { toOCCSymbol, getValidAccessToken } from "./_schwab-utils.js";
+import { toOCCSymbol, getValidAccessToken } from "../_schwab-utils.js";
 
 const RATE_LIMIT_ERR = "SCHWAB_RATE_LIMIT";
 
@@ -303,14 +303,7 @@ function formatSchwabSymbol(args: {
   return `${args.ticker} ${mm}/${dd}/${yyyy} ${strike} ${t}`;
 }
 
-export default async function handler(req: any, res: any) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-  if (req.method === "OPTIONS") { res.status(200).end(); return; }
-  if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
-
+export async function handler(req: any, res: any): Promise<void> {
   const body = req.body ?? {};
 
   const optionTypeRaw = body.optionType ?? "puts";

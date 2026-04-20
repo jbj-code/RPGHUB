@@ -1,17 +1,6 @@
-// Vercel serverless: return whether a Schwab token exists and is not expired.
-// Used by the password gate to show "Connect Schwab" or "You're all set". No token value is exposed.
-
 import { createClient } from "@supabase/supabase-js";
 
-export default async function handler(req: any, res: any) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") {
-    res.status(200).end();
-    return;
-  }
-
+export async function handler(req: any, res: any): Promise<void> {
   try {
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -72,24 +61,18 @@ export default async function handler(req: any, res: any) {
     let accessToken = tokenRow.access_token as string | null;
     const expiresAt =
       tokenRow.expires_at != null ? new Date(tokenRow.expires_at).getTime() : null;
-    const bufferMs = 5 * 60 * 1000; // 5 minutes: treat near-expiry as expired
+    const bufferMs = 5 * 60 * 1000;
     const expired = expiresAt != null && Date.now() >= expiresAt - bufferMs;
 
-    // If missing or near-expired, attempt refresh now so status reflects real usable auth.
     if ((!accessToken || expired) && tokenRow.refresh_token) {
       accessToken = await tryRefresh(tokenRow.refresh_token);
     }
 
     if (!accessToken) {
-      res.status(200).json({
-        connected: false,
-        expired: true,
-        hasRefresh: hasRefresh || undefined,
-      });
+      res.status(200).json({ connected: false, expired: true, hasRefresh: hasRefresh || undefined });
       return;
     }
 
-    // Probe with a cheap quote request to verify token is actually accepted by Schwab.
     const probeResp = await fetch(
       "https://api.schwabapi.com/marketdata/v1/quotes?" +
         new URLSearchParams({ symbols: "SPY" }).toString(),
@@ -99,11 +82,7 @@ export default async function handler(req: any, res: any) {
     if (probeResp.status === 401 && tokenRow.refresh_token) {
       const refreshed = await tryRefresh(tokenRow.refresh_token);
       if (!refreshed) {
-        res.status(200).json({
-          connected: false,
-          expired: true,
-          hasRefresh: true,
-        });
+        res.status(200).json({ connected: false, expired: true, hasRefresh: true });
         return;
       }
       const secondProbe = await fetch(
@@ -112,28 +91,17 @@ export default async function handler(req: any, res: any) {
         { headers: { Authorization: `Bearer ${refreshed}` } }
       );
       if (!secondProbe.ok) {
-        res.status(200).json({
-          connected: false,
-          expired: true,
-          hasRefresh: true,
-        });
+        res.status(200).json({ connected: false, expired: true, hasRefresh: true });
         return;
       }
     } else if (!probeResp.ok) {
-      res.status(200).json({
-        connected: false,
-        expired: true,
-        hasRefresh: hasRefresh || undefined,
-      });
+      res.status(200).json({ connected: false, expired: true, hasRefresh: hasRefresh || undefined });
       return;
     }
 
-    res.status(200).json({
-      connected: true,
-      hasRefresh: hasRefresh || undefined,
-    });
+    res.status(200).json({ connected: true, hasRefresh: hasRefresh || undefined });
   } catch (err) {
-    console.error("schwab-status error", err);
+    console.error("schwab status error", err);
     res.status(200).json({ connected: false });
   }
 }

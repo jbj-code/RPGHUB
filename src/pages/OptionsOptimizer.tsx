@@ -506,10 +506,11 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
     setFetchingFigiForId(tradeId);
     setFigiStatusById((prev) => ({ ...prev, [tradeId]: { ok: true, msg: "" } }));
     try {
-      const resp = await fetch("/api/schwab-quotes", {
+      const resp = await fetch("/api/schwab", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          action: "figi",
           ticker: tr.ticker,
           expiry: tr.maturity,
           strike: tr.strikePrice,
@@ -636,10 +637,11 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
     setOptimizeLoading(true);
     setOptimizeMessage(null);
     try {
-      const res = await fetch(`${SCHWAB_API_BASE}/api/schwab-option-optimizer`, {
+      const res = await fetch(`${SCHWAB_API_BASE}/api/schwab`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          action: "optimize",
           portfolioRows,
           otmVariancePct,
           assignmentAwareRanking: true,
@@ -1306,7 +1308,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
               {optimizeMessage}{" "}
               {showSchwabAuthHint && (
                 <a
-                  href={`${SCHWAB_API_BASE}/api/schwab-auth`}
+                  href={`${SCHWAB_API_BASE}/api/schwab?action=auth`}
                   target="_blank"
                   rel="noopener noreferrer"
                   style={{ color: t.colors.primary, fontWeight: t.typography.headingWeight }}

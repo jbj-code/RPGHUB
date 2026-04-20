@@ -318,10 +318,10 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
         strike: p.strike,
         type: p.type,
       }));
-      const res = await fetch(`${SCHWAB_API_BASE}/api/schwab-option-prices`, {
+      const res = await fetch(`${SCHWAB_API_BASE}/api/schwab`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ action: "prices", options: payload }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));

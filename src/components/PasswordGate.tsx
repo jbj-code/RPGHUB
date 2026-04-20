@@ -41,7 +41,7 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
 
   const refreshSchwabStatus = useCallback(() => {
     setStatusLoading(true);
-    fetch(`${SCHWAB_API_BASE}/api/schwab-status`)
+    fetch(`${SCHWAB_API_BASE}/api/schwab?action=status`)
       .then((res) => res.json())
       .then((data: { connected?: boolean; expired?: boolean; hasRefresh?: boolean }) => {
         const connected =
@@ -266,7 +266,7 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
                 Connect Schwab to use live market data on Stock Comparison and Options Optimizer. You can also connect later from those pages.
               </p>
               <a
-                href={`${SCHWAB_API_BASE}/api/schwab-auth`}
+                href={`${SCHWAB_API_BASE}/api/schwab?action=auth`}
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{ ...authorizeBtnStyle, display: "inline-block", textDecoration: "none", marginTop: t.spacing(2) }}

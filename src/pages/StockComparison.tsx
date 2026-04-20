@@ -257,7 +257,7 @@ export function StockComparison({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Stoc
       try {
         const symbolsParam = encodeURIComponent(allTickersForFetch.join(","));
         const res = await fetch(
-          `${SCHWAB_API_BASE}/api/schwab-returns?symbols=${symbolsParam}`,
+          `${SCHWAB_API_BASE}/api/schwab?action=returns&symbols=${symbolsParam}`,
           { signal: controller.signal }
         );
         if (!res.ok) {
@@ -699,7 +699,7 @@ export function StockComparison({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Stoc
                     {apiHint || "No return data for these symbols. This can happen when the market is closed, the Schwab token has expired, or the API returned no candles."}
                     {" "}
                     <a
-                      href={`${SCHWAB_API_BASE}/api/schwab-auth`}
+                      href={`${SCHWAB_API_BASE}/api/schwab?action=auth`}
                       target="_blank"
                       rel="noopener noreferrer"
                       style={{ color: t.colors.primary, fontWeight: t.typography.headingWeight }}

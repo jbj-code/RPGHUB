@@ -193,10 +193,11 @@ export function OptionsRoll({ theme: t }: OptionsRollProps) {
     setLoading(true);
     setMessage(null);
     try {
-      const res = await fetch(`${SCHWAB_API_BASE}/api/schwab-option-optimizer`, {
+      const res = await fetch(`${SCHWAB_API_BASE}/api/schwab`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          action: "optimize",
           portfolioRows: [
             {
               id: "roll-row",

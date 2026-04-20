@@ -402,10 +402,10 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
         payload.universeSymbols = activeBucket.symbols;
       }
 
-      const res = await fetch(`${SCHWAB_API_BASE}/api/schwab-options-opportunity-screener`, {
+      const res = await fetch(`${SCHWAB_API_BASE}/api/schwab`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ action: "screener", ...payload }),
       });
 
       let json: ScreenerResponse & { error?: string } = { resultsByOtmPct: {}, message: null, warnings: [] };
