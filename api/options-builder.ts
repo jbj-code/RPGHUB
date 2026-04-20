@@ -28,7 +28,10 @@ type BuilderRowOutput = {
   yieldAtCurrentPrice: number;
   annualizedYieldPct: number;
   valueOfSharesAtStrike: number;
+  /** Underlying equity CUSIP from Schwab reference data. */
   cusip?: string | null;
+  /** Per-contract FIGI from OpenFIGI. */
+  figi?: string | null;
 };
 
 
@@ -97,13 +100,15 @@ export default async function handler(req: any, res: any) {
       ),
     ];
 
+    // fields=quote,reference so we get the underlying equity's cusip from reference.cusip.
     const quoteResp = await fetch(
       "https://api.schwabapi.com/marketdata/v1/quotes?" +
-        new URLSearchParams({ symbols: distinctTickers.join(",") }).toString(),
+        new URLSearchParams({ symbols: distinctTickers.join(","), fields: "quote,reference" }).toString(),
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
     const quoteBody: any = quoteResp.ok ? await quoteResp.json() : {};
     const currentPriceByTicker: Record<string, number> = {};
+    const cusipByTicker: Record<string, string> = {};
     if (quoteBody && typeof quoteBody === "object") {
       const bySymbol = new Map<string, any>();
       if (Array.isArray(quoteBody)) {
@@ -132,6 +137,8 @@ export default async function handler(req: any, res: any) {
           src?.close ??
           src?.regularMarketPrice;
         if (typeof p === "number" && p > 0) currentPriceByTicker[sym] = p;
+        const cusip = q?.reference?.cusip ?? q?.cusip;
+        if (typeof cusip === "string" && cusip.length > 0) cusipByTicker[sym] = cusip;
       }
     }
 
@@ -168,35 +175,43 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    // CUSIP lookup — /quotes does not include cusip for options; use /instruments instead.
-    const cusipByOcc: Record<string, string> = {};
-    const INST_BATCH = 50;
-    for (let i = 0; i < occSymbols.length; i += INST_BATCH) {
-      const batch = occSymbols.slice(i, i + INST_BATCH);
-      try {
-        const iResp = await fetch(
-          "https://api.schwabapi.com/marketdata/v1/instruments?" +
-            new URLSearchParams({ symbols: batch.join(","), projection: "symbol-search" }).toString(),
-          { headers: { Authorization: `Bearer ${accessToken}` } }
-        );
-        if (iResp.ok) {
-          const iBody: any = await iResp.json();
-          const list: any[] = Array.isArray(iBody)
-            ? iBody
-            : Array.isArray(iBody?.instruments)
-              ? iBody.instruments
-              : [];
-          for (const inst of list) {
-            const sym = typeof inst?.symbol === "string" ? inst.symbol.trim() : "";
-            const cusip =
-              typeof inst?.cusip === "string" && inst.cusip.length > 0 ? inst.cusip : null;
-            if (sym && cusip) {
-              cusipByOcc[sym] = cusip;
-              cusipByOcc[sym.replace(/\s+/g, "")] = cusip;
+    // Per-contract FIGI via OpenFIGI (100 items per request with API key).
+    const figiByOcc: Record<string, string> = {};
+    const openFigiApiKey = process.env.OPENFIGI_API_KEY;
+    if (openFigiApiKey && rows.length > 0) {
+      const FIGI_BATCH = 100;
+      for (let i = 0; i < rows.length; i += FIGI_BATCH) {
+        const batch = rows.slice(i, i + FIGI_BATCH);
+        try {
+          const requests = batch.map((r) => ({
+            idType: "TICKER",
+            idValue: r.ticker.trim().toUpperCase(),
+            exchCode: "US",
+            securityType2: r.putCall === "Call" ? "Call" : "Put",
+            strike: Number(r.strike),
+            expiration: r.maturity,
+          }));
+          const figiResp = await fetch("https://api.openfigi.com/v3/mapping", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-OPENFIGI-APIKEY": openFigiApiKey,
+            },
+            body: JSON.stringify(requests),
+          });
+          if (figiResp.ok) {
+            const figiBody: any[] = await figiResp.json();
+            for (let j = 0; j < batch.length; j++) {
+              const occ = occSymbols[i + j]!;
+              const figi = figiBody[j]?.data?.[0]?.figi;
+              if (typeof figi === "string" && figi.length > 0) {
+                figiByOcc[occ] = figi;
+                figiByOcc[occ.replace(/\s+/g, "")] = figi;
+              }
             }
           }
-        }
-      } catch { /* ignore */ }
+        } catch { /* ignore */ }
+      }
     }
 
     const out: BuilderRowOutput[] = [];
@@ -239,8 +254,8 @@ export default async function handler(req: any, res: any) {
             ? src.mark
             : undefined;
 
-      // CUSIP from /instruments lookup (quotes endpoint does not return cusip for options).
-      const cusip = cusipByOcc[occ] ?? cusipByOcc[occ.replace(/\s+/g, "")] ?? null;
+      // CUSIP from the underlying equity's reference data (option contracts have no accessible CUSIP via Schwab).
+      const cusip = cusipByTicker[ticker] ?? null;
 
       const expiryDate = new Date(maturity + "T00:00:00Z");
       const dte = Math.max(
@@ -304,6 +319,7 @@ export default async function handler(req: any, res: any) {
         annualizedYieldPct,
         valueOfSharesAtStrike: (isSell ? 1 : -1) * notional,
         cusip,
+        figi: figiByOcc[occ] ?? figiByOcc[occ.replace(/\s+/g, "")] ?? null,
       });
     });
 

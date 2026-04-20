@@ -51,7 +51,10 @@ export type OptionsTrade = {
   yieldAtCurrentPrice: number;
   annualizedYieldPct: number;
   valueOfSharesAtStrike: number;
+  /** Underlying equity CUSIP from Schwab reference data. */
   cusip?: string | null;
+  /** Per-contract FIGI from OpenFIGI. */
+  figi?: string | null;
 };
 
 export type RankedResult = {
@@ -246,14 +249,16 @@ export default async function handler(req: any, res: any) {
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
 
-    // 1) Underlying quotes (current price per ticker)
+    // 1) Underlying quotes (current price + CUSIP per ticker).
+    // fields=quote,reference ensures the reference sub-object (which has cusip for equities) is returned.
     const quoteResp = await fetch(
       "https://api.schwabapi.com/marketdata/v1/quotes?" +
-        new URLSearchParams({ symbols: tickers.join(",") }).toString(),
+        new URLSearchParams({ symbols: tickers.join(","), fields: "quote,reference" }).toString(),
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
     const quoteBody: any = quoteResp.ok ? await quoteResp.json() : {};
     const currentPriceByTicker: Record<string, number> = {};
+    const cusipByTicker: Record<string, string> = {};
     for (const sym of tickers) {
       const q = quoteBody[sym] ?? quoteBody[sym.replace(/\s+/g, "")];
       const src = q?.quote ?? q;
@@ -264,6 +269,9 @@ export default async function handler(req: any, res: any) {
         src?.close ??
         src?.regularMarketPrice;
       if (typeof p === "number" && p > 0) currentPriceByTicker[sym] = p;
+      // Equity reference.cusip is always populated for exchange-listed equities and ETFs.
+      const cusip = q?.reference?.cusip ?? q?.cusip;
+      if (typeof cusip === "string" && cusip.length > 0) cusipByTicker[sym] = cusip;
     }
 
     // 2) ~1M return per ticker: start = daily close on/after ~1 month ago; end = live equity quote (step 1), else last daily close.
@@ -503,56 +511,49 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    // 4b-i) CUSIP lookup — Schwab's /quotes endpoint does not include cusip for options.
-    // Use /instruments?projection=symbol-search with the OCC symbols to get them separately.
-    const cusipByOcc: Record<string, string> = {};
-    const allOccs = [
-      ...new Set(
-        optionSpecs.map((s) => toOCCSymbol(s.underlying, s.expiry, s.type, s.strike))
-      ),
-    ];
-    await Promise.allSettled(
-      Array.from({ length: Math.ceil(allOccs.length / BATCH) }, (_, bi) =>
-        allOccs.slice(bi * BATCH, bi * BATCH + BATCH)
-      ).map(async (batch, batchIdx) => {
+    // CUSIP note: Schwab's /quotes and /instruments endpoints do not return cusip for option
+    // contracts. The underlying equity's cusip (fetched in step 1 via reference) is used instead.
+
+    // 4b-ii) Per-contract FIGI lookup via OpenFIGI (free API, 100 items per request with key).
+    const figiByKey: Record<string, string> = {};
+    const openFigiApiKey = process.env.OPENFIGI_API_KEY;
+    if (openFigiApiKey && optionSpecs.length > 0) {
+      const FIGI_BATCH = 100;
+      for (let i = 0; i < optionSpecs.length; i += FIGI_BATCH) {
+        const batch = optionSpecs.slice(i, i + FIGI_BATCH);
         try {
-          const url =
-            "https://api.schwabapi.com/marketdata/v1/instruments?" +
-            new URLSearchParams({ symbols: batch.join(","), projection: "symbol-search" }).toString();
-          const iResp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-          const iBody: any = iResp.ok ? await iResp.json() : null;
-          // DEBUG: log the first batch so we can see what instruments returns for OCC symbols.
-          if (batchIdx === 0) {
-            console.log("[optimizer][instruments] HTTP status:", iResp.status);
-            console.log("[optimizer][instruments] first OCC sent:", batch[0]);
-            console.log("[optimizer][instruments] raw response:", JSON.stringify(iBody)?.slice(0, 500));
-          }
-          if (!iResp.ok || !iBody) return;
-          // Response is either an array of instruments or { instruments: [...] }.
-          const list: any[] = Array.isArray(iBody)
-            ? iBody
-            : Array.isArray(iBody?.instruments)
-              ? iBody.instruments
-              : [];
-          for (const inst of list) {
-            const sym = typeof inst?.symbol === "string" ? inst.symbol.trim() : "";
-            const cusip =
-              typeof inst?.cusip === "string" && inst.cusip.length > 0
-                ? inst.cusip
-                : null;
-            if (sym && cusip) {
-              cusipByOcc[sym] = cusip;
-              cusipByOcc[sym.replace(/\s+/g, "")] = cusip;
+          const requests = batch.map((spec) => ({
+            idType: "TICKER",
+            idValue: spec.underlying,
+            exchCode: "US",
+            securityType2: spec.type === "P" ? "Put" : "Call",
+            strike: spec.strike,
+            expiration: spec.expiry,
+          }));
+          const figiResp = await fetch("https://api.openfigi.com/v3/mapping", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-OPENFIGI-APIKEY": openFigiApiKey,
+            },
+            body: JSON.stringify(requests),
+          });
+          if (!figiResp.ok) continue;
+          const figiBody: any[] = await figiResp.json();
+          for (let j = 0; j < batch.length; j++) {
+            const spec = batch[j]!;
+            const result = figiBody[j];
+            const figi = result?.data?.[0]?.figi;
+            if (typeof figi === "string" && figi.length > 0) {
+              const key = `${spec.underlying} ${spec.expiry} ${spec.strike} ${spec.type}`;
+              figiByKey[key] = figi;
             }
           }
-        } catch (e) {
-          console.log("[optimizer][instruments] error:", String(e));
-        }
-      })
-    );
+        } catch { /* ignore per-batch failures */ }
+      }
+    }
 
     // 4b) Optional roll-mode BTC quote lookup for each row's current short leg.
-    // (4b-i CUSIP lookup is above, immediately after 4a quotes)
     const closePriceByRowId: Record<string, number> = {};
     if (rollMode) {
       const btcRows = portfolioRows
@@ -671,7 +672,8 @@ export default async function handler(req: any, res: any) {
         yieldAtCurrentPrice: Math.round(yieldAtCurrentPrice * 100) / 100,
         annualizedYieldPct: Math.round(annualizedYieldPct * 100) / 100,
         valueOfSharesAtStrike: (isSell ? 1 : -1) * notional,
-        cusip: cusipByOcc[toOCCSymbol(spec.underlying, spec.expiry, spec.type, spec.strike)] ?? null,
+        cusip: cusipByTicker[spec.underlying] ?? null,
+        figi: figiByKey[`${spec.underlying} ${spec.expiry} ${spec.strike} ${spec.type}`] ?? null,
       };
 
       const upsidePct = upsideByTicker[spec.underlying] ?? 0;

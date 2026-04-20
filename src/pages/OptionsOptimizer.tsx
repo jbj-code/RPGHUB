@@ -48,7 +48,10 @@ export type OptionsTrade = {
   yieldAtCurrentPrice: number;
   annualizedYieldPct: number;
   valueOfSharesAtStrike: number;
+  /** Underlying equity CUSIP from Schwab reference data. */
   cusip?: string | null;
+  /** Per-contract FIGI from OpenFIGI. */
+  figi?: string | null;
 };
 
 /** One row in "Define what you want" */
@@ -1737,9 +1740,15 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                         <div><div style={labelStyle}>Moneyness</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{tr.moneynessPct}%</div></div>
                         <div><div style={labelStyle}>Yield</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{tr.yieldAtCurrentPrice}%</div></div>
                         <div><div style={labelStyle}>Notional</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{formatNotionalCompact(tr.valueOfSharesAtStrike)}</div></div>
+                        {tr.figi && (
+                          <div style={{ gridColumn: "1 / -1" }}>
+                            <div style={labelStyle}>FIGI</div>
+                            <div style={{ fontFamily: "monospace", fontSize: "0.8rem", color: t.colors.text }}>{tr.figi}</div>
+                          </div>
+                        )}
                         {tr.cusip && (
                           <div style={{ gridColumn: "1 / -1" }}>
-                            <div style={labelStyle}>CUSIP</div>
+                            <div style={labelStyle}>Underlying CUSIP</div>
                             <div style={{ fontFamily: "monospace", fontSize: "0.8rem", color: t.colors.text }}>{tr.cusip}</div>
                           </div>
                         )}
