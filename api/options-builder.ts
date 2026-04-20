@@ -146,8 +146,7 @@ export default async function handler(req: any, res: any) {
 
     const occResp = await fetch(
       "https://api.schwabapi.com/marketdata/v1/quotes?" +
-        // fields=all ensures Schwab returns every sub-object including reference (which contains cusip).
-        new URLSearchParams({ symbols: occSymbols.join(","), fields: "all" }).toString(),
+        new URLSearchParams({ symbols: occSymbols.join(",") }).toString(),
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
     const occBody: any = occResp.ok ? await occResp.json() : {};
@@ -167,6 +166,37 @@ export default async function handler(req: any, res: any) {
           if (v && typeof v === "object") bySymbol.set(String(k).trim(), v);
         }
       }
+    }
+
+    // CUSIP lookup — /quotes does not include cusip for options; use /instruments instead.
+    const cusipByOcc: Record<string, string> = {};
+    const INST_BATCH = 50;
+    for (let i = 0; i < occSymbols.length; i += INST_BATCH) {
+      const batch = occSymbols.slice(i, i + INST_BATCH);
+      try {
+        const iResp = await fetch(
+          "https://api.schwabapi.com/marketdata/v1/instruments?" +
+            new URLSearchParams({ symbols: batch.join(","), projection: "symbol-search" }).toString(),
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+        if (iResp.ok) {
+          const iBody: any = await iResp.json();
+          const list: any[] = Array.isArray(iBody)
+            ? iBody
+            : Array.isArray(iBody?.instruments)
+              ? iBody.instruments
+              : [];
+          for (const inst of list) {
+            const sym = typeof inst?.symbol === "string" ? inst.symbol.trim() : "";
+            const cusip =
+              typeof inst?.cusip === "string" && inst.cusip.length > 0 ? inst.cusip : null;
+            if (sym && cusip) {
+              cusipByOcc[sym] = cusip;
+              cusipByOcc[sym.replace(/\s+/g, "")] = cusip;
+            }
+          }
+        }
+      } catch { /* ignore */ }
     }
 
     const out: BuilderRowOutput[] = [];
@@ -209,12 +239,8 @@ export default async function handler(req: any, res: any) {
             ? src.mark
             : undefined;
 
-      // CUSIP: check every location Schwab might place it across different response shapes.
-      const cusip =
-        (typeof q?.cusip === "string" && q.cusip.length > 0 && q.cusip) ||
-        (typeof q?.reference?.cusip === "string" && q.reference.cusip.length > 0 && q.reference.cusip) ||
-        (typeof src?.cusip === "string" && src.cusip.length > 0 && src.cusip) ||
-        null;
+      // CUSIP from /instruments lookup (quotes endpoint does not return cusip for options).
+      const cusip = cusipByOcc[occ] ?? cusipByOcc[occ.replace(/\s+/g, "")] ?? null;
 
       const expiryDate = new Date(maturity + "T00:00:00Z");
       const dte = Math.max(

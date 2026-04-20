@@ -451,7 +451,7 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    // 4) Option quotes (OCC batch — 50 per request reduces round trips vs the old 30)
+    // 4) Option quotes (OCC batch — 50 per request)
     const BATCH = 50;
     const optionQuoteSrc = (q: any): any => {
       if (!q || typeof q !== "object") return null;
@@ -460,30 +460,20 @@ export default async function handler(req: any, res: any) {
       if (q.option && typeof q.option === "object") return q.option;
       return q.quote ?? q.optionContract ?? q;
     };
-    const optionQuotes: Record<string, { bid: number; ask: number; modeled: number; delta: number | null; cusip: string | null }> = {};
+    const optionQuotes: Record<string, { bid: number; ask: number; modeled: number; delta: number | null }> = {};
     for (let i = 0; i < optionSpecs.length; i += BATCH) {
       const batch = optionSpecs.slice(i, i + BATCH);
       const occSymbols = batch.map((o) =>
         toOCCSymbol(o.underlying, o.expiry, o.type, o.strike)
       );
-      // fields=all ensures Schwab returns every sub-object including reference (which contains cusip).
       const qUrl =
         "https://api.schwabapi.com/marketdata/v1/quotes?" +
-        new URLSearchParams({ symbols: occSymbols.join(","), fields: "all" }).toString();
+        new URLSearchParams({ symbols: occSymbols.join(",") }).toString();
       const qResp = await fetch(qUrl, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
       if (!qResp.ok) continue;
       const qBody: any = await qResp.json();
-      // DEBUG: log the raw keys/structure of the first option response so we can find where cusip lives.
-      if (i === 0 && occSymbols[0]) {
-        const firstKey = occSymbols[0];
-        const firstQ = qBody[firstKey] ?? qBody[firstKey.replace(/\s+/g, "")];
-        console.log("[optimizer] first OCC key:", firstKey);
-        console.log("[optimizer] top-level keys in quote object:", firstQ ? Object.keys(firstQ) : "NOT FOUND");
-        if (firstQ?.reference) console.log("[optimizer] reference keys:", Object.keys(firstQ.reference));
-        console.log("[optimizer] q.cusip:", firstQ?.cusip, "| q.reference.cusip:", firstQ?.reference?.cusip);
-      }
       for (let j = 0; j < batch.length; j++) {
         const spec = batch[j];
         const occ = occSymbols[j];
@@ -508,18 +498,54 @@ export default async function handler(req: any, res: any) {
           typeof src.delta === "number" && Number.isFinite(src.delta)
             ? src.delta
             : null;
-        // CUSIP: check every location Schwab might place it across different response shapes.
-        const cusip =
-          (typeof q?.cusip === "string" && q.cusip.length > 0 && q.cusip) ||
-          (typeof q?.reference?.cusip === "string" && q.reference.cusip.length > 0 && q.reference.cusip) ||
-          (typeof src?.cusip === "string" && src.cusip.length > 0 && src.cusip) ||
-          null;
         const key = `${spec.underlying} ${spec.expiry} ${spec.strike} ${spec.type}`;
-        optionQuotes[key] = { bid, ask, modeled, delta, cusip };
+        optionQuotes[key] = { bid, ask, modeled, delta };
       }
     }
 
+    // 4b-i) CUSIP lookup — Schwab's /quotes endpoint does not include cusip for options.
+    // Use /instruments?projection=symbol-search with the OCC symbols to get them separately.
+    const cusipByOcc: Record<string, string> = {};
+    const allOccs = [
+      ...new Set(
+        optionSpecs.map((s) => toOCCSymbol(s.underlying, s.expiry, s.type, s.strike))
+      ),
+    ];
+    await Promise.allSettled(
+      Array.from({ length: Math.ceil(allOccs.length / BATCH) }, (_, bi) =>
+        allOccs.slice(bi * BATCH, bi * BATCH + BATCH)
+      ).map(async (batch) => {
+        try {
+          const iResp = await fetch(
+            "https://api.schwabapi.com/marketdata/v1/instruments?" +
+              new URLSearchParams({ symbols: batch.join(","), projection: "symbol-search" }).toString(),
+            { headers: { Authorization: `Bearer ${accessToken}` } }
+          );
+          if (!iResp.ok) return;
+          const iBody: any = await iResp.json();
+          // Response is either an array of instruments or { instruments: [...] }.
+          const list: any[] = Array.isArray(iBody)
+            ? iBody
+            : Array.isArray(iBody?.instruments)
+              ? iBody.instruments
+              : [];
+          for (const inst of list) {
+            const sym = typeof inst?.symbol === "string" ? inst.symbol.trim() : "";
+            const cusip =
+              typeof inst?.cusip === "string" && inst.cusip.length > 0
+                ? inst.cusip
+                : null;
+            if (sym && cusip) {
+              cusipByOcc[sym] = cusip;
+              cusipByOcc[sym.replace(/\s+/g, "")] = cusip;
+            }
+          }
+        } catch { /* ignore per-batch failures */ }
+      })
+    );
+
     // 4b) Optional roll-mode BTC quote lookup for each row's current short leg.
+    // (4b-i CUSIP lookup is above, immediately after 4a quotes)
     const closePriceByRowId: Record<string, number> = {};
     if (rollMode) {
       const btcRows = portfolioRows
@@ -638,7 +664,7 @@ export default async function handler(req: any, res: any) {
         yieldAtCurrentPrice: Math.round(yieldAtCurrentPrice * 100) / 100,
         annualizedYieldPct: Math.round(annualizedYieldPct * 100) / 100,
         valueOfSharesAtStrike: (isSell ? 1 : -1) * notional,
-        cusip: quote?.cusip ?? null,
+        cusip: cusipByOcc[toOCCSymbol(spec.underlying, spec.expiry, spec.type, spec.strike)] ?? null,
       };
 
       const upsidePct = upsideByTicker[spec.underlying] ?? 0;
