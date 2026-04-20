@@ -466,9 +466,10 @@ export default async function handler(req: any, res: any) {
       const occSymbols = batch.map((o) =>
         toOCCSymbol(o.underlying, o.expiry, o.type, o.strike)
       );
+      // fields=all ensures Schwab returns every sub-object including reference (which contains cusip).
       const qUrl =
         "https://api.schwabapi.com/marketdata/v1/quotes?" +
-        new URLSearchParams({ symbols: occSymbols.join(",") }).toString();
+        new URLSearchParams({ symbols: occSymbols.join(","), fields: "all" }).toString();
       const qResp = await fetch(qUrl, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
@@ -498,13 +499,12 @@ export default async function handler(req: any, res: any) {
           typeof src.delta === "number" && Number.isFinite(src.delta)
             ? src.delta
             : null;
-        // CUSIP: top-level field per Schwab docs, with reference sub-object as fallback.
+        // CUSIP: check every location Schwab might place it across different response shapes.
         const cusip =
-          typeof q?.cusip === "string" && q.cusip.length > 0
-            ? q.cusip
-            : typeof q?.reference?.cusip === "string" && q.reference.cusip.length > 0
-              ? q.reference.cusip
-              : null;
+          (typeof q?.cusip === "string" && q.cusip.length > 0 && q.cusip) ||
+          (typeof q?.reference?.cusip === "string" && q.reference.cusip.length > 0 && q.reference.cusip) ||
+          (typeof src?.cusip === "string" && src.cusip.length > 0 && src.cusip) ||
+          null;
         const key = `${spec.underlying} ${spec.expiry} ${spec.strike} ${spec.type}`;
         optionQuotes[key] = { bid, ask, modeled, delta, cusip };
       }

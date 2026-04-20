@@ -146,7 +146,8 @@ export default async function handler(req: any, res: any) {
 
     const occResp = await fetch(
       "https://api.schwabapi.com/marketdata/v1/quotes?" +
-        new URLSearchParams({ symbols: occSymbols.join(",") }).toString(),
+        // fields=all ensures Schwab returns every sub-object including reference (which contains cusip).
+        new URLSearchParams({ symbols: occSymbols.join(","), fields: "all" }).toString(),
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
     const occBody: any = occResp.ok ? await occResp.json() : {};
@@ -208,13 +209,12 @@ export default async function handler(req: any, res: any) {
             ? src.mark
             : undefined;
 
-      // CUSIP: top-level field per Schwab docs, with reference sub-object as fallback.
+      // CUSIP: check every location Schwab might place it across different response shapes.
       const cusip =
-        typeof q?.cusip === "string" && q.cusip.length > 0
-          ? q.cusip
-          : typeof q?.reference?.cusip === "string" && q.reference.cusip.length > 0
-            ? q.reference.cusip
-            : null;
+        (typeof q?.cusip === "string" && q.cusip.length > 0 && q.cusip) ||
+        (typeof q?.reference?.cusip === "string" && q.reference.cusip.length > 0 && q.reference.cusip) ||
+        (typeof src?.cusip === "string" && src.cusip.length > 0 && src.cusip) ||
+        null;
 
       const expiryDate = new Date(maturity + "T00:00:00Z");
       const dte = Math.max(
