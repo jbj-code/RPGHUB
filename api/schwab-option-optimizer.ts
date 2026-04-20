@@ -468,7 +468,7 @@ export default async function handler(req: any, res: any) {
       );
       const qUrl =
         "https://api.schwabapi.com/marketdata/v1/quotes?" +
-        new URLSearchParams({ symbols: occSymbols.join(","), fields: "quote,reference" }).toString();
+        new URLSearchParams({ symbols: occSymbols.join(",") }).toString();
       const qResp = await fetch(qUrl, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
@@ -498,12 +498,13 @@ export default async function handler(req: any, res: any) {
           typeof src.delta === "number" && Number.isFinite(src.delta)
             ? src.delta
             : null;
-        // CUSIP lives in the reference sub-object of the quote response.
-        const ref = q?.reference ?? null;
+        // CUSIP: top-level field per Schwab docs, with reference sub-object as fallback.
         const cusip =
-          typeof ref?.cusip === "string" && ref.cusip.length > 0
-            ? ref.cusip
-            : null;
+          typeof q?.cusip === "string" && q.cusip.length > 0
+            ? q.cusip
+            : typeof q?.reference?.cusip === "string" && q.reference.cusip.length > 0
+              ? q.reference.cusip
+              : null;
         const key = `${spec.underlying} ${spec.expiry} ${spec.strike} ${spec.type}`;
         optionQuotes[key] = { bid, ask, modeled, delta, cusip };
       }
