@@ -62,11 +62,13 @@ export type PortfolioRow = {
   action: "Sell to Open" | "Buy to Open" | "Sell to Close" | "Buy to Close";
   type: "Qty" | "Notional";
   value: number;
-  targetMode?: "days" | "expiry";
+  targetMode?: "days" | "expiry" | "month";
   days: number;
   targetExpiry?: string; // YYYY-MM-DD
+  targetMonth?: string;  // YYYY-MM
   moneyness: "OTM" | "ITM";
-  otmPct: number;
+  otmPctMin: number;
+  otmPctMax: number;
   monthly: boolean;
   currentExpiry?: string; // YYYY-MM-DD
   currentStrike?: number;
@@ -162,15 +164,23 @@ function formatSheetNumber(n: number): string {
   return n.toFixed(2);
 }
 
+function toPlainTextCell(value: string): string {
+  return value
+    .replace(/\r?\n/g, " ")
+    .replace(/\t/g, " ")
+    .replace(/\*\*/g, "")
+    .trim();
+}
+
 function formatTradeForSheetsExport(tr: OptionsTrade): string {
   return [
-    tr.figi ?? "",
-    tr.ticker,
-    formatDateForSheets(tr.maturity),
-    formatSheetNumber(tr.strikePrice),
-    tr.optionSide,
-    formatSheetNumber(tr.currentBid),
-    formatSheetNumber(tr.currentAsk),
+    toPlainTextCell(tr.figi ?? ""),
+    toPlainTextCell(tr.ticker),
+    toPlainTextCell(formatDateForSheets(tr.maturity)),
+    toPlainTextCell(formatSheetNumber(tr.strikePrice)),
+    toPlainTextCell(tr.optionSide),
+    toPlainTextCell(formatSheetNumber(tr.currentBid)),
+    toPlainTextCell(formatSheetNumber(tr.currentAsk)),
   ].join("\t");
 }
 
@@ -255,23 +265,44 @@ export function formatRankedRowForCopy(r: RankedResult, rollMode: boolean): stri
 
 
 
-const defaultPortfolioRow = (): PortfolioRow => ({
-  id: makeId(),
-  ticker: "",
-  putCall: "Put",
-  action: "Sell to Open",
-  type: "Qty",
-  value: 0,
-  targetMode: "days",
-  days: 30,
-  targetExpiry: "",
-  moneyness: "OTM",
-  otmPct: 10,
-  monthly: false,
-  currentExpiry: "",
-  currentStrike: 0,
-  currentContracts: 0,
-});
+const MONTH_OPTIONS = [
+  { value: "01", label: "January" },
+  { value: "02", label: "February" },
+  { value: "03", label: "March" },
+  { value: "04", label: "April" },
+  { value: "05", label: "May" },
+  { value: "06", label: "June" },
+  { value: "07", label: "July" },
+  { value: "08", label: "August" },
+  { value: "09", label: "September" },
+  { value: "10", label: "October" },
+  { value: "11", label: "November" },
+  { value: "12", label: "December" },
+];
+
+const defaultPortfolioRow = (): PortfolioRow => {
+  const now = new Date();
+  const targetMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  return {
+    id: makeId(),
+    ticker: "",
+    putCall: "Put",
+    action: "Sell to Open",
+    type: "Qty",
+    value: 0,
+    targetMode: "month",
+    days: 30,
+    targetExpiry: "",
+    targetMonth,
+    moneyness: "OTM",
+    otmPctMin: 5,
+    otmPctMax: 15,
+    monthly: false,
+    currentExpiry: "",
+    currentStrike: 0,
+    currentContracts: 0,
+  };
+};
 
 type HelpTooltipProps = { theme: Theme; text: string; children: React.ReactNode };
 
@@ -444,6 +475,7 @@ type ThemeSelectProps = {
   openId: string | null;
   setOpenId: (id: string | null) => void;
   minWidth?: number;
+  dropdownMaxHeight?: number;
 };
 
 function OptimizerThemeSelect({
@@ -455,6 +487,7 @@ function OptimizerThemeSelect({
   openId,
   setOpenId,
   minWidth,
+  dropdownMaxHeight,
 }: ThemeSelectProps) {
   const open = openId === dropdownKey;
   const display = options.find((o) => o.value === value)?.label ?? value;
@@ -489,7 +522,16 @@ function OptimizerThemeSelect({
             style={{ position: "fixed", inset: 0, zIndex: 3998 }}
             onClick={() => setOpenId(null)}
           />
-          <div style={{ ...getDropdownPanelStyle(t, "down"), zIndex: 3999, minWidth: "100%" }}>
+          <div
+            style={{
+              ...getDropdownPanelStyle(t, "down"),
+              zIndex: 3999,
+              minWidth: "100%",
+              ...(dropdownMaxHeight != null
+                ? { maxHeight: dropdownMaxHeight, overflowY: "auto" }
+                : {}),
+            }}
+          >
             {options.map((o) => (
               <button
                 key={o.value}
@@ -514,7 +556,6 @@ function OptimizerThemeSelect({
 export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: OptionsOptimizerProps) {
   const [portfolioRows, setPortfolioRows] = useState<PortfolioRow[]>([defaultPortfolioRow()]);
   const [portfolioDropdownId, setPortfolioDropdownId] = useState<string | null>(null);
-  const [otmVariancePct, setOtmVariancePct] = useState(5);
   const [rankedResults, setRankedResults] = useState<RankedResult[] | null>(null);
   const [optimizerTableSort, setOptimizerTableSort] = useState<OptimizerTableSortState>({
     phase: "none",
@@ -733,6 +774,22 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
       setRankedResults(null);
       return;
     }
+    // Validate month mode rows before sending
+    for (const row of portfolioRows) {
+      if ((row.targetMode ?? "month") === "month") {
+        const tm = row.targetMonth ?? "";
+        const parts = tm.split("-");
+        const yearOk = /^\d{4}$/.test(parts[0] ?? "");
+        const monthOk = /^\d{2}$/.test(parts[1] ?? "");
+        if (!yearOk || !monthOk) {
+          setOptimizeMessage(
+            `Please select a month and enter a valid 4-digit year for "${row.ticker || "your ticker"}".`
+          );
+          setRankedResults(null);
+          return;
+        }
+      }
+    }
     setOptimizeLoading(true);
     setOptimizeMessage(null);
     try {
@@ -742,7 +799,6 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
         body: JSON.stringify({
           action: "optimize",
           portfolioRows,
-          otmVariancePct,
           assignmentAwareRanking: true,
         }),
       });
@@ -766,7 +822,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
     } finally {
       setOptimizeLoading(false);
     }
-  }, [portfolioRows, otmVariancePct]);
+  }, [portfolioRows]);
 
   const addToTradeList = useCallback((result: RankedResult) => {
     const trade = { ...result.trade, id: makeId(), sourceResultId: result.trade.id };
@@ -982,7 +1038,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Understanding the columns</p>
               <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
                 <li><strong>1M Performance</strong> — ~1-month total return: baseline close from daily history vs current price from the equity quote at request time (directional context for ranking).</li>
-                <li><strong>Moneyness</strong> — strike ÷ spot × 100, using the same underlying quote snapshot as the rest of the run. �� Below 100% is typically OTM for puts; above 100% is typically OTM for calls. At-the-money is near 100%.</li>
+                <li><strong>Moneyness</strong> — % distance of the strike from current spot: <em>(strike ÷ spot − 1) × 100</em>. Positive = strike above spot; negative = strike below. Green = OTM for the selected trade side (e.g. +12% for an OTM call, −8% for an OTM put). Directly matches the Min % / Max % band you entered in the inputs.</li>
                 <li><strong>Limit Px</strong> — midpoint of the Schwab bid/ask. This is your target fill price; real fills may differ.</li>
                 <li><strong>Ann. Yield</strong> — annualized yield based on strike notional (see above).</li>
                 <li><strong>PoP</strong> — probability the option expires worthless (you keep the full premium). Derived from delta: higher is better for short options.</li>
@@ -1041,6 +1097,9 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
               rankedResults.length > 0 &&
               rowTicker.length > 0 &&
               rankedResults.some((r) => r.ticker === rowTicker);
+            const tmParts = (row.targetMonth ?? "").split("-");
+            const tmYear = tmParts[0] ?? "";
+            const tmMonth = tmParts[1] ?? "";
             return (
             <div
               key={row.id}
@@ -1217,70 +1276,123 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                   )}
                 </div>
               </div>
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "row",
-                  alignItems: "flex-end",
-                  gap: t.spacing(1),
-                }}
-              >
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
-                  <label style={labelStyle}>Target by</label>
-                  <OptimizerThemeSelect
+              {/* Target by · Monthly checkbox — combined block */}
+              <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(1.5) }}>
+                {/* Row 1: Target by dropdown + Monthly checkbox inline */}
+                <div style={{ display: "flex", alignItems: "flex-end", gap: t.spacing(2), flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
+                    <label style={labelStyle}>Target by</label>
+                    <OptimizerThemeSelect
+                      theme={t}
+                      value={row.targetMode ?? "month"}
+                      options={[
+                        { value: "month", label: "Month / Year" },
+                        { value: "days", label: "Days (DTE)" },
+                        { value: "expiry", label: "Expiry date" },
+                      ]}
+                      onChange={(v) => updatePortfolioRow(row.id, "targetMode", v as "days" | "expiry" | "month")}
+                      dropdownKey={`${row.id}-targetMode`}
+                      openId={portfolioDropdownId}
+                      setOpenId={setPortfolioDropdownId}
+                      minWidth={120}
+                    />
+                  </div>
+                  <HelpTooltip
                     theme={t}
-                    value={row.targetMode ?? "days"}
-                    options={[
-                      { value: "days", label: "Days (DTE)" },
-                      { value: "expiry", label: "Expiry date" },
-                    ]}
-                    onChange={(v) => updatePortfolioRow(row.id, "targetMode", v as "days" | "expiry")}
-                    dropdownKey={`${row.id}-targetMode`}
-                    openId={portfolioDropdownId}
-                    setOpenId={setPortfolioDropdownId}
-                    minWidth={120}
-                  />
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
-                  {(row.targetMode ?? "days") === "days" ? (
-                    <>
-                      <HelpTooltip
-                        theme={t}
-                        text="Target days to expiration for this leg. Optimizer will look near this DTE."
-                      >
-                        <label style={labelStyle}>Days (DTE)</label>
-                      </HelpTooltip>
+                    text="When checked, only the standard monthly expiry for the selected period is considered (3rd Friday, or Thursday if Friday is a market holiday)."
+                  >
+                    <label
+                      htmlFor={`monthly-${row.id}`}
+                      style={{ ...labelStyle, textTransform: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: t.spacing(1), paddingBottom: 9, userSelect: "none" }}
+                    >
                       <input
-                        type="number"
-                        min={1}
-                        style={{ ...inputStyle, maxWidth: 90 }}
-                        value={row.days || ""}
-                        onChange={(e) => updatePortfolioRow(row.id, "days", Number(e.target.value) || 0)}
-                        placeholder="30"
-                        aria-label="Days to expiration"
+                        type="checkbox"
+                        id={`monthly-${row.id}`}
+                        checked={row.monthly}
+                        onChange={(e) => updatePortfolioRow(row.id, "monthly", e.target.checked)}
+                        aria-label="Monthly expiration only"
+                        style={{ margin: 0, cursor: "pointer" }}
                       />
-                    </>
-                  ) : (
-                    <>
-                      <HelpTooltip
-                        theme={t}
-                        text="Exact expiration date for this row. Optimizer will query this specific expiry."
-                      >
-                        <label style={labelStyle}>Expiry date</label>
-                      </HelpTooltip>
-                      <input
-                        type="date"
-                        style={{ ...inputStyle, maxWidth: 150 }}
-                        value={row.targetExpiry ?? ""}
-                        onChange={(e) => updatePortfolioRow(row.id, "targetExpiry", e.target.value)}
-                        aria-label="Target expiry date"
-                      />
-                    </>
-                  )}
+                      Monthly only
+                    </label>
+                  </HelpTooltip>
                 </div>
+                {/* Row 2: Date input — changes based on mode */}
+                {(row.targetMode ?? "month") === "month" ? (
+                  <div style={{ display: "flex", gap: t.spacing(1.5), alignItems: "flex-end", flexWrap: "wrap" }}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
+                      <label style={labelStyle}>Month</label>
+                      <OptimizerThemeSelect
+                        theme={t}
+                        value={tmMonth}
+                        options={MONTH_OPTIONS}
+                        onChange={(v) => {
+                          const year = tmYear || String(new Date().getFullYear());
+                          updatePortfolioRow(row.id, "targetMonth", `${year}-${v}`);
+                        }}
+                        dropdownKey={`${row.id}-tmMonth`}
+                        openId={portfolioDropdownId}
+                        setOpenId={setPortfolioDropdownId}
+                        minWidth={120}
+                        dropdownMaxHeight={220}
+                      />
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
+                      <label style={labelStyle}>Year</label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={4}
+                        style={{ ...inputStyle, maxWidth: 72 }}
+                        value={tmYear}
+                        onChange={(e) => {
+                          const yr = e.target.value.replace(/\D/g, "").slice(0, 4);
+                          const mo = tmMonth || "01";
+                          updatePortfolioRow(row.id, "targetMonth", `${yr}-${mo}`);
+                        }}
+                        placeholder={String(new Date().getFullYear())}
+                        aria-label="Expiry year"
+                      />
+                    </div>
+                  </div>
+                ) : (row.targetMode ?? "month") === "days" ? (
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
+                    <HelpTooltip
+                      theme={t}
+                      text="Target days to expiration for this leg. Optimizer will look near this DTE."
+                    >
+                      <label style={labelStyle}>Days (DTE)</label>
+                    </HelpTooltip>
+                    <input
+                      type="number"
+                      min={1}
+                      style={{ ...inputStyle, maxWidth: 90 }}
+                      value={row.days || ""}
+                      onChange={(e) => updatePortfolioRow(row.id, "days", Number(e.target.value) || 0)}
+                      placeholder="30"
+                      aria-label="Days to expiration"
+                    />
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
+                    <HelpTooltip
+                      theme={t}
+                      text="Exact expiration date for this row. Optimizer will query this specific expiry."
+                    >
+                      <label style={labelStyle}>Expiry date</label>
+                    </HelpTooltip>
+                    <input
+                      type="date"
+                      style={{ ...inputStyle, maxWidth: 150 }}
+                      value={row.targetExpiry ?? ""}
+                      onChange={(e) => updatePortfolioRow(row.id, "targetExpiry", e.target.value)}
+                      aria-label="Target expiry date"
+                    />
+                  </div>
+                )}
               </div>
-              {/* OTM/ITM · OTM % · Variance % — all on one row */}
-              <div style={{ display: "flex", gap: t.spacing(2), alignItems: "flex-end" }}>
+              {/* OTM/ITM · Min % · Max % — band-based strike filter */}
+              <div style={{ display: "flex", gap: t.spacing(2), alignItems: "flex-end", flexWrap: "wrap" }}>
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
                   <HelpTooltip
                     theme={t}
@@ -1305,63 +1417,43 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
                   <HelpTooltip
                     theme={t}
-                    text="How far OTM or ITM you want the strike, as a percent of current price."
+                    text={`Minimum ${row.moneyness ?? "OTM"} distance as a percent of current price. Only strikes at or beyond this level are included.`}
                   >
-                    <label style={labelStyle}>{row.moneyness ?? "OTM"}</label>
+                    <label style={labelStyle}>Min %</label>
                   </HelpTooltip>
                   <input
                     type="text"
                     inputMode="decimal"
                     style={{ ...inputStyle, maxWidth: 62, minWidth: 52 }}
-                    value={row.otmPct > 0 ? `${row.otmPct}%` : ""}
+                    value={row.otmPctMin > 0 ? `${row.otmPctMin}%` : ""}
                     onChange={(e) => {
                       const raw = e.target.value.replace(/%/g, "");
-                      updatePortfolioRow(row.id, "otmPct", Number(raw) || 0);
+                      updatePortfolioRow(row.id, "otmPctMin", Number(raw) || 0);
                     }}
                     placeholder="0%"
-                    aria-label={`${row.moneyness} percent`}
+                    aria-label={`Minimum ${row.moneyness ?? "OTM"} percent`}
                   />
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
                   <HelpTooltip
                     theme={t}
-                    text="How wide a strike range to search around your OTM/ITM target."
+                    text={`Maximum ${row.moneyness ?? "OTM"} distance as a percent of current price. Only strikes at or within this level are included.`}
                   >
-                    <label style={labelStyle}>Variance</label>
+                    <label style={labelStyle}>Max %</label>
                   </HelpTooltip>
                   <input
                     type="text"
                     inputMode="decimal"
                     style={{ ...inputStyle, maxWidth: 62, minWidth: 52 }}
-                    value={otmVariancePct > 0 ? `${otmVariancePct}%` : ""}
+                    value={row.otmPctMax > 0 ? `${row.otmPctMax}%` : ""}
                     onChange={(e) => {
                       const raw = e.target.value.replace(/%/g, "");
-                      setOtmVariancePct(Number(raw) || 0);
+                      updatePortfolioRow(row.id, "otmPctMax", Number(raw) || 0);
                     }}
                     placeholder="0%"
-                    aria-label="Variance percent"
+                    aria-label={`Maximum ${row.moneyness ?? "OTM"} percent`}
                   />
                 </div>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
-                <HelpTooltip
-                  theme={t}
-                  text="If checked, only monthly expirations are considered instead of all weeklys."
-                >
-                  <label
-                    htmlFor={`monthly-${row.id}`}
-                    style={{ ...labelStyle, marginBottom: 0, textTransform: "none" }}
-                  >
-                    Monthly
-                  </label>
-                </HelpTooltip>
-                <input
-                  type="checkbox"
-                  id={`monthly-${row.id}`}
-                  checked={row.monthly}
-                  onChange={(e) => updatePortfolioRow(row.id, "monthly", e.target.checked)}
-                  aria-label="Monthly expiration only"
-                />
               </div>
             </div>
             );
@@ -1578,17 +1670,20 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                         padding: t.spacing(2),
                         textAlign: "center",
                         color: (() => {
-                          const spot = r.trade.currentPrice;
                           const m = r.trade.moneynessPct;
-                          if (!Number.isFinite(spot) || spot <= 0 || !Number.isFinite(m)) return t.colors.textMuted;
+                          if (!Number.isFinite(m)) return t.colors.textMuted;
                           const isPut = r.trade.optionSide.startsWith("PUT");
-                          const otm = isPut ? m < 100 : m > 100;
+                          // m = % from spot: positive = above, negative = below
+                          // OTM: put needs m < 0 (strike below spot), call needs m > 0 (strike above spot)
+                          const otm = isPut ? m < 0 : m > 0;
                           return otm ? t.colors.success : t.colors.danger;
                         })(),
                         fontWeight: 600,
                       }}
                     >
-                      {Number.isFinite(r.trade.moneynessPct) ? `${r.trade.moneynessPct.toFixed(2)}%` : "—"}
+                      {Number.isFinite(r.trade.moneynessPct)
+                        ? `${r.trade.moneynessPct >= 0 ? "+" : ""}${r.trade.moneynessPct.toFixed(2)}%`
+                        : "—"}
                     </td>
                     <td style={{ padding: t.spacing(2), textAlign: "center" }}>${r.limitPrice.toFixed(2)}</td>
                     <td style={{ padding: t.spacing(2), textAlign: "center", color: t.colors.success, fontWeight: 600 }}>
@@ -1951,7 +2046,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                         <div><div style={labelStyle}>Limit Px</div><div style={{ fontSize: "0.8rem", color: t.colors.primary }}>${tr.optionLimitPrice.toFixed(2)}</div></div>
                         <div><div style={labelStyle}>Bid / Ask</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>${tr.currentBid.toFixed(2)} / ${tr.currentAsk.toFixed(2)}</div></div>
                         <div><div style={labelStyle}>Contracts</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{tr.contracts}</div></div>
-                        <div><div style={labelStyle}>Moneyness</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{tr.moneynessPct}%</div></div>
+                        <div><div style={labelStyle}>Moneyness</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{Number.isFinite(tr.moneynessPct) ? `${tr.moneynessPct >= 0 ? "+" : ""}${tr.moneynessPct.toFixed(2)}%` : "—"}</div></div>
                         <div><div style={labelStyle}>Yield</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{tr.yieldAtCurrentPrice}%</div></div>
                         <div><div style={labelStyle}>Notional</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{formatNotionalCompact(tr.valueOfSharesAtStrike)}</div></div>
                         {tr.figi && (

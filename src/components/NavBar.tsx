@@ -132,7 +132,6 @@ export function NavBar({
     { page: "stock-comparison", label: "Stock Comparison", icon: "compare_arrows" },
     { page: "put-optimizer", label: "Options Optimizer", icon: "tune" },
     { page: "options-pricing", label: "Options Pricing", icon: "paid" },
-    { page: "options-builder", label: "Options Builder", icon: "table_chart" },
     {
       page: "options-opportunities",
       label: "Options Opportunities",
@@ -163,6 +162,7 @@ export function NavBar({
       icon: "rocket_launch",
       externalUrl: "https://lookerstudio.google.com/s/vnU0N-aINPg",
     },
+    { page: "agent", label: "Agent", icon: "smart_toy" },
     { page: "website", label: "Website", icon: "language" },
   ];
 

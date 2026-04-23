@@ -12,11 +12,14 @@ type PortfolioRow = {
   action: "Sell to Open" | "Buy to Open" | "Sell to Close" | "Buy to Close";
   type: "Qty" | "Notional";
   value: number;
-  targetMode?: "days" | "expiry";
+  targetMode?: "days" | "expiry" | "month";
   days: number;
   targetExpiry?: string;
+  targetMonth?: string; // YYYY-MM — used when targetMode === "month"
   moneyness?: "OTM" | "ITM";
-  otmPct: number;
+  otmPct?: number;       // legacy single-value (used by Roll tool)
+  otmPctMin?: number;    // band lower bound (Optimizer)
+  otmPctMax?: number;    // band upper bound (Optimizer)
   monthly: boolean;
   currentExpiry?: string;
   currentStrike?: number;
@@ -97,8 +100,12 @@ function daysBetween(from: Date, to: Date): number {
   return Math.round((to.getTime() - from.getTime()) / (24 * 60 * 60 * 1000));
 }
 
-/** Standard monthly equity options: 3rd Friday of the month (UTC date from chain YYYY-MM-DD). */
-function isThirdFridayMonthlyExpiry(expiry: string): boolean {
+/**
+ * Standard monthly equity options expiry: 3rd Friday of the month.
+ * When the 3rd Friday is a market holiday, the exchange moves it to the Thursday before.
+ * Accepts both the 3rd Friday and the Thursday immediately preceding it.
+ */
+function isStandardMonthlyExpiry(expiry: string): boolean {
   const parts = expiry.split("-");
   if (parts.length !== 3) return false;
   const y = Number(parts[0]);
@@ -106,12 +113,31 @@ function isThirdFridayMonthlyExpiry(expiry: string): boolean {
   const d = Number(parts[2]);
   if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return false;
   const date = new Date(Date.UTC(y, m - 1, d));
-  if (date.getUTCDay() !== 5) return false;
-  let fridayCount = 0;
-  for (let day = 1; day <= d; day++) {
-    if (new Date(Date.UTC(y, m - 1, day)).getUTCDay() === 5) fridayCount++;
+  const dow = date.getUTCDay();
+
+  // Case 1: 3rd Friday
+  if (dow === 5) {
+    let fridayCount = 0;
+    for (let day = 1; day <= d; day++) {
+      if (new Date(Date.UTC(y, m - 1, day)).getUTCDay() === 5) fridayCount++;
+    }
+    if (fridayCount === 3) return true;
   }
-  return fridayCount === 3;
+
+  // Case 2: Thursday immediately before the 3rd Friday (holiday fallback)
+  if (dow === 4) {
+    const fridayD = d + 1;
+    const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    if (fridayD <= daysInMonth) {
+      let fridayCount = 0;
+      for (let day = 1; day <= fridayD; day++) {
+        if (new Date(Date.UTC(y, m - 1, day)).getUTCDay() === 5) fridayCount++;
+      }
+      if (fridayCount === 3) return true;
+    }
+  }
+
+  return false;
 }
 
 // Limit price = pure midpoint (bid + ask) / 2.
@@ -327,21 +353,41 @@ export async function handler(req: any, res: any): Promise<void> {
         if (!currentPrice || currentPrice <= 0) return collected;
 
         const type: "C" | "P" = row.putCall === "Call" ? "C" : "P";
+        // If the UI sent month mode but the value is not yet a valid YYYY-MM, skip this row
+        // so it does NOT silently fall back to DTE mode and return wrong-month results.
+        if (row.targetMode === "month" && !(typeof row.targetMonth === "string" && /^\d{4}-\d{2}$/.test(row.targetMonth.trim()))) {
+          return collected;
+        }
         const usingExactExpiry =
           row.targetMode === "expiry" &&
           typeof row.targetExpiry === "string" &&
           /^\d{4}-\d{2}-\d{2}$/.test(row.targetExpiry);
-        // For expiry mode: use a ±7 day window so we always catch the real listed expiry
-        // (e.g. user types 2028-01-17 but the LEAPS is actually the 3rd Friday 2028-01-21).
+        // Month mode: targetMonth must be a valid "YYYY-MM" string.
+        // If targetMode is "month" but the value is malformed, treat as invalid and skip row
+        // (the frontend validator should have caught this already).
+        const usingMonthMode =
+          row.targetMode === "month" &&
+          typeof row.targetMonth === "string" &&
+          /^\d{4}-\d{2}$/.test(row.targetMonth.trim());
+
+        // For expiry mode: use a ±7 day window so we always catch the real listed expiry.
         const targetExpDate = usingExactExpiry
           ? new Date(`${row.targetExpiry}T00:00:00.000Z`)
           : null;
-        const fromDate = usingExactExpiry
-          ? addDays(targetExpDate!, -7)
-          : addDays(today, Math.max(1, row.days - 14));
-        const toDate = usingExactExpiry
-          ? addDays(targetExpDate!, 7)
-          : addDays(today, row.days + 35);
+
+        let fromDate: Date;
+        let toDate: Date;
+        if (usingExactExpiry) {
+          fromDate = addDays(targetExpDate!, -7);
+          toDate = addDays(targetExpDate!, 7);
+        } else if (usingMonthMode) {
+          const [ymYear, ymMonth] = row.targetMonth!.split("-").map(Number);
+          fromDate = new Date(Date.UTC(ymYear, ymMonth - 1, 1));
+          toDate = new Date(Date.UTC(ymYear, ymMonth, 0)); // last day of month
+        } else {
+          fromDate = addDays(today, Math.max(1, row.days - 14));
+          toDate = addDays(today, row.days + 35);
+        }
         const fromStr = fromDate.toISOString().slice(0, 10);
         const toStr = toDate.toISOString().slice(0, 10);
 
@@ -365,9 +411,18 @@ export async function handler(req: any, res: any): Promise<void> {
         const expMap = type === "C" ? chainBody?.callExpDateMap : chainBody?.putExpDateMap;
         if (!expMap || typeof expMap !== "object") return collected;
 
-        // Variance is symmetric around the target (UI copy: 10% with 5% variance = 5% to 15%).
-        const pctMin = Math.max(0, (row.otmPct - otmVariancePct) / 100);
-        const pctMax = (row.otmPct + otmVariancePct) / 100;
+        // Band-based OTM/ITM filter: new rows send otmPctMin/otmPctMax directly;
+        // legacy rows (Roll tool) send otmPct + body-level otmVariancePct.
+        let pctMin: number;
+        let pctMax: number;
+        if (row.otmPctMin != null && row.otmPctMax != null) {
+          pctMin = Math.max(0, row.otmPctMin / 100);
+          pctMax = row.otmPctMax / 100;
+        } else {
+          const center = row.otmPct ?? 10;
+          pctMin = Math.max(0, (center - otmVariancePct) / 100);
+          pctMax = (center + otmVariancePct) / 100;
+        }
         const isOTM = (row.moneyness ?? "OTM") === "OTM";
 
         // For expiry mode: snap to the single expiry closest to the target date within ±7 days.
@@ -388,12 +443,13 @@ export async function handler(req: any, res: any): Promise<void> {
 
         for (const [expKey, strikesObj] of Object.entries<any>(expMap)) {
           const expiry = toExpiryYYYYMMDD(expKey);
-          if (row.monthly && !isThirdFridayMonthlyExpiry(expiry)) continue;
+          if (row.monthly && !isStandardMonthlyExpiry(expiry)) continue;
           // In expiry mode: only keep the single closest expiry to the target date.
           if (usingExactExpiry && expiry !== closestExpiry) continue;
           const expDate = new Date(expiry + "Z");
           const dte = daysBetween(today, expDate);
-          if (!usingExactExpiry && (dte < Math.max(1, row.days - 14) || dte > row.days + 35)) continue;
+          // In month or expiry mode the date range already scopes to the right window.
+          if (!usingExactExpiry && !usingMonthMode && (dte < Math.max(1, row.days - 14) || dte > row.days + 35)) continue;
 
           const strikeEntries = Object.entries(strikesObj ?? {});
           for (const [strikeStr, contracts] of strikeEntries) {
@@ -597,7 +653,9 @@ export async function handler(req: any, res: any): Promise<void> {
         spec.daysToMaturity > 0
           ? yieldAtCurrentPrice * (365 / spec.daysToMaturity)
           : 0;
-      const moneynessPct = (spec.strike / spec.currentPrice) * 100;
+      // Stored as % distance from spot: positive = strike above spot, negative = strike below.
+      // e.g. +12.5 means strike is 12.5% above spot (OTM call / ITM put). Matches the Min/Max % band inputs.
+      const moneynessPct = (spec.strike / spec.currentPrice - 1) * 100;
 
       const trade: OptionsTrade = {
         id: makeId(),

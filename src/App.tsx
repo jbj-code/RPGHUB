@@ -7,7 +7,6 @@ import {
   Home,
   OptionsOptimizer,
   StockComparison,
-  OptionsBuilder,
   Todos,
   OptionsOpportunities,
   OptionsRoll,
@@ -16,6 +15,7 @@ import {
   AssignmentCheck,
   Website,
   Extractor,
+  Agent,
 } from "./pages";
 import { OptionsPricing } from "./pages/OptionsPricing";
 
@@ -28,7 +28,6 @@ export type Page =
   | "put-optimizer"
   | "stock-comparison"
   | "options-pricing"
-  | "options-builder"
   | "todos"
   | "options-opportunities"
   | "options-roll"
@@ -37,7 +36,8 @@ export type Page =
   | "email-crm"
   | "assignment-check"
   | "website"
-  | "extractor";
+  | "extractor"
+  | "agent";
 
 function App() {
   const [unlocked, setUnlocked] = useState(false);
@@ -98,13 +98,14 @@ function App() {
           <OptionsOptimizer theme={t} sidebarWidth={sidebarWidth} />
         ) : page === "options-opportunities" ? (
           <OptionsOpportunities theme={t} sidebarWidth={sidebarWidth} />
+        ) : page === "agent" ? (
+          <Agent theme={t} />
         ) : page === "website" ? (
           <Website theme={t} />
         ) : (
           <div className="app-main-inner" style={mainInnerStyle}>
             {page === "home" && <Home theme={t} />}
             {page === "options-pricing" && <OptionsPricing theme={t} />}
-            {page === "options-builder" && <OptionsBuilder theme={t} />}
             {page === "options-roll" && <OptionsRoll theme={t} />}
             {page === "rankinator" && <Rankinator theme={t} />}
             {page === "raise-ai" && <RaiseAi theme={t} />}

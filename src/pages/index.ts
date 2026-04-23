@@ -1,7 +1,6 @@
 export { Home } from "./Home";
 export { OptionsOptimizer } from "./OptionsOptimizer";
 export { StockComparison } from "./StockComparison";
-export { OptionsBuilder } from "./OptionsBuilder";
 export { Todos } from "./Todos";
 export { OptionsOpportunities } from "./OptionsOpportunities";
 export { OptionsRoll } from "./OptionsRoll";
@@ -11,3 +10,4 @@ export { EmailCrm } from "./EmailCrm";
 export { AssignmentCheck } from "./AssignmentCheck";
 export { Website } from "./Website";
 export { Extractor } from "./Extractor";
+export { Agent } from "./Agent";
