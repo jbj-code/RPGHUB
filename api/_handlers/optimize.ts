@@ -653,9 +653,8 @@ export async function handler(req: any, res: any): Promise<void> {
         spec.daysToMaturity > 0
           ? yieldAtCurrentPrice * (365 / spec.daysToMaturity)
           : 0;
-      // Stored as % distance from spot: positive = strike above spot, negative = strike below.
-      // e.g. +12.5 means strike is 12.5% above spot (OTM call / ITM put). Matches the Min/Max % band inputs.
-      const moneynessPct = (spec.strike / spec.currentPrice - 1) * 100;
+      // Standard ratio moneyness: strike ÷ spot × 100 (e.g. 90 = strike 10% below spot, 110 = 10% above).
+      const moneynessPct = (spec.strike / spec.currentPrice) * 100;
 
       const trade: OptionsTrade = {
         id: makeId(),

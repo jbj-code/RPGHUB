@@ -1038,7 +1038,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Understanding the columns</p>
               <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
                 <li><strong>1M Performance</strong> — ~1-month total return: baseline close from daily history vs current price from the equity quote at request time (directional context for ranking).</li>
-                <li><strong>Moneyness</strong> — % distance of the strike from current spot: <em>(strike ÷ spot − 1) × 100</em>. Positive = strike above spot; negative = strike below. Green = OTM for the selected trade side (e.g. +12% for an OTM call, −8% for an OTM put). Directly matches the Min % / Max % band you entered in the inputs.</li>
+                <li><strong>Moneyness</strong> — strike ÷ current spot × 100 (same quote snapshot as the run). Below 100% is typically OTM for puts; above 100% is typically OTM for calls. At-the-money is near 100%.</li>
                 <li><strong>Limit Px</strong> — midpoint of the Schwab bid/ask. This is your target fill price; real fills may differ.</li>
                 <li><strong>Ann. Yield</strong> — annualized yield based on strike notional (see above).</li>
                 <li><strong>PoP</strong> — probability the option expires worthless (you keep the full premium). Derived from delta: higher is better for short options.</li>
@@ -1673,16 +1673,15 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                           const m = r.trade.moneynessPct;
                           if (!Number.isFinite(m)) return t.colors.textMuted;
                           const isPut = r.trade.optionSide.startsWith("PUT");
-                          // m = % from spot: positive = above, negative = below
-                          // OTM: put needs m < 0 (strike below spot), call needs m > 0 (strike above spot)
-                          const otm = isPut ? m < 0 : m > 0;
+                          // Ratio moneyness: OTM put = m < 100, OTM call = m > 100
+                          const otm = isPut ? m < 100 : m > 100;
                           return otm ? t.colors.success : t.colors.danger;
                         })(),
                         fontWeight: 600,
                       }}
                     >
                       {Number.isFinite(r.trade.moneynessPct)
-                        ? `${r.trade.moneynessPct >= 0 ? "+" : ""}${r.trade.moneynessPct.toFixed(2)}%`
+                        ? `${r.trade.moneynessPct.toFixed(2)}%`
                         : "—"}
                     </td>
                     <td style={{ padding: t.spacing(2), textAlign: "center" }}>${r.limitPrice.toFixed(2)}</td>
@@ -2046,7 +2045,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                         <div><div style={labelStyle}>Limit Px</div><div style={{ fontSize: "0.8rem", color: t.colors.primary }}>${tr.optionLimitPrice.toFixed(2)}</div></div>
                         <div><div style={labelStyle}>Bid / Ask</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>${tr.currentBid.toFixed(2)} / ${tr.currentAsk.toFixed(2)}</div></div>
                         <div><div style={labelStyle}>Contracts</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{tr.contracts}</div></div>
-                        <div><div style={labelStyle}>Moneyness</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{Number.isFinite(tr.moneynessPct) ? `${tr.moneynessPct >= 0 ? "+" : ""}${tr.moneynessPct.toFixed(2)}%` : "—"}</div></div>
+                        <div><div style={labelStyle}>Moneyness</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{Number.isFinite(tr.moneynessPct) ? `${tr.moneynessPct.toFixed(2)}%` : "—"}</div></div>
                         <div><div style={labelStyle}>Yield</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{tr.yieldAtCurrentPrice}%</div></div>
                         <div><div style={labelStyle}>Notional</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{formatNotionalCompact(tr.valueOfSharesAtStrike)}</div></div>
                         {tr.figi && (
