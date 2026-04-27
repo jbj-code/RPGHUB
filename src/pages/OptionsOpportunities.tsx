@@ -575,33 +575,37 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                 Scans ~700 US equities, ETFs, and live Schwab movers at <strong>5%, 10%, 15%, and 20% OTM</strong> to surface the best risk-adjusted options opportunities. Each ticker appears in exactly one OTM bucket — the level where it scores best. Results are ready to trade: click the copy icon to grab the Schwab-formatted order symbol.
               </p>
 
-              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>The "free lunch" concept</p>
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Write (sell to open) — "free lunch" signal</p>
               <p style={{ marginBottom: t.spacing(3) }}>
-                When <strong>IV &gt; RV</strong> (implied volatility exceeds realized volatility), the options market is paying you more premium than the stock is actually moving. This gap — the <em>volatility risk premium</em> — is the edge for premium sellers. The <strong>IV/RV ratio</strong> column shows this directly: green = rich premium, red = cheap premium. The ★ Best IV/RV badge in the Top Picks card highlights the single highest-ratio opportunity across all OTM levels.
+                When <strong>IV &gt; RV</strong> (implied vol exceeds realized vol), the market pays you more premium than the stock is actually moving — the <em>volatility risk premium</em>. The <strong>IV/RV ratio</strong> shows this: green ≥1.0 (rich, good to sell), red &lt;0.85 (cheap). The ★ Best IV/RV badge highlights the highest-ratio opportunity across all OTM levels.
               </p>
 
-              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Ranking formula (sell to open)</p>
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Buy (long to open) — cheap premium signal</p>
+              <p style={{ marginBottom: t.spacing(3) }}>
+                When <strong>RV &gt; IV</strong>, options are priced below the stock's actual movement — favorable for buyers. IV/RV colors invert: green &lt;1.0 (cheap), red ≥1.15 (expensive). ★ Best IV/RV highlights the <em>lowest</em>-ratio opportunity. Ann. debit % shows the annualised cost; Δ Prob colors invert too — green ≥30% (high chance of profit), red ≤15%.
+              </p>
+
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Ranking formula</p>
               <p style={{ marginBottom: t.spacing(1) }}>
-                <code style={{ fontSize: "0.8rem", background: "rgba(0,0,0,0.06)", padding: "2px 5px", borderRadius: 4 }}>
-                  Score = AnnYield × (1 − Prob ITM)^1.35 × LiqScore × IV/RV mult × Gamma penalty
-                </code>
+                <strong>Write:</strong> <code style={{ fontSize: "0.8rem", background: "rgba(0,0,0,0.06)", padding: "2px 5px", borderRadius: 4 }}>AnnYield × (1 − Prob)^1.35 × Liq × IV/RV mult × Gamma penalty</code>
+              </p>
+              <p style={{ marginBottom: t.spacing(1) }}>
+                <strong>Buy:</strong> <code style={{ fontSize: "0.8rem", background: "rgba(0,0,0,0.06)", padding: "2px 5px", borderRadius: 4 }}>(Prob × 100 ÷ AnnDebit) × Liq × RV/IV mult</code>
               </p>
               <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
-                <li><strong>AnnYield</strong> — (bid ÷ strike) × (365 ÷ DTE): annualised return on capital at risk.</li>
-                <li><strong>(1 − Prob ITM)^1.35</strong> — safety penalty; farther-OTM strikes (lower delta) score better.</li>
-                <li><strong>LiqScore</strong> — blend of spread tightness (50%), open interest (25%), daily volume (15%), and volume/OI activity ratio (10%).</li>
-                <li><strong>IV/RV multiplier</strong> — up to ±40% boost/penalty based on how rich or cheap the implied vol is vs recent realised moves.</li>
-                <li><strong>Gamma penalty</strong> — mild discount for high-gamma contracts where assignment risk can accelerate rapidly.</li>
+                <li><strong>LiqScore</strong> — blend of spread tightness (50%), open interest (25%), volume (15%), vol/OI ratio (10%).</li>
+                <li><strong>IV/RV multiplier</strong> — ±40% boost/penalty based on vol richness vs cheapness.</li>
+                <li><strong>Gamma penalty</strong> (write only) — mild discount for high-gamma contracts near the strike.</li>
               </ul>
 
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Key columns</p>
               <ul style={{ margin: 0, marginBottom: t.spacing(2), paddingLeft: t.spacing(5) }}>
-                <li><strong>Δ Prob</strong> — probability of assignment (|delta|). Green ≤15%, red &gt;30%.</li>
-                <li><strong>IV / RV ratio</strong> — implied vol on the contract vs 20-day realised vol on the stock. The free-lunch signal.</li>
-                <li><strong>RV 20d</strong> — annualised realised vol from ~20 daily closes (how much the stock actually moves).</li>
-                <li><strong>Ann. yield</strong> — annualised premium as % of strike. Use this to compare across different expirations.</li>
-                <li><strong>Premium</strong> — dollars collected per contract (100 shares).</li>
-                <li><strong>Action</strong> — copies the Schwab-formatted order symbol (e.g. "AAPL 08/15/2025 200 P") to clipboard.</li>
+                <li><strong>Δ Prob</strong> — |delta| as proxy for probability ITM. Write: green ≤15% (safe), red &gt;30%. Buy: green ≥30% (likely to profit), red ≤15%.</li>
+                <li><strong>IV / RV ratio</strong> — implied vol vs 20-day realized vol. The core signal for both strategies.</li>
+                <li><strong>RV 20d</strong> — annualised realized vol from ~20 daily closes.</li>
+                <li><strong>Ann. yield / Ann. debit %</strong> — annualised credit (write) or debit (buy) as % of strike.</li>
+                <li><strong>Premium / Debit</strong> — dollars per contract (100 shares). Negative = debit for buys.</li>
+                <li><strong>Action</strong> — copies the Schwab-formatted order symbol to clipboard.</li>
               </ul>
 
             </div>
@@ -928,9 +932,9 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
 
           return (
             <div style={{ ...cardStyle, marginBottom: t.spacing(4) }}>
-              <div style={{ display: "flex", alignItems: "center", gap: t.spacing(3), marginBottom: t.spacing(3) }}>
-                <h3 style={{ ...sectionTitleStyle, marginBottom: 0 }}>Top Picks</h3>
-                <span style={{ fontSize: "0.78rem", color: t.colors.textMuted }}>Best-scoring opportunity at each OTM level — no ticker repeats across levels</span>
+              <div style={{ display: "flex", alignItems: "baseline", gap: t.spacing(2), marginBottom: t.spacing(3), flexWrap: "nowrap", overflow: "hidden" }}>
+                <h3 style={{ ...sectionTitleStyle, marginBottom: 0, flexShrink: 0 }}>Top Picks</h3>
+                <span style={{ fontSize: "0.78rem", color: t.colors.textMuted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>Best-scoring opportunity at each OTM level — no ticker repeats across levels</span>
               </div>
               <div style={{ display: "flex", gap: t.spacing(3), flexWrap: "wrap" }}>
                 {picks.map(({ lvl, row }, i) => {
@@ -995,13 +999,20 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                       {/* Key stats */}
                       <div style={{ marginTop: t.spacing(1), display: "flex", flexDirection: "column", gap: 3 }}>
                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
-                          <span style={{ color: t.colors.textMuted }}>Ann yield</span>
-                          <span style={{ fontWeight: 700, color: t.colors.success }}>{row.annYieldPct.toFixed(1)}%</span>
+                          <span style={{ color: t.colors.textMuted }}>{outcomePositionSide === "buy" ? "Ann. debit %" : "Ann. yield"}</span>
+                          <span style={{ fontWeight: 700, color: outcomePositionSide === "buy" ? t.colors.text : t.colors.success }}>
+                            {row.annYieldPct.toFixed(1)}%
+                          </span>
                         </div>
                         {ratio != null && (
                           <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
                             <span style={{ color: t.colors.textMuted }}>IV/RV</span>
-                            <span style={{ fontWeight: 700, color: ratio >= 1.0 ? t.colors.success : t.colors.danger }}>
+                            <span style={{ fontWeight: 700, color: (() => {
+                              if (outcomePositionSide === "buy") {
+                                return ratio < 1.0 ? t.colors.success : ratio >= 1.15 ? t.colors.danger : t.colors.textMuted;
+                              }
+                              return ratio >= 1.0 ? t.colors.success : ratio < 0.85 ? t.colors.danger : t.colors.textMuted;
+                            })() }}>
                               {ratio.toFixed(2)}×
                             </span>
                           </div>
@@ -1113,7 +1124,9 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                         <th style={thNumStyle}>
                           <HelpTooltip
                             theme={t}
-                            text="Probability of the option finishing in-the-money (being assigned on a short, or expiring worthless on a long). Derived from delta. Lower = safer for premium sellers."
+                            text={outcomePositionSide === "buy"
+                              ? "Probability of the option finishing in-the-money (expiring with value). Derived from delta. Higher = more likely to profit for long buyers. Green ≥30%, red ≤15%."
+                              : "Probability of the option finishing in-the-money (being assigned on a short). Derived from delta. Lower = safer for premium sellers. Green ≤15%, red >30%."}
                           >
                             <span style={{ cursor: "help" }}>Δ Prob</span>
                           </HelpTooltip>
@@ -1121,7 +1134,9 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                         <th style={thNumStyle}>
                           <HelpTooltip
                             theme={t}
-                            text="IV: Schwab implied volatility on the contract. The IV/RV ratio below it is the 'free lunch' signal — when IV/RV > 1.0 the market is paying you more premium than the stock is actually moving. Higher is better for premium sellers."
+                            text={outcomePositionSide === "buy"
+                              ? "IV: Schwab implied volatility on the contract. The IV/RV ratio below it shows option cheapness — when IV/RV < 1.0 you are paying less than the stock's actual movement, a favorable signal for buyers. Green = cheap (ratio < 1), red = expensive."
+                              : "IV: Schwab implied volatility on the contract. The IV/RV ratio below it is the 'free lunch' signal — when IV/RV > 1.0 the market is paying you more premium than the stock is actually moving. Green = rich (ratio ≥ 1), red = cheap."}
                           >
                             <span style={{ cursor: "help" }}>IV / RV ratio</span>
                           </HelpTooltip>
@@ -1201,11 +1216,11 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                                 ...tdNumStyle,
                                 color: r.delta == null
                                   ? t.colors.textMuted
-                                  : r.delta <= 0.15
-                                    ? t.colors.success
-                                    : r.delta <= 0.30
-                                      ? t.colors.text
-                                      : t.colors.danger,
+                                  : outcomePositionSide === "buy"
+                                    // For buyers: higher delta = more likely to profit
+                                    ? r.delta >= 0.30 ? t.colors.success : r.delta >= 0.15 ? t.colors.text : t.colors.danger
+                                    // For writers: lower delta = safer (less assignment risk)
+                                    : r.delta <= 0.15 ? t.colors.success : r.delta <= 0.30 ? t.colors.text : t.colors.danger,
                               }}>
                                 {r.delta == null ? "—" : `${(r.delta * 100).toFixed(0)}%`}
                               </td>

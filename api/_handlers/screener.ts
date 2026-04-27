@@ -834,9 +834,10 @@ export async function handler(req: any, res: any): Promise<void> {
       const mid = ask > 0 && bid > 0 ? (ask + bid) / 2 : optionPrice;
       const spreadPct = mid > 0 ? spread / mid : 1;
 
-      // Adaptive thresholds: farther-OTM options naturally have wider spreads and lower OI.
-      // Applying the same cutoff as near-ATM options leaves deep-OTM tables nearly empty.
-      const otmTierAdj = Math.max(0, (spec.otmPct - 5) / 5) * 0.04; // +4pp per extra 5% OTM tier
+      // Adaptive thresholds: farther-OTM options have low absolute prices where even a $0.10
+      // spread on a $0.25 option is 40%. Apply tiered (not linear) allowances so 15-20% OTM
+      // tables aren't starved of candidates.
+      const otmTierAdj = spec.otmPct <= 5 ? 0 : spec.otmPct <= 10 ? 0.10 : spec.otmPct <= 15 ? 0.22 : 0.38;
       const maxSpreadPct = (isBuyToOpen ? 0.32 : 0.25) + otmTierAdj;
       if (spreadPct > maxSpreadPct) {
         liquidityFiltered.spread++;
@@ -978,9 +979,8 @@ export async function handler(req: any, res: any): Promise<void> {
       arr.sort((a, b) =>
         b.score !== a.score
           ? b.score - a.score
-          : isBuyToOpen
-            ? a.annYieldPct - b.annYieldPct
-            : b.annYieldPct - a.annYieldPct
+          // Tie on score: for writes prefer higher yield; for buys prefer less negative (cheaper) debit
+          : b.annYieldPct - a.annYieldPct
       );
       arr.slice(0, topN).forEach((r, idx) => (r.rank = idx + 1));
       resultsByOtmPct[otmPct] = arr.slice(0, topN);
