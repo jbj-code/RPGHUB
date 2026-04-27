@@ -156,6 +156,7 @@ export function NavBar({
       icon: "rocket_launch",
       externalUrl: "https://lookerstudio.google.com/s/vnU0N-aINPg",
     },
+    { page: "schwab", label: "Schwab Explorer", icon: "api" },
     { page: "agent", label: "Agent", icon: "smart_toy" },
     { page: "website", label: "Website", icon: "language" },
   ];

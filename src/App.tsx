@@ -15,6 +15,7 @@ import {
   Website,
   Extractor,
   Agent,
+  Schwab,
 } from "./pages";
 import { OptionsPricing } from "./pages/OptionsPricing";
 
@@ -30,7 +31,8 @@ export type Page =
   | "assignment-check"
   | "website"
   | "extractor"
-  | "agent";
+  | "agent"
+  | "schwab";
 
 function App() {
   const [unlocked, setUnlocked] = useState(false);
@@ -93,6 +95,8 @@ function App() {
           <OptionsOpportunities theme={t} sidebarWidth={sidebarWidth} />
         ) : page === "agent" ? (
           <Agent theme={t} />
+        ) : page === "schwab" ? (
+          <Schwab theme={t} sidebarWidth={sidebarWidth} />
         ) : page === "website" ? (
           <Website theme={t} />
         ) : (

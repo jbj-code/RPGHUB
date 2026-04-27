@@ -40,8 +40,6 @@ type RankedOption = {
   delta?: number | null;
   /** Theta: dollars of time decay per contract per day (positive = earned for writes). */
   thetaPerDay?: number | null;
-  /** Sector from Schwab fundamentals. Null for ETFs or when not returned. */
-  sector?: string | null;
   schwabSymbol: string;
   occSymbol: string;
 };
@@ -987,14 +985,9 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                         {row.ticker}
                       </div>
 
-                      {/* Company + sector */}
+                      {/* Company */}
                       <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, lineHeight: 1.3, overflow: "hidden" }}>
                         <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.company}</div>
-                        {row.sector && (
-                          <span style={{ display: "block", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {row.sector}
-                          </span>
-                        )}
                       </div>
 
                       {/* Key stats */}
@@ -1175,20 +1168,6 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                                 <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                   {r.company}
                                 </div>
-                                {r.sector && (
-                                  <span style={{
-                                    display: "block",
-                                    fontSize: "0.7rem",
-                                    color: t.colors.textMuted,
-                                    fontWeight: 400,
-                                    marginTop: 1,
-                                    overflow: "hidden",
-                                    textOverflow: "ellipsis",
-                                    whiteSpace: "nowrap",
-                                  }}>
-                                    {r.sector}
-                                  </span>
-                                )}
                               </td>
                               <td
                                 style={{

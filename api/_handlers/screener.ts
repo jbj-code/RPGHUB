@@ -1,7 +1,8 @@
 // Options Opportunity Screener
 // Uses a hardcoded broad US equity universe (no external CSV) plus Schwab's live
 // movers endpoint to capture high-volatility candidates. Sorts by market cap
-// (largest/most-liquid first), fetches chains for the top underlyings, and ranks by annualised yield.
+// (largest/most-liquid first, via /instruments?projection=fundamental), fetches chains
+// for the top underlyings, and ranks by annualised yield.
 
 import { createClient } from "@supabase/supabase-js";
 import { toOCCSymbol, getValidAccessToken } from "../_schwab-utils.js";
@@ -176,8 +177,6 @@ type RankedOption = {
   delta: number | null;
   /** Theta from option quote: dollars of time-decay earned (write) or lost (buy) per calendar day per contract. */
   thetaPerDay: number | null;
-  /** Sector from Schwab fundamentals (e.g. "Technology"). Null for ETFs or when not returned. */
-  sector: string | null;
   /** Internal composite score used for ranking (higher is better). */
   score: number;
   schwabSymbol: string;
@@ -197,18 +196,6 @@ type OptionQuoteLite = {
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));
-}
-
-function toEpochMs(v: unknown): number | null {
-  if (typeof v === "number" && Number.isFinite(v)) {
-    // Some feeds return epoch seconds for date-ish values.
-    return v > 1e12 ? v : v > 1e9 ? v * 1000 : null;
-  }
-  if (typeof v === "string") {
-    const d = new Date(v);
-    if (!Number.isNaN(d.getTime())) return d.getTime();
-  }
-  return null;
 }
 
 function toExpiryYYYYMMDD(expKey: string): string {
@@ -324,6 +311,49 @@ function formatSchwabSymbol(args: {
   return `${args.ticker} ${mm}/${dd}/${yyyy} ${strike} ${t}`;
 }
 
+/**
+ * Fetch market cap for each ticker via /instruments?projection=fundamental.
+ * FundamentalInst.marketCap is in millions of dollars; we normalise to full dollars.
+ * NOTE: Verify the unit using the Schwab Explorer (/marketdata/v1/instruments?symbol=AAPL&projection=fundamental).
+ * If Schwab returns full dollars, remove the ×1_000_000 multiplier below.
+ */
+async function fetchMarketCapsBatched(
+  tickers: string[],
+  accessToken: string,
+): Promise<Record<string, number | null>> {
+  const caps: Record<string, number | null> = {};
+  const BATCH = 10;
+  for (let i = 0; i < tickers.length; i += BATCH) {
+    await Promise.allSettled(
+      tickers.slice(i, i + BATCH).map(async (ticker) => {
+        try {
+          const url =
+            `https://api.schwabapi.com/marketdata/v1/instruments?` +
+            new URLSearchParams({ symbol: ticker, projection: "fundamental" }).toString();
+          const resp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+          if (!resp.ok) return;
+          const body: any = await resp.json();
+          const instruments = Array.isArray(body) ? body : [body];
+          const inst =
+            instruments.find(
+              (x: any) =>
+                typeof x?.symbol === "string" &&
+                x.symbol.toUpperCase() === ticker.toUpperCase(),
+            ) ?? instruments[0];
+          const mc = inst?.fundamental?.marketCap;
+          caps[ticker] =
+            typeof mc === "number" && Number.isFinite(mc) && mc > 0
+              ? mc * 1_000_000
+              : null;
+        } catch {
+          caps[ticker] = null;
+        }
+      }),
+    );
+  }
+  return caps;
+}
+
 export async function handler(req: any, res: any): Promise<void> {
   const body = req.body ?? {};
 
@@ -359,7 +389,6 @@ export async function handler(req: any, res: any): Promise<void> {
   const topN = Math.min(Math.max(1, Number(body.topN) || 5), 20);
   const strikeTolerancePct = Number(body.strikeTolerancePct) || 1.25;
   const minMarketCap = body.minMarketCap != null ? Number(body.minMarketCap) : null;
-  const includeEarnings = Boolean(body.includeEarnings ?? false);
   // Internal cap prevents Schwab rate-limit (HTTP 429) and Vercel timeouts.
   // Not exposed to the UI — we always scan the broadest set we can safely handle.
   const MAX_UNDERLYINGS = 150;
@@ -439,49 +468,20 @@ export async function handler(req: any, res: any): Promise<void> {
     const fromStr = expiration;
     const toStr = expiration;
 
-    // 2) Equity quotes: current price, market cap, company description
+    // 2) Equity quotes: current price + company description
     const quotesBody: any = await fetchEquityQuotesBatched(tickers, accessToken);
 
     const currentPriceByTicker: Record<string, number> = {};
-    const marketCapByTicker: Record<string, number | null> = {};
-    const earningsDateMsByTicker: Record<string, number | null> = {};
-    const sectorByTicker: Record<string, string | null> = {};
 
     for (const sym of tickers) {
       const q = quotesBody[sym] ?? quotesBody[sym.replace(/\s+/g, "")];
       const src = q?.quote ?? q;
       const p =
-        src?.regularMarketLast ??
         src?.lastPrice ??
         src?.last ??
         src?.close ??
         src?.regularMarketPrice;
       currentPriceByTicker[sym] = typeof p === "number" && p > 0 ? p : 0;
-
-      // Schwab returns fundamentals at the top-level symbol key (q.fundamental),
-      // not inside the nested quote object (src), so we check both paths.
-      const fund: any = q?.fundamental ?? src?.fundamental;
-      const mcCandidate =
-        (typeof fund?.marketCap === "number" ? fund.marketCap : null) ??
-        (typeof fund?.market_cap === "number" ? fund.market_cap : null) ??
-        (typeof src?.marketCap === "number" ? src.marketCap : null) ??
-        (typeof src?.market_cap === "number" ? src.market_cap : null);
-      marketCapByTicker[sym] =
-        typeof mcCandidate === "number" && Number.isFinite(mcCandidate) ? mcCandidate : null;
-
-      const earningsCandidate =
-        fund?.nextEarningsDate ??
-        fund?.nextEarningDate ??
-        src?.nextEarningsDate ??
-        src?.nextEarningDate ??
-        null;
-      earningsDateMsByTicker[sym] = toEpochMs(earningsCandidate);
-
-      const sectorCandidate = fund?.sector ?? fund?.industry ?? src?.sector ?? null;
-      sectorByTicker[sym] =
-        typeof sectorCandidate === "string" && sectorCandidate.length > 0
-          ? sectorCandidate
-          : null;
 
       // Extract company name from Schwab quote description (prefer mover name if already set)
       if (!companyBySymbol[sym]) {
@@ -489,10 +489,16 @@ export async function handler(req: any, res: any): Promise<void> {
           q?.reference?.description ??
           src?.description ??
           q?.description ??
-          src?.securityStatus ??
           null;
         companyBySymbol[sym] = typeof desc === "string" && desc.length > 0 ? desc : sym;
       }
+    }
+
+    // 2b) Market cap via /instruments?projection=fundamental (only when filter is active)
+    const marketCapByTicker: Record<string, number | null> = {};
+    if (minMarketCap != null && Number.isFinite(minMarketCap) && minMarketCap > 0) {
+      const caps = await fetchMarketCapsBatched(tickers, accessToken);
+      Object.assign(marketCapByTicker, caps);
     }
 
     if (clientUniverse && clientUniverse.length > 0) {
@@ -524,23 +530,6 @@ export async function handler(req: any, res: any): Promise<void> {
     // Safety cap to avoid Schwab rate-limits and Vercel timeouts
     if (effectiveTickers.length > MAX_UNDERLYINGS) {
       effectiveTickers = effectiveTickers.slice(0, MAX_UNDERLYINGS);
-    }
-
-    if (!includeEarnings) {
-      const startMs = today.getTime();
-      const endMs = expiryDate.getTime();
-      const before = effectiveTickers.length;
-      effectiveTickers = effectiveTickers.filter((t) => {
-        const ems = earningsDateMsByTicker[t];
-        if (ems == null) return true;
-        return !(ems >= startMs && ems <= endMs);
-      });
-      const removed = before - effectiveTickers.length;
-      if (removed > 0) {
-        warnings.push(
-          `Skipped ${removed} symbol${removed === 1 ? "" : "s"} with earnings before expiration.`
-        );
-      }
     }
 
     if (effectiveTickers.length === 0) {
@@ -738,6 +727,8 @@ export async function handler(req: any, res: any): Promise<void> {
             let impliedVolPctFromChain: number | null = null;
             if (Array.isArray(contractsRaw) && contractsRaw.length > 0) {
               const c0 = contractsRaw[0];
+              // Skip mini (10-share) and non-standard contracts to avoid 10× wrong premiums.
+              if (c0?.isMini === true || c0?.isNonStandard === true) continue;
               impliedVolPctFromChain =
                 c0 && typeof c0 === "object" ? impliedVolPercentFromQuote(c0) : null;
             }
@@ -934,7 +925,6 @@ export async function handler(req: any, res: any): Promise<void> {
           const perContract = th * 100;
           return round2(isBuyToOpen ? perContract : -perContract);
         })(),
-        sector: sectorByTicker[spec.ticker] ?? null,
         score: round2(score),
         schwabSymbol,
         occSymbol,

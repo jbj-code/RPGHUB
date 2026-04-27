@@ -129,7 +129,7 @@ export async function handler(req: any, res: any): Promise<void> {
         const bid = num(src.bidPrice) ?? num(src.bid);
         const ask = num(src.askPrice) ?? num(src.ask);
         const last = num(src.lastPrice) ?? num(src.last);
-        const mark = num(src.markPrice) ?? num(src.mark);
+        const mark = num(src.mark) ?? num(src.markPrice);
         const id = `${opt.underlying.toUpperCase()} ${opt.expiry} ${opt.strike} ${opt.type}`;
         results[id] = {
           symbol: (q.symbol as string) ?? occ,
