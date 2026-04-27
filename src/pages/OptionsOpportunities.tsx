@@ -477,11 +477,9 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
       try { json = await res.json(); } catch { /* non-JSON body */ }
 
       if (!res.ok) {
-        setScanError(
-          (typeof json.error === "string" && json.error) ||
-          (json.message != null ? String(json.message) : null) ||
-          `Scan failed (${res.status})`
-        );
+        const userMsg = typeof json.error === "string" && json.error ? json.error : `Scan failed (HTTP ${res.status})`;
+        const rawDetail = json.message != null ? String(json.message) : null;
+        setScanError(rawDetail ? `${userMsg} — ${rawDetail}` : userMsg);
         return;
       }
       setWarnings(json.warnings ?? []);

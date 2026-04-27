@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { lightTheme, darkTheme, type ThemeMode, type Theme } from "./theme";
 import { PAGE_LAYOUT } from "./theme";
 import { NavBar, SIDEBAR_WIDTH, SIDEBAR_WIDTH_COMPACT } from "./components/NavBar";
@@ -40,6 +40,7 @@ function App() {
   const [mode, setMode] = useState<ThemeMode>("light");
   const [sidebarCompact, setSidebarCompact] = useState(false);
   const [autoCollapseArmed, setAutoCollapseArmed] = useState(true);
+  const mainRef = useRef<HTMLElement | null>(null);
   const sidebarWidth = sidebarCompact ? SIDEBAR_WIDTH_COMPACT : SIDEBAR_WIDTH;
 
   useEffect(() => {
@@ -55,6 +56,14 @@ function App() {
   }, [autoCollapseArmed]);
 
   const t: Theme = mode === "light" ? lightTheme : darkTheme;
+
+  const handleNavigate = (nextPage: Page) => {
+    setPage(nextPage);
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: "auto" });
+      mainRef.current?.scrollTo({ top: 0, behavior: "auto" });
+    });
+  };
 
   if (!unlocked) {
     return <PasswordGate onUnlock={() => setUnlocked(true)} />;
@@ -86,7 +95,7 @@ function App() {
     <div className="app-layout" style={layoutStyle}>
       <NavBar
         page={page}
-        onNavigate={setPage}
+        onNavigate={handleNavigate}
         mode={mode}
         onToggleMode={() => setMode(mode === "light" ? "dark" : "light")}
         theme={t}
@@ -96,7 +105,7 @@ function App() {
           setSidebarCompact((c) => !c);
         }}
       />
-      <main className="app-main" style={mainStyle}>
+      <main ref={mainRef} className="app-main" style={mainStyle}>
         {page === "todos" ? (
           <Todos theme={t} sidebarWidth={sidebarWidth} />
         ) : page === "stock-comparison" ? (

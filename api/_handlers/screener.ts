@@ -140,16 +140,23 @@ async function fetchEquityQuotesBatched(
   const merged: Record<string, unknown> = {};
   for (let i = 0; i < symbols.length; i += QUOTE_BATCH) {
     const batch = symbols.slice(i, i + QUOTE_BATCH);
+    // Only request quote + reference — fundamental is not consumed here and bloats the payload.
     const url =
       "https://api.schwabapi.com/marketdata/v1/quotes?" +
-      new URLSearchParams({ symbols: batch.join(","), fields: "quote,fundamental,reference" }).toString();
-    const quotesResp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-    throwIfRateLimited(quotesResp, "equity_quotes");
-    if (!quotesResp.ok) {
-      const t = await quotesResp.text();
-      throw new Error(`SCHWAB_QUOTES_${quotesResp.status}:${t.slice(0, 240)}`);
+      new URLSearchParams({ symbols: batch.join(","), fields: "quote,reference" }).toString();
+    let quotesResp: Response | null = null;
+    // One retry for transient 5xx / gateway errors (Schwab occasionally hiccups).
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
+      quotesResp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+      throwIfRateLimited(quotesResp, "equity_quotes");
+      if (quotesResp.ok || quotesResp.status < 500) break; // only retry on 5xx
     }
-    const quotesBody = (await quotesResp.json()) as Record<string, unknown>;
+    if (!quotesResp!.ok) {
+      const t = await quotesResp!.text();
+      throw new Error(`SCHWAB_QUOTES_${quotesResp!.status}:${t.slice(0, 240)}`);
+    }
+    const quotesBody = (await quotesResp!.json()) as Record<string, unknown>;
     Object.assign(merged, quotesBody);
   }
   return merged;
