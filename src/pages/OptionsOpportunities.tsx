@@ -600,8 +600,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Key columns</p>
               <ul style={{ margin: 0, marginBottom: t.spacing(2), paddingLeft: t.spacing(5) }}>
                 <li><strong>Δ Prob</strong> — |delta| as proxy for probability ITM. Write: green ≤15% (safe), red &gt;30%. Buy: green ≥30% (likely to profit), red ≤15%.</li>
-                <li><strong>IV / RV ratio</strong> — implied vol vs 20-day realized vol. The core signal for both strategies.</li>
-                <li><strong>RV 20d</strong> — annualised realized vol from ~20 daily closes.</li>
+                <li><strong>IV / RV column</strong> — shows <em>IV / RV 20d</em> on one line (implied vol / annualised ~20-day realized vol), with the IV/RV ratio badge below. The ratio is the core signal for both strategies.</li>
                 <li><strong>Ann. yield / Ann. debit %</strong> — annualised credit (write) or debit (buy) as % of strike.</li>
                 <li><strong>Premium / Debit</strong> — dollars per contract (100 shares). Negative = debit for buys.</li>
                 <li><strong>Action</strong> — copies the Schwab-formatted order symbol to clipboard.</li>
@@ -1121,15 +1120,10 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                           <HelpTooltip
                             theme={t}
                             text={outcomePositionSide === "buy"
-                              ? "IV: Schwab implied volatility on the contract. The IV/RV ratio below it shows option cheapness — when IV/RV < 1.0 you are paying less than the stock's actual movement, a favorable signal for buyers. Green = cheap (ratio < 1), red = expensive."
-                              : "IV: Schwab implied volatility on the contract. The IV/RV ratio below it is the 'free lunch' signal — when IV/RV > 1.0 the market is paying you more premium than the stock is actually moving. Green = rich (ratio ≥ 1), red = cheap."}
+                              ? "IV / RV: Schwab implied vol / ~20-day realized vol. When IV/RV < 1.0 you are paying less than the stock's actual movement — favorable for buyers. Green = cheap (ratio < 1), red = expensive. RV 20d is the annualised realized vol shown next to IV."
+                              : "IV / RV: Schwab implied vol / ~20-day realized vol. The IV/RV ratio is the 'free lunch' signal — when IV/RV > 1.0 the market pays you more premium than the stock is actually moving. Green = rich (ratio ≥ 1), red = cheap. RV 20d is the annualised realized vol shown next to IV."}
                           >
                             <span style={{ cursor: "help" }}>IV / RV ratio</span>
-                          </HelpTooltip>
-                        </th>
-                        <th style={thNumStyle}>
-                          <HelpTooltip theme={t} text="Annualized ~20-day realized vol from daily closes on the underlying. Compare to IV: when IV > RV you are collecting premium above the stock's actual movement — the volatility risk premium.">
-                            <span style={{ cursor: "help" }}>RV 20d</span>
                           </HelpTooltip>
                         </th>
                         <th style={thNumStyle}>{tableQuotePrimary}</th>
@@ -1141,7 +1135,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                     <tbody>
                       {arr.length === 0 ? (
                         <tr>
-                          <td colSpan={13} style={{ ...tdStyle, color: t.colors.textMuted }}>
+                          <td colSpan={12} style={{ ...tdStyle, color: t.colors.textMuted }}>
                             No results for this OTM level
                           </td>
                         </tr>
@@ -1196,9 +1190,16 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                               }}>
                                 {r.delta == null ? "—" : `${(r.delta * 100).toFixed(0)}%`}
                               </td>
-                              {/* IV with IV/RV ratio free-lunch badge */}
+                              {/* IV / RV on one line + IV/RV ratio badge below */}
                               <td style={tdNumStyle}>
-                                {formatVolPct(r.impliedVolPct ?? null)}
+                                <span>
+                                  {formatVolPct(r.impliedVolPct ?? null)}
+                                  {r.realizedVol20dPct != null && (
+                                    <span style={{ color: t.colors.textMuted, fontWeight: 400 }}>
+                                      {" / "}{formatVolPct(r.realizedVol20dPct)}
+                                    </span>
+                                  )}
+                                </span>
                                 {r.impliedVolPct != null && r.realizedVol20dPct != null && r.realizedVol20dPct > 0 && (() => {
                                   const ratio = r.impliedVolPct / r.realizedVol20dPct;
                                   const isRich = outcomePositionSide === "write" ? ratio >= 1.0 : ratio < 1.0;
@@ -1214,7 +1215,6 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                                   );
                                 })()}
                               </td>
-                              <td style={{ ...tdNumStyle, color: t.colors.textMuted }}>{formatVolPct(r.realizedVol20dPct ?? null)}</td>
                               <td style={tdNumStyle}>
                                 {(() => {
                                   const bid = r.bid;

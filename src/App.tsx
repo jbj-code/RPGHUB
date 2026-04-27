@@ -39,11 +39,20 @@ function App() {
   const [page, setPage] = useState<Page>("home");
   const [mode, setMode] = useState<ThemeMode>("light");
   const [sidebarCompact, setSidebarCompact] = useState(false);
+  const [autoCollapseArmed, setAutoCollapseArmed] = useState(true);
   const sidebarWidth = sidebarCompact ? SIDEBAR_WIDTH_COMPACT : SIDEBAR_WIDTH;
 
   useEffect(() => {
     setUnlocked(getIsUnlocked());
   }, []);
+
+  // Auto-collapse the nav after 10 s so it's out of the way by default.
+  // Disarmed permanently the first time the user manually toggles.
+  useEffect(() => {
+    if (!autoCollapseArmed) return;
+    const timer = setTimeout(() => setSidebarCompact(true), 10_000);
+    return () => clearTimeout(timer);
+  }, [autoCollapseArmed]);
 
   const t: Theme = mode === "light" ? lightTheme : darkTheme;
 
@@ -82,7 +91,10 @@ function App() {
         onToggleMode={() => setMode(mode === "light" ? "dark" : "light")}
         theme={t}
         compact={sidebarCompact}
-        onToggleCompact={() => setSidebarCompact((c) => !c)}
+        onToggleCompact={() => {
+          setAutoCollapseArmed(false);
+          setSidebarCompact((c) => !c);
+        }}
       />
       <main className="app-main" style={mainStyle}>
         {page === "todos" ? (

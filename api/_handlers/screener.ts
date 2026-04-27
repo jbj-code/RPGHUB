@@ -885,6 +885,15 @@ export async function handler(req: any, res: any): Promise<void> {
         ? ((probITM * 100) / Math.max(annAbs, 0.05)) * liqScore
         : annAbs * Math.pow(1 - probITM, 1.35) * liqScore;
 
+      // Absolute IV level boost: higher raw IV = richer premium environment.
+      // 0.6% boost per percentage-point of IV above 20%; capped at 2.0× (hit around 150% IV).
+      // Separate from the IV/RV ratio multiplier — rewards names where the market is pricing
+      // in unusually high absolute movement, not just relative to recent realized vol.
+      const ivLevelMult =
+        ivPct != null && ivPct > 20
+          ? clamp(1 + 0.006 * (ivPct - 20), 1.0, 2.0)
+          : 1.0;
+
       // Gamma penalty for writers: high gamma means delta (assignment probability) can accelerate
       // rapidly as the stock moves toward the strike. Penalise high-gamma contracts up to 15%.
       const gammaPenalty = (() => {
@@ -894,7 +903,7 @@ export async function handler(req: any, res: any): Promise<void> {
         return clamp(1 - g * 5, 0.85, 1.0); // gentle penalty; gamma typically 0.01–0.05 at this strike range
       })();
 
-      const score = baseScore * volMult * gammaPenalty;
+      const score = baseScore * volMult * ivLevelMult * gammaPenalty;
       if (ivPct != null) rankedRowsWithIv++;
       else rankedRowsWithoutIv++;
 

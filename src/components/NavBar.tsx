@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { CSSProperties } from "react";
 import type { Theme, ThemeMode } from "../theme";
 import { assets } from "../theme";
@@ -27,6 +28,7 @@ export function NavBar({
   onToggleCompact,
 }: NavBarProps) {
   const width = compact ? SIDEBAR_WIDTH_COMPACT : SIDEBAR_WIDTH;
+  const [tooltip, setTooltip] = useState<{ label: string; top: number } | null>(null);
 
   const sidebarStyle: CSSProperties = {
     position: "fixed",
@@ -44,6 +46,7 @@ export function NavBar({
     overflowX: "hidden",
     overflowY: "hidden",
     transition: "width 0.25s ease, min-width 0.25s ease",
+    zIndex: 10000,
   };
 
   const headerStyle: CSSProperties = {
@@ -163,6 +166,29 @@ export function NavBar({
 
   return (
     <nav className="app-nav app-nav-sidebar" style={sidebarStyle} aria-label="Main navigation">
+      {/* Fast label tooltip shown in compact mode */}
+      {compact && tooltip && (
+        <div
+          style={{
+            position: "fixed",
+            left: SIDEBAR_WIDTH_COMPACT + 10,
+            top: tooltip.top,
+            transform: "translateY(-50%)",
+            backgroundColor: t.colors.text,
+            color: t.colors.surface,
+            fontSize: "0.78rem",
+            fontWeight: 500,
+            padding: "5px 11px",
+            borderRadius: 6,
+            whiteSpace: "nowrap",
+            pointerEvents: "none",
+            zIndex: 2147483647,
+            boxShadow: "0 2px 10px rgba(0,0,0,0.18)",
+          }}
+        >
+          {tooltip.label}
+        </div>
+      )}
       <div className="app-nav-header" style={headerStyle}>
         <button
           type="button"
@@ -202,7 +228,11 @@ export function NavBar({
               }
             }}
             style={linkStyle(page === p)}
-            title={compact ? label : undefined}
+            onMouseEnter={compact ? (e) => {
+              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              setTooltip({ label, top: rect.top + rect.height / 2 });
+            } : undefined}
+            onMouseLeave={compact ? () => setTooltip(null) : undefined}
           >
             <span className="material-symbols-outlined" style={linkIconStyle} aria-hidden>
               {icon}
@@ -223,6 +253,11 @@ export function NavBar({
           style={toggleStyle}
           onClick={onToggleCompact}
           aria-label={compact ? "Expand sidebar" : "Collapse sidebar"}
+          onMouseEnter={compact ? (e) => {
+            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            setTooltip({ label: "Expand", top: rect.top + rect.height / 2 });
+          } : undefined}
+          onMouseLeave={compact ? () => setTooltip(null) : undefined}
         >
           <span
             className="material-symbols-outlined"
@@ -247,6 +282,11 @@ export function NavBar({
           style={{ ...toggleStyle, marginTop: t.spacing(1) }}
           onClick={onToggleMode}
           aria-label={mode === "light" ? "Switch to dark mode" : "Switch to light mode"}
+          onMouseEnter={compact ? (e) => {
+            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            setTooltip({ label: mode === "light" ? "Dark mode" : "Light mode", top: rect.top + rect.height / 2 });
+          } : undefined}
+          onMouseLeave={compact ? () => setTooltip(null) : undefined}
         >
           <span className="material-symbols-outlined" style={linkIconStyle} aria-hidden>
             {mode === "light" ? "dark_mode" : "light_mode"}
