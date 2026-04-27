@@ -138,11 +138,6 @@ export function NavBar({
       icon: "search",
     },
     {
-      page: "options-roll",
-      label: "Options Roll",
-      icon: "auto_mode",
-    },
-    {
       page: "assignment-check",
       label: "Assignment Check",
       icon: "schedule",
@@ -231,7 +226,7 @@ export function NavBar({
           <span
             className="material-symbols-outlined"
             style={{
-              fontSize: 22,
+              ...linkIconStyle,
               transform: compact ? "scaleX(-1)" : "none",
             }}
             aria-hidden
@@ -252,7 +247,7 @@ export function NavBar({
           onClick={onToggleMode}
           aria-label={mode === "light" ? "Switch to dark mode" : "Switch to light mode"}
         >
-          <span className="material-symbols-outlined" style={{ fontSize: compact ? 22 : 22 }} aria-hidden>
+          <span className="material-symbols-outlined" style={linkIconStyle} aria-hidden>
             {mode === "light" ? "dark_mode" : "light_mode"}
           </span>
           <span

@@ -9,7 +9,6 @@ import {
   StockComparison,
   Todos,
   OptionsOpportunities,
-  OptionsRoll,
   Rankinator,
   RaiseAi,
   AssignmentCheck,
@@ -26,7 +25,6 @@ export type Page =
   | "options-pricing"
   | "todos"
   | "options-opportunities"
-  | "options-roll"
   | "rankinator"
   | "raise-ai"
   | "assignment-check"
@@ -101,7 +99,6 @@ function App() {
           <div className="app-main-inner" style={mainInnerStyle}>
             {page === "home" && <Home theme={t} />}
             {page === "options-pricing" && <OptionsPricing theme={t} />}
-            {page === "options-roll" && <OptionsRoll theme={t} />}
             {page === "rankinator" && <Rankinator theme={t} />}
             {page === "raise-ai" && <RaiseAi theme={t} />}
             {page === "assignment-check" && <AssignmentCheck theme={t} />}

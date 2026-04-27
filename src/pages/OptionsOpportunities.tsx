@@ -593,8 +593,9 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                 <strong>Buy:</strong> <code style={{ fontSize: "0.8rem", background: "rgba(0,0,0,0.06)", padding: "2px 5px", borderRadius: 4 }}>(Prob × 100 ÷ AnnDebit) × Liq × RV/IV mult</code>
               </p>
               <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
-                <li><strong>LiqScore</strong> — blend of spread tightness (50%), open interest (25%), volume (15%), vol/OI ratio (10%).</li>
-                <li><strong>IV/RV multiplier</strong> — ±40% boost/penalty based on vol richness vs cheapness.</li>
+                <li><strong>LiqScore</strong> — spread tightness (50%), open interest (25%), volume (15%), vol/OI activity ratio (10%). Spread matters because wide markets cost money on entry and exit.</li>
+                <li><strong>IV/RV multiplier (write)</strong> — asymmetric: up to +50% boost when IV rich vs RV; steeper penalty (up to −55%) when IV cheap vs RV. Selling cheap premium is penalised harder than the reward for rich premium.</li>
+                <li><strong>IV/RV multiplier (buy)</strong> — symmetric ±40%: boost when options are cheap vs realized moves.</li>
                 <li><strong>Gamma penalty</strong> (write only) — mild discount for high-gamma contracts near the strike.</li>
               </ul>
 
@@ -1021,14 +1022,6 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                           <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
                             <span style={{ color: t.colors.textMuted }}>Δ Prob</span>
                             <span style={{ fontWeight: 600, color: t.colors.text }}>{(row.delta * 100).toFixed(0)}%</span>
-                          </div>
-                        )}
-                        {row.thetaPerDay != null && (
-                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
-                            <span style={{ color: t.colors.textMuted }}>θ / day</span>
-                            <span style={{ fontWeight: 600, color: row.thetaPerDay > 0 ? t.colors.success : t.colors.text }}>
-                              {row.thetaPerDay > 0 ? "+" : ""}${Math.abs(row.thetaPerDay).toFixed(2)}
-                            </span>
                           </div>
                         )}
                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
