@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense } from "react";
+import { useState, useEffect } from "react";
 import { lightTheme, darkTheme, type ThemeMode, type Theme } from "./theme";
 import { PAGE_LAYOUT } from "./theme";
 import { NavBar, SIDEBAR_WIDTH, SIDEBAR_WIDTH_COMPACT } from "./components/NavBar";
@@ -19,10 +19,6 @@ import {
 } from "./pages";
 import { OptionsPricing } from "./pages/OptionsPricing";
 
-const EmailCrm = lazy(() =>
-  import("./pages/EmailCrm").then((m) => ({ default: m.EmailCrm }))
-);
-
 export type Page =
   | "home"
   | "put-optimizer"
@@ -33,7 +29,6 @@ export type Page =
   | "options-roll"
   | "rankinator"
   | "raise-ai"
-  | "email-crm"
   | "assignment-check"
   | "website"
   | "extractor"
@@ -111,17 +106,6 @@ function App() {
             {page === "raise-ai" && <RaiseAi theme={t} />}
             {page === "assignment-check" && <AssignmentCheck theme={t} />}
             {page === "extractor" && <Extractor theme={t} />}
-            {page === "email-crm" && (
-              <Suspense
-                fallback={
-                  <p style={{ color: t.colors.textMuted, padding: t.spacing(4) }}>
-                    Loading Email CRM…
-                  </p>
-                }
-              >
-                <EmailCrm theme={t} />
-              </Suspense>
-            )}
           </div>
         )}
       </main>

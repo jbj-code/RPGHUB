@@ -6,7 +6,6 @@ export { OptionsOpportunities } from "./OptionsOpportunities";
 export { OptionsRoll } from "./OptionsRoll";
 export { Rankinator } from "./Rankinator";
 export { RaiseAi } from "./RaiseAi";
-export { EmailCrm } from "./EmailCrm";
 export { AssignmentCheck } from "./AssignmentCheck";
 export { Website } from "./Website";
 export { Extractor } from "./Extractor";

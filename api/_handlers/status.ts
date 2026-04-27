@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { getValidAccessToken } from "../_schwab-utils";
 
 export async function handler(req: any, res: any): Promise<void> {
   try {
@@ -22,52 +23,7 @@ export async function handler(req: any, res: any): Promise<void> {
       return;
     }
 
-    const clientId = process.env.SCHWAB_CLIENT_ID;
-    const clientSecret = process.env.SCHWAB_CLIENT_SECRET;
-
-    async function tryRefresh(refreshToken: string): Promise<string | null> {
-      if (!clientId || !clientSecret) return null;
-      const authHeader = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-      const refreshBody = new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: refreshToken,
-      });
-      const refreshResp = await fetch("https://api.schwabapi.com/v1/oauth/token", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Authorization: `Basic ${authHeader}`,
-        },
-        body: refreshBody,
-      });
-      if (!refreshResp.ok) return null;
-      const refreshJson: any = await refreshResp.json();
-      const expiresInSec =
-        typeof refreshJson.expires_in === "number" ? refreshJson.expires_in : 1800;
-      const newExpiresAt = new Date(Date.now() + expiresInSec * 1000).toISOString();
-      await supabase
-        .from("schwab_tokens")
-        .update({
-          access_token: refreshJson.access_token,
-          expires_at: newExpiresAt,
-          ...(refreshJson.refresh_token != null && {
-            refresh_token: refreshJson.refresh_token,
-          }),
-        })
-        .eq("id", "default");
-      return refreshJson.access_token ?? null;
-    }
-
-    let accessToken = tokenRow.access_token as string | null;
-    const expiresAt =
-      tokenRow.expires_at != null ? new Date(tokenRow.expires_at).getTime() : null;
-    const bufferMs = 5 * 60 * 1000;
-    const expired = expiresAt != null && Date.now() >= expiresAt - bufferMs;
-
-    if ((!accessToken || expired) && tokenRow.refresh_token) {
-      accessToken = await tryRefresh(tokenRow.refresh_token);
-    }
-
+    const accessToken = await getValidAccessToken(supabase, tokenRow);
     if (!accessToken) {
       res.status(200).json({ connected: false, expired: true, hasRefresh: hasRefresh || undefined });
       return;
@@ -79,23 +35,12 @@ export async function handler(req: any, res: any): Promise<void> {
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
 
-    if (probeResp.status === 401 && tokenRow.refresh_token) {
-      const refreshed = await tryRefresh(tokenRow.refresh_token);
-      if (!refreshed) {
-        res.status(200).json({ connected: false, expired: true, hasRefresh: true });
-        return;
-      }
-      const secondProbe = await fetch(
-        "https://api.schwabapi.com/marketdata/v1/quotes?" +
-          new URLSearchParams({ symbols: "SPY" }).toString(),
-        { headers: { Authorization: `Bearer ${refreshed}` } }
-      );
-      if (!secondProbe.ok) {
-        res.status(200).json({ connected: false, expired: true, hasRefresh: true });
-        return;
-      }
-    } else if (!probeResp.ok) {
-      res.status(200).json({ connected: false, expired: true, hasRefresh: hasRefresh || undefined });
+    if (!probeResp.ok) {
+      res.status(200).json({
+        connected: false,
+        expired: probeResp.status === 401,
+        hasRefresh: hasRefresh || undefined,
+      });
       return;
     }
 

@@ -38,6 +38,8 @@ type RankedOption = {
   realizedVol20dPct?: number | null;
   /** |delta| from option quote — probability of finishing ITM / being assigned. */
   delta?: number | null;
+  /** Theta: dollars of time decay per contract per day (positive = earned for writes). */
+  thetaPerDay?: number | null;
   /** Sector from Schwab fundamentals. Null for ETFs or when not returned. */
   sector?: string | null;
   schwabSymbol: string;
@@ -55,6 +57,21 @@ type ScreenerResponse = {
 };
 
 const OTM_LEVELS = [5, 10, 15, 20] as const;
+
+const MONTH_OPTIONS: DropdownOption[] = [
+  { value: "01", label: "January" },
+  { value: "02", label: "February" },
+  { value: "03", label: "March" },
+  { value: "04", label: "April" },
+  { value: "05", label: "May" },
+  { value: "06", label: "June" },
+  { value: "07", label: "July" },
+  { value: "08", label: "August" },
+  { value: "09", label: "September" },
+  { value: "10", label: "October" },
+  { value: "11", label: "November" },
+  { value: "12", label: "December" },
+];
 
 function formatMoney(n: number): string {
   const abs = Math.abs(n);
@@ -89,11 +106,24 @@ function toISODateUTC(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+// NYSE is closed on Good Friday. When Good Friday falls on the 3rd Friday of a month,
+// the standard monthly option expiration shifts to that Thursday instead.
+const HOLIDAY_FRIDAYS = new Set([
+  "2025-04-18", // Good Friday 2025 → April expiry shifts to Apr 17
+  "2030-04-19", // Good Friday 2030 → April expiry shifts to Apr 18
+]);
+
 function getThirdFridayUTC(year: number, monthIndex0: number): Date {
   const first = new Date(Date.UTC(year, monthIndex0, 1));
   const day = first.getUTCDay();
   const offset = (5 - day + 7) % 7;
-  return new Date(Date.UTC(year, monthIndex0, 1 + offset + 14));
+  const thirdFriday = new Date(Date.UTC(year, monthIndex0, 1 + offset + 14));
+  // Shift to Thursday if the 3rd Friday is a market holiday
+  const iso = toISODateUTC(thirdFriday);
+  if (HOLIDAY_FRIDAYS.has(iso)) {
+    return new Date(thirdFriday.getTime() - 24 * 60 * 60 * 1000);
+  }
+  return thirdFriday;
 }
 
 function getMonthlyThirdFridayExpirations(maxMonthsAhead: number): { value: string; label: string }[] {
@@ -126,8 +156,9 @@ function ExpirationDropdown(props: {
   openId: string | null;
   setOpenId: (id: string | null) => void;
   dropdownKey: string;
+  dropdownMaxHeight?: number;
 }) {
-  const { theme: t, value, options, onChange, openId, setOpenId, dropdownKey } = props;
+  const { theme: t, value, options, onChange, openId, setOpenId, dropdownKey, dropdownMaxHeight } = props;
   const open = openId === dropdownKey;
   const display =
     options.find((o) => o.value === value)?.label ?? (value ? value : "— Select Expiration —");
@@ -154,7 +185,11 @@ function ExpirationDropdown(props: {
             style={{ position: "fixed", inset: 0, zIndex: 4998 }}
             onClick={() => setOpenId(null)}
           />
-          <div style={{ ...getDropdownPanelStyle(t, "down"), zIndex: 20000 }}>
+          <div style={{
+            ...getDropdownPanelStyle(t, "down"),
+            zIndex: 20000,
+            ...(dropdownMaxHeight != null ? { maxHeight: dropdownMaxHeight, overflowY: "auto" } : {}),
+          }}>
             {options.map((o) => (
               <button
                 key={o.value}
@@ -363,6 +398,10 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
   const [outcomePositionSide, setOutcomePositionSide] = useState<PositionSide>("write");
   const [showInfoModal, setShowInfoModal] = useState(false);
   const [bucketId, setBucketId] = useState<string>(OPPORTUNITY_BUCKETS[0]!.id);
+  // Year input state for the Month/Year expiration picker (non-monthly mode)
+  const [expYearInput, setExpYearInput] = useState<string>(
+    () => expirations[0]?.value?.slice(0, 4) ?? String(new Date().getFullYear())
+  );
 
   const activeBucket: OpportunityBucket = useMemo(
     () => OPPORTUNITY_BUCKETS.find((b) => b.id === bucketId) ?? OPPORTUNITY_BUCKETS[0]!,
@@ -531,47 +570,38 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
             </div>
             <div style={{ color: t.colors.text, fontSize: "0.88rem", lineHeight: 1.75 }}>
 
-              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>What this page does</p>
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>What this does</p>
               <p style={{ marginBottom: t.spacing(3) }}>
-                Options Opportunities scans a broad universe of US equities (S&P 500, NASDAQ 100, major ETFs, and live Schwab movers) at four standard OTM levels: <strong>5%, 10%, 15%, and 20%</strong>. It supports both <strong>sell to open</strong> and <strong>buy to open</strong> workflows and ranks opportunities using a composite risk-adjusted score (not premium alone).
+                Scans ~700 US equities, ETFs, and live Schwab movers at <strong>5%, 10%, 15%, and 20% OTM</strong> to surface the best risk-adjusted options opportunities. Each ticker appears in exactly one OTM bucket — the level where it scores best. Results are ready to trade: click the copy icon to grab the Schwab-formatted order symbol.
               </p>
 
-              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>How the scan works</p>
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>The "free lunch" concept</p>
+              <p style={{ marginBottom: t.spacing(3) }}>
+                When <strong>IV &gt; RV</strong> (implied volatility exceeds realized volatility), the options market is paying you more premium than the stock is actually moving. This gap — the <em>volatility risk premium</em> — is the edge for premium sellers. The <strong>IV/RV ratio</strong> column shows this directly: green = rich premium, red = cheap premium. The ★ Best IV/RV badge in the Top Picks card highlights the single highest-ratio opportunity across all OTM levels.
+              </p>
+
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Ranking formula (sell to open)</p>
+              <p style={{ marginBottom: t.spacing(1) }}>
+                <code style={{ fontSize: "0.8rem", background: "rgba(0,0,0,0.06)", padding: "2px 5px", borderRadius: 4 }}>
+                  Score = AnnYield × (1 − Prob ITM)^1.35 × LiqScore × IV/RV mult × Gamma penalty
+                </code>
+              </p>
               <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
-                <li><strong>Universe</strong> — default scan uses ~660 hardcoded tickers (S&P 500, NASDAQ 100, major ETFs) plus live Schwab top movers. You can narrow to a <strong>bucket</strong> from the right panel (e.g. Climate / Energy transition); buckets do not add movers.</li>
-                <li><strong>Market cap filter</strong> — symbols are sorted by market cap (largest first) so the most liquid names are scanned first. You can set a minimum market cap to exclude smaller, less-liquid stocks.</li>
-                <li><strong>Option chain fetch</strong> — for each symbol, we pull the option chain for your chosen expiration and locate the strike closest to each OTM % target (5/10/15/20% away from the current price).</li>
-                <li><strong>Quote used</strong> — <strong>Bid</strong> for sell to open, <strong>ask</strong> for buy to open (natural limit side for each).</li>
-                <li><strong>Risk filters</strong> — contracts with very wide bid/ask spread or very low open interest are excluded before ranking.</li>
-                <li><strong>Earnings window</strong> — by default, symbols with earnings before expiration are skipped to reduce event risk.</li>
+                <li><strong>AnnYield</strong> — (bid ÷ strike) × (365 ÷ DTE): annualised return on capital at risk.</li>
+                <li><strong>(1 − Prob ITM)^1.35</strong> — safety penalty; farther-OTM strikes (lower delta) score better.</li>
+                <li><strong>LiqScore</strong> — blend of spread tightness (50%), open interest (25%), daily volume (15%), and volume/OI activity ratio (10%).</li>
+                <li><strong>IV/RV multiplier</strong> — up to ±40% boost/penalty based on how rich or cheap the implied vol is vs recent realised moves.</li>
+                <li><strong>Gamma penalty</strong> — mild discount for high-gamma contracts where assignment risk can accelerate rapidly.</li>
               </ul>
 
-              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>How ranking works</p>
-              <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
-                <li><strong>Base metric</strong> — <em>(option price ÷ strike) × (365 ÷ DTE)</em> (annualized). This normalizes premium/debit across expirations.</li>
-                <li><strong>1M Performance</strong> — ~1-month price return: baseline close from daily history vs current equity quote at scan time. Useful context when deciding if a stock's recent momentum aligns with selling puts (bullish) or calls (bearish).</li>
-                <li><strong>Composite score</strong> — combines annualized return/debit, estimated ITM probability (delta proxy), liquidity quality (spread, open interest, volume), and an <strong>IV vs 20-day realized vol</strong> tilt when Schwab returns implied vol (richer IV vs RV helps sells; relatively cheaper IV vs RV helps long premium buys).</li>
-                <li>Within each OTM bucket, both modes rank by this score: sell mode favors high return with lower assignment risk; buy mode favors better probability-per-debit with tighter markets.</li>
-              </ul>
-
-              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Scan parameters</p>
-              <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
-                <li><strong>Option Type</strong> — Puts or calls (OTM strikes only).</li>
-                <li><strong>Position</strong> — <em>Write (sell to open)</em> uses bid and optimizes for risk-adjusted premium; <em>Buy (long)</em> uses ask and optimizes for probability-per-debit with liquidity constraints.</li>
-                <li><strong>Expiration</strong> — the target expiry date. Monthly expirations (3rd Friday) tend to have the best liquidity.</li>
-                <li><strong>Monthly Only</strong> — filters the expiry dropdown to standard monthly expirations only.</li>
-                <li><strong>Min Market Cap</strong> — exclude micro/small caps with potentially wide bid/ask spreads. Default $500M.</li>
-              </ul>
-
-              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Table columns</p>
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Key columns</p>
               <ul style={{ margin: 0, marginBottom: t.spacing(2), paddingLeft: t.spacing(5) }}>
-                <li><strong>Company</strong> — ticker and company name from Schwab.</li>
-                <li><strong>1M Perf</strong> — ~1-month return (history start anchor vs live quote at scan time).</li>
-                <li><strong>Strike</strong> — the option strike closest to the target OTM %.</li>
-                <li><strong>IV / RV 20d</strong> — Schwab implied vol (when present) vs ~20 trading-day annualized realized vol on the underlying from daily closes.</li>
-                <li><strong>Bid / Ask</strong> — primary column matches your position (bid for selling, ask for buying); secondary line shows the other quote.</li>
-                <li><strong>Ann. yield / Ann. debit %</strong> — annualized option price ÷ strike × (365÷DTE); sell mode maximizes it, buy mode minimizes it.</li>
-                <li><strong>Premium / Debit</strong> — dollars per contract (×100 shares); debits show negative in the table copy helper.</li>
+                <li><strong>Δ Prob</strong> — probability of assignment (|delta|). Green ≤15%, red &gt;30%.</li>
+                <li><strong>IV / RV ratio</strong> — implied vol on the contract vs 20-day realised vol on the stock. The free-lunch signal.</li>
+                <li><strong>RV 20d</strong> — annualised realised vol from ~20 daily closes (how much the stock actually moves).</li>
+                <li><strong>Ann. yield</strong> — annualised premium as % of strike. Use this to compare across different expirations.</li>
+                <li><strong>Premium</strong> — dollars collected per contract (100 shares).</li>
+                <li><strong>Action</strong> — copies the Schwab-formatted order symbol (e.g. "AAPL 08/15/2025 200 P") to clipboard.</li>
               </ul>
 
             </div>
@@ -702,13 +732,54 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                 dropdownKey="expiration"
               />
             ) : (
-              <input
-                type="date"
-                value={expiration}
-                onChange={(e) => setExpiration(e.target.value)}
-                style={inputStyle}
-                aria-label="Expiration date"
-              />
+              /* Month / Year picker — resolves to 3rd Friday, same as Options Optimizer */
+              <div style={{ display: "flex", gap: t.spacing(2), alignItems: "flex-end" }}>
+                <div style={{ flex: 1 }}>
+                  <span style={{ ...labelStyle, display: "block", marginBottom: t.spacing(1) }}>Month</span>
+                  <ExpirationDropdown
+                    theme={t}
+                    value={expiration.slice(5, 7) || "01"}
+                    options={MONTH_OPTIONS}
+                    onChange={(v) => {
+                      const y = expYearInput.length === 4 ? Number(expYearInput) : new Date().getFullYear();
+                      const thirdFri = getThirdFridayUTC(y, Number(v) - 1);
+                      setExpiration(toISODateUTC(thirdFri));
+                    }}
+                    openId={openId}
+                    setOpenId={setOpenId}
+                    dropdownKey="expMonth"
+                    dropdownMaxHeight={220}
+                  />
+                </div>
+                <div style={{ flex: "0 0 76px" }}>
+                  <span style={{ ...labelStyle, display: "block", marginBottom: t.spacing(1) }}>Year</span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={4}
+                    value={expYearInput}
+                    onChange={(e) => {
+                      const yr = e.target.value.replace(/\D/g, "").slice(0, 4);
+                      setExpYearInput(yr);
+                      if (yr.length === 4 && !isNaN(Number(yr))) {
+                        const m = Number(expiration.slice(5, 7) || "1") - 1;
+                        const thirdFri = getThirdFridayUTC(Number(yr), m);
+                        setExpiration(toISODateUTC(thirdFri));
+                      }
+                    }}
+                    placeholder={String(new Date().getFullYear())}
+                    style={{
+                      ...getDropdownTriggerStyle(t),
+                      width: 76,
+                      maxWidth: 76,
+                      display: "block",
+                      boxSizing: "border-box",
+                      fontFamily: t.typography.fontFamily,
+                    }}
+                    aria-label="Expiry year"
+                  />
+                </div>
+              </div>
             )}
             <label
               style={{
@@ -941,6 +1012,14 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                             <span style={{ fontWeight: 600, color: t.colors.text }}>{(row.delta * 100).toFixed(0)}%</span>
                           </div>
                         )}
+                        {row.thetaPerDay != null && (
+                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
+                            <span style={{ color: t.colors.textMuted }}>θ / day</span>
+                            <span style={{ fontWeight: 600, color: row.thetaPerDay > 0 ? t.colors.success : t.colors.text }}>
+                              {row.thetaPerDay > 0 ? "+" : ""}${Math.abs(row.thetaPerDay).toFixed(2)}
+                            </span>
+                          </div>
+                        )}
                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
                           <span style={{ color: t.colors.textMuted }}>Strike</span>
                           <span style={{ fontWeight: 600, color: t.colors.text }}>{formatStrikePrice(row.strike)}</span>
@@ -1055,7 +1134,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                         <th style={thNumStyle}>{tableQuotePrimary}</th>
                         <th style={thNumStyle}>{tableAnnLabel}</th>
                         <th style={thNumStyle}>{tablePremLabel}</th>
-                        <th style={{ ...thStyle, borderTopRightRadius: t.radius.md }}>Order Symbol</th>
+                        <th style={{ ...thStyle, textAlign: "center", borderTopRightRadius: t.radius.md }}>Action</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1181,59 +1260,50 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                                 {r.annYieldPct.toFixed(2)}%
                               </td>
                               <td style={tdNumStyle}>{formatPremium(r.premiumPerContract)}</td>
-                              <td style={{ ...tdStyle, textAlign: "left", minWidth: 170, maxWidth: 200 }}>
-                                {(() => {
-                                  const copied = lastCopiedOpportunityKey === copyKey;
-                                  return (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        void navigator.clipboard.writeText(r.schwabSymbol);
-                                        setLastCopiedOpportunityKey(copyKey);
-                                        window.setTimeout(
-                                          () => setLastCopiedOpportunityKey((prev) => prev === copyKey ? null : prev),
-                                          1200
-                                        );
-                                      }}
-                                      title={`Copy: ${r.schwabSymbol}`}
-                                      aria-label="Copy Schwab order symbol"
-                                      style={{
-                                        display: "inline-flex",
-                                        alignItems: "center",
-                                        justifyContent: "space-between",
-                                        gap: 4,
-                                        width: "100%",
-                                        padding: `${t.spacing(1)} ${t.spacing(2)}`,
-                                        border: `1px solid ${copied ? t.colors.success : t.colors.border}`,
-                                        borderRadius: t.radius.sm,
-                                        background: copied ? `${t.colors.success}12` : "none",
-                                        cursor: "pointer",
-                                        fontFamily: "ui-monospace, monospace",
-                                        transition: "border-color 0.15s ease, background 0.15s ease",
-                                      }}
-                                    >
-                                      <span style={{
-                                        fontSize: "0.68rem",
-                                        color: copied ? t.colors.success : t.colors.text,
-                                        fontWeight: 600,
-                                        overflow: "hidden",
-                                        textOverflow: "ellipsis",
-                                        whiteSpace: "nowrap",
-                                        flex: 1,
-                                        textAlign: "left",
-                                      }}>
-                                        {r.schwabSymbol}
-                                      </span>
-                                      <span
-                                        className="material-symbols-outlined"
-                                        style={{ fontSize: 13, flexShrink: 0, color: copied ? t.colors.success : t.colors.textMuted }}
-                                        aria-hidden
-                                      >
-                                        {copied ? "check" : "content_copy"}
-                                      </span>
-                                    </button>
-                                  );
-                                })()}
+                              <td style={{ ...tdStyle, textAlign: "center" }}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    void navigator.clipboard.writeText(r.schwabSymbol);
+                                    setLastCopiedOpportunityKey(copyKey);
+                                    window.setTimeout(
+                                      () => setLastCopiedOpportunityKey((prev) => prev === copyKey ? null : prev),
+                                      1200
+                                    );
+                                  }}
+                                  title={`Copy order symbol: ${r.schwabSymbol}`}
+                                  aria-label={`Copy order symbol: ${r.schwabSymbol}`}
+                                  className="options-optimizer-copy-symbol"
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    width: 34,
+                                    height: 34,
+                                    padding: 0,
+                                    border: "none",
+                                    background: "none",
+                                    cursor: "pointer",
+                                    color: t.colors.textMuted,
+                                    borderRadius: t.radius.sm,
+                                    position: "relative",
+                                  }}
+                                >
+                                  <span
+                                    className="material-symbols-outlined"
+                                    style={{ fontSize: 22, position: "absolute", opacity: lastCopiedOpportunityKey === copyKey ? 0 : 1, transition: "opacity 0.2s ease", pointerEvents: "none" }}
+                                    aria-hidden
+                                  >
+                                    content_copy
+                                  </span>
+                                  <span
+                                    className="material-symbols-outlined"
+                                    style={{ fontSize: 22, position: "absolute", opacity: lastCopiedOpportunityKey === copyKey ? 1 : 0, transition: "opacity 0.2s ease", pointerEvents: "none" }}
+                                    aria-hidden
+                                  >
+                                    check
+                                  </span>
+                                </button>
                               </td>
                             </tr>
                           );

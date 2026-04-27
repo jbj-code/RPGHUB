@@ -148,7 +148,6 @@ export function NavBar({
       icon: "schedule",
     },
     { page: "extractor", label: "Extractor", icon: "document_scanner" },
-    { page: "email-crm", label: "Email CRM", icon: "contacts" },
     { page: "todos", label: "To-Dos", icon: "checklist" },
     {
       page: "rankinator",

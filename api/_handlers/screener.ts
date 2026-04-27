@@ -28,6 +28,7 @@ const UNIVERSE_SYMBOLS: string[] = [
   "SQ","SHOP","ZM","DOCU","ABNB","UBER","LYFT","DASH","COIN",
   "HOOD","SOFI","UPST","AFRM","BILL","MDB","GTLB","PCTY","PAYC","APP",
   "HIMS","DOCS","APPN","CSGP","ASAN","SMAR",
+  "TWLO","PINS","PATH","DOCN","DUOL","MNDY","ZI","BRZE","OPEN","IOT",
   // Semiconductors (additional)
   "ON","SWKS","QRVO","MPWR","MCHP","AMKR","ENTG","ONTO","ACLS","UCTT",
   "MKSI","NVMI","COHU","FORM",
@@ -73,7 +74,9 @@ const UNIVERSE_SYMBOLS: string[] = [
   // China ADRs (liquid options)
   "BABA","JD","PDD","BIDU","BILI","NTES","TME",
   // Gaming / entertainment
-  "EA","TTWO","RBLX","U",
+  "EA","TTWO","RBLX","U","CAVA",
+  // Semiconductors (additional high-IV / AI-adjacent)
+  "ARM","AXON",
   // Travel / hospitality / airlines
   "MAR","HLT","H","LVS","MGM","WYNN","RCL","CCL","NCLH",
   "AAL","DAL","UAL","LUV","JBLU","CZR",
@@ -171,6 +174,8 @@ type RankedOption = {
   realizedVol20dPct: number | null;
   /** |delta| from option quote (0–1). Approximates probability of finishing ITM / being assigned. */
   delta: number | null;
+  /** Theta from option quote: dollars of time-decay earned (write) or lost (buy) per calendar day per contract. */
+  thetaPerDay: number | null;
   /** Sector from Schwab fundamentals (e.g. "Technology"). Null for ETFs or when not returned. */
   sector: string | null;
   /** Internal composite score used for ranking (higher is better). */
@@ -183,6 +188,8 @@ type OptionQuoteLite = {
   bid?: number;
   ask?: number;
   delta?: number;
+  theta?: number;
+  gamma?: number;
   openInterest?: number;
   totalVolume?: number;
   impliedVolPct?: number | null;
@@ -261,16 +268,17 @@ function impliedVolPercentFromQuote(src: any): number | null {
 
 /**
  * Tilt score using IV vs short realized vol (same underlying).
- * Sell: boost when IV > RV (rich premium). Buy: boost when RV > IV (implied relatively cheap vs recent move).
+ * Sell: boost when IV > RV (rich premium = "free lunch"). Buy: boost when RV > IV (cheap implied vs recent move).
+ * Uses a steeper ±40% range so the IV/RV ratio has meaningful impact on the final rank.
  */
 function volIvRvMultiplier(isBuyToOpen: boolean, ivPct: number | null, rvPct: number | null): number {
   if (ivPct == null || rvPct == null || ivPct < 0.75 || rvPct < 0.75) return 1;
   if (isBuyToOpen) {
     const r = rvPct / ivPct;
-    return clamp(1 + 0.24 * (r - 1), 0.78, 1.32);
+    return clamp(1 + 0.4 * (r - 1), 0.60, 1.50);
   }
   const r = ivPct / rvPct;
-  return clamp(1 + 0.24 * (r - 1), 0.78, 1.32);
+  return clamp(1 + 0.4 * (r - 1), 0.60, 1.50);
 }
 
 /** Non-empty validated list from client → scan only these symbols (no movers merge). */
@@ -334,14 +342,14 @@ export async function handler(req: any, res: any): Promise<void> {
     return;
   }
 
-  const otmLevels =
-    Array.isArray(body.otmLevels) && body.otmLevels.length > 0
-      ? body.otmLevels
-          .map((n: any) => Number(n))
-          .filter((n: number) => Number.isFinite(n) && n > 0)
-      : [5, 10, 15, 20];
+  const _otmRaw = Array.isArray(body.otmLevels)
+    ? body.otmLevels
+        .map((n: any) => Number(n))
+        .filter((n: number) => Number.isFinite(n) && n >= 5) // 5% is the minimum meaningful OTM level
+    : [];
+  const otmLevels = _otmRaw.length > 0 ? _otmRaw : [5, 10, 15, 20];
 
-  const topN = Number(body.topN) || 5;
+  const topN = Math.min(Math.max(1, Number(body.topN) || 5), 20);
   const strikeTolerancePct = Number(body.strikeTolerancePct) || 1.25;
   const minMarketCap = body.minMarketCap != null ? Number(body.minMarketCap) : null;
   const includeEarnings = Boolean(body.includeEarnings ?? false);
@@ -388,6 +396,8 @@ export async function handler(req: any, res: any): Promise<void> {
       }
     }
 
+    const warnings: string[] = [];
+
     // 1) Build universe: custom ticker list OR hardcoded base + live Schwab movers
     let allRows: UniverseRow[];
     const companyBySymbol: Record<string, string> = {};
@@ -399,11 +409,19 @@ export async function handler(req: any, res: any): Promise<void> {
       const moverSymbols: UniverseRow[] =
         moversRows.status === "fulfilled" ? moversRows.value : [];
       const baseSet = new Set(UNIVERSE_SYMBOLS);
+      const newMovers = moverSymbols.filter((m) => !baseSet.has(m.symbol));
       allRows = [
         ...UNIVERSE_SYMBOLS.map((s) => ({ symbol: s, company: "" })),
-        ...moverSymbols.filter((m) => !baseSet.has(m.symbol)),
+        ...newMovers,
       ];
       for (const r of moverSymbols) companyBySymbol[r.symbol] = r.company;
+      if (moverSymbols.length > 0) {
+        warnings.push(
+          `Live Schwab movers: ${moverSymbols.length} fetched, ${newMovers.length} new (not already in base universe).`
+        );
+      } else if (moversRows.status === "rejected") {
+        warnings.push("Schwab movers unavailable — scanning base universe only.");
+      }
     }
 
     const tickers = allRows.map((r) => r.symbol);
@@ -470,7 +488,6 @@ export async function handler(req: any, res: any): Promise<void> {
       }
     }
 
-    const warnings: string[] = [];
     if (clientUniverse && clientUniverse.length > 0) {
       warnings.push("Using a custom ticker bucket — Schwab index movers are not merged in.");
     }
@@ -779,6 +796,8 @@ export async function handler(req: any, res: any): Promise<void> {
           bid: num(src.bidPrice) ?? num(src.bid),
           ask: num(src.askPrice) ?? num(src.ask),
           delta: num(src.delta),
+          theta: num(src.theta),
+          gamma: num(src.gamma),
           openInterest: num(src.openInterest) ?? num(src.open_interest),
           totalVolume: num(src.totalVolume) ?? num(src.total_volume) ?? num(src.volume),
           impliedVolPct: impliedVolPercentFromQuote(src),
@@ -805,18 +824,27 @@ export async function handler(req: any, res: any): Promise<void> {
           ? bid
           : ask;
       if (optionPrice <= 0) continue;
-      const askUsed = ask > 0 ? ask : bid;
-      const bidUsed = bid > 0 ? bid : ask;
-      const spread = askUsed > 0 && bidUsed > 0 ? askUsed - bidUsed : 0;
-      const mid = askUsed > 0 && bidUsed > 0 ? (askUsed + bidUsed) / 2 : optionPrice;
-      const spreadPct = mid > 0 ? spread / mid : 0;
-      const maxSpreadPct = isBuyToOpen ? 0.32 : 0.25;
+      // For a write (sell to open), zero bid = no buyer exists → untradeable.
+      // For a buy (buy to open), zero ask should never reach here (caught above).
+      if (!isBuyToOpen && bid <= 0) { liquidityFiltered.spread++; continue; }
+      if (isBuyToOpen && ask <= 0) { liquidityFiltered.spread++; continue; }
+
+      // Use true bid/ask for spread (no fallback substitution — that masks wide markets).
+      const spread = ask > 0 && bid > 0 ? ask - bid : Math.max(ask, bid);
+      const mid = ask > 0 && bid > 0 ? (ask + bid) / 2 : optionPrice;
+      const spreadPct = mid > 0 ? spread / mid : 1;
+
+      // Adaptive thresholds: farther-OTM options naturally have wider spreads and lower OI.
+      // Applying the same cutoff as near-ATM options leaves deep-OTM tables nearly empty.
+      const otmTierAdj = Math.max(0, (spec.otmPct - 5) / 5) * 0.04; // +4pp per extra 5% OTM tier
+      const maxSpreadPct = (isBuyToOpen ? 0.32 : 0.25) + otmTierAdj;
       if (spreadPct > maxSpreadPct) {
         liquidityFiltered.spread++;
         continue;
       }
+      const minOI = spec.otmPct <= 5 ? 50 : spec.otmPct <= 10 ? 30 : spec.otmPct <= 15 ? 20 : 10;
       const oi = quote?.openInterest ?? null;
-      if (oi != null && oi < 50) {
+      if (oi != null && oi < minOI) {
         liquidityFiltered.oi++;
         continue;
       }
@@ -831,10 +859,14 @@ export async function handler(req: any, res: any): Promise<void> {
         ? clamp(Math.abs(rawDelta), 0.02, 0.98)
         : clamp(0.5 * Math.exp(-Math.abs(spec.currentPrice - spec.strike) / Math.max(spec.currentPrice, 1) * 12), 0.02, 0.98);
       const volume = quote?.totalVolume ?? 0;
+      // Volume / OI ratio: elevated intraday volume relative to open interest signals unusual
+      // option activity (smart money flow, hedging demand). Boosts liquidity score for active contracts.
+      const volOiRatio = (oi != null && oi > 0 && volume > 0) ? volume / oi : 0;
       const liqScore = clamp(
-        (1 - clamp(spreadPct / Math.max(maxSpreadPct, 0.0001), 0, 1)) * 0.55 +
-          clamp((oi ?? 100) / 600, 0, 1) * 0.3 +
-          clamp(volume / 300, 0, 1) * 0.15,
+        (1 - clamp(spreadPct / Math.max(maxSpreadPct, 0.0001), 0, 1)) * 0.50 +
+          clamp((oi ?? 100) / 600, 0, 1) * 0.25 +
+          clamp(volume / 300, 0, 1) * 0.15 +
+          clamp(volOiRatio / 0.5, 0, 1) * 0.10,
         0.05,
         1
       );
@@ -844,7 +876,17 @@ export async function handler(req: any, res: any): Promise<void> {
       const baseScore = isBuyToOpen
         ? ((probITM * 100) / Math.max(annAbs, 0.05)) * liqScore
         : annAbs * Math.pow(1 - probITM, 1.35) * liqScore;
-      const score = baseScore * volMult;
+
+      // Gamma penalty for writers: high gamma means delta (assignment probability) can accelerate
+      // rapidly as the stock moves toward the strike. Penalise high-gamma contracts up to 15%.
+      const gammaPenalty = (() => {
+        if (isBuyToOpen) return 1; // buyers want high gamma (convexity)
+        const g = quote?.gamma;
+        if (g == null || g <= 0) return 1;
+        return clamp(1 - g * 5, 0.85, 1.0); // gentle penalty; gamma typically 0.01–0.05 at this strike range
+      })();
+
+      const score = baseScore * volMult * gammaPenalty;
       if (ivPct != null) rankedRowsWithIv++;
       else rankedRowsWithoutIv++;
 
@@ -876,6 +918,14 @@ export async function handler(req: any, res: any): Promise<void> {
         impliedVolPct: ivPct == null ? null : round2(ivPct),
         realizedVol20dPct: rvPct == null ? null : round2(rvPct),
         delta: rawDelta != null ? round2(clamp(Math.abs(rawDelta), 0, 1)) : null,
+        // thetaPerDay: dollars of time decay per contract per day.
+        // Schwab theta is negative (value decays); flip sign for writes so display is positive $ earned/day.
+        thetaPerDay: (() => {
+          const th = quote?.theta;
+          if (th == null || !Number.isFinite(th)) return null;
+          const perContract = th * 100;
+          return round2(isBuyToOpen ? perContract : -perContract);
+        })(),
         sector: sectorByTicker[spec.ticker] ?? null,
         score: round2(score),
         schwabSymbol,
