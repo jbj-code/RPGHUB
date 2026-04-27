@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Theme } from "../theme";
 import {
   getFixedRailsLayoutStyles,
@@ -387,6 +387,8 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
   const [minMarketCap, setMinMarketCap] = useState<number>(500_000_000);
   const minMarketCapText = useMemo(() => minMarketCap.toLocaleString("en-US"), [minMarketCap]);
   const [scanning, setScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState(0);
+  const scanWasRunning = useRef(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [resultsByOtmPct, setResultsByOtmPct] = useState<Record<number, RankedOption[]>>({});
@@ -413,6 +415,28 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [showInfoModal]);
+
+  // Scan button progress bar — animates from 0 → ~88% during scan, then jumps to 100% on finish.
+  useEffect(() => {
+    if (!scanning) {
+      if (scanWasRunning.current) {
+        scanWasRunning.current = false;
+        setScanProgress(100);
+        const tid = setTimeout(() => setScanProgress(0), 700);
+        return () => clearTimeout(tid);
+      }
+      return;
+    }
+    scanWasRunning.current = true;
+    setScanProgress(0);
+    const start = Date.now();
+    const estimated = 28_000; // rough estimate of scan duration (ms)
+    const id = setInterval(() => {
+      const ratio = (Date.now() - start) / estimated;
+      setScanProgress(88 * (1 - Math.exp(-2.5 * ratio)));
+    }, 250);
+    return () => clearInterval(id);
+  }, [scanning]);
 
   const hasResults = OTM_LEVELS.some((l) => (resultsByOtmPct[l] ?? []).length > 0);
 
@@ -862,21 +886,43 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
         >
           <button
             type="button"
-            style={{ ...primaryBtn, ...getRailFooterActionButtonLayout() }}
+            style={{
+              ...primaryBtn,
+              ...getRailFooterActionButtonLayout(),
+              position: "relative",
+              overflow: "hidden",
+              ...(scanProgress > 0 ? {
+                backgroundColor: "transparent",
+                border: `2px solid ${t.colors.primary}`,
+                color: scanProgress >= 50 ? "#fff" : t.colors.primary,
+              } : {}),
+            }}
             onClick={onScan}
             disabled={scanning}
             aria-disabled={scanning}
           >
-            {scanning ? (
-              <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
-                <span className="options-pricing-fetch-spinner" aria-hidden />
-                Scanning…
-              </span>
-            ) : positionSide === "buy" ? (
-              "Run scan (buy to open)"
-            ) : (
-              "Run scan (sell to open)"
+            {/* Progress fill — slides in from the left */}
+            {scanProgress > 0 && (
+              <span
+                aria-hidden
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  width: `${scanProgress}%`,
+                  backgroundColor: t.colors.primary,
+                  transition: "width 0.25s ease",
+                  zIndex: 0,
+                }}
+              />
             )}
+            <span style={{ position: "relative", zIndex: 1, display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
+              {scanning && <span className="options-pricing-fetch-spinner" aria-hidden />}
+              {scanning
+                ? "Scanning…"
+                : positionSide === "buy"
+                ? "Run scan (buy to open)"
+                : "Run scan (sell to open)"}
+            </span>
           </button>
         </div>
         </div>

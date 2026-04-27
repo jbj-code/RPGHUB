@@ -577,6 +577,11 @@ body {
   object-position: left center;
 }
 
+/* Hide scrollbar in nav menu (kept scrollable via JS) */
+.app-nav-menu::-webkit-scrollbar {
+  display: none;
+}
+
 /* Nav: sidebar links hover/active */
 .app-nav-sidebar .app-nav-menu a {
   transition:

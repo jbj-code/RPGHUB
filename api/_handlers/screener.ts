@@ -328,6 +328,8 @@ async function fetchMarketCapsBatched(
   const caps: Record<string, number | null> = {};
   const BATCH = 10;
   for (let i = 0; i < tickers.length; i += BATCH) {
+    // Small pause between batches to avoid contributing to Schwab 429 bursts.
+    if (i > 0) await new Promise((r) => setTimeout(r, 80));
     await Promise.allSettled(
       tickers.slice(i, i + BATCH).map(async (ticker) => {
         try {
@@ -520,8 +522,13 @@ export async function handler(req: any, res: any): Promise<void> {
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
     const dte = Math.max(1, daysBetween(today, expiryDate));
-    const fromStr = expiration;
-    const toStr = expiration;
+    // Widen the chain date window by ±3 days so holiday-shifted expirations are included
+    // (e.g. Juneteenth shifts the June monthly from the 19th to the 18th in Schwab's chain).
+    // The best-match logic below picks whichever returned expiry is closest to the requested date.
+    const fromDateObj = new Date(expiryDate.getTime() - 3 * 24 * 60 * 60 * 1000);
+    const toDateObj   = new Date(expiryDate.getTime() + 3 * 24 * 60 * 60 * 1000);
+    const fromStr = fromDateObj.toISOString().slice(0, 10);
+    const toStr   = toDateObj.toISOString().slice(0, 10);
 
     // 2) Equity quotes: current price + company description
     const quotesBody: any = await fetchEquityQuotesBatched(tickers, accessToken);
@@ -680,7 +687,7 @@ export async function handler(req: any, res: any): Promise<void> {
       impliedVolPctFromChain?: number | null;
     };
     const specs: OptionSpec[] = [];
-
+    let chainRateLimitHits = 0;
 
     const CHAIN_CONCURRENCY = 10;
     for (let ci = 0; ci < chainTickers.length; ci += CHAIN_CONCURRENCY) {
@@ -705,7 +712,7 @@ export async function handler(req: any, res: any): Promise<void> {
             `https://api.schwabapi.com/marketdata/v1/chains?${params}`,
             { headers: { Authorization: `Bearer ${accessToken}` } }
           );
-          throwIfRateLimited(chainResp, "chains");
+          if (chainResp.status === 429) { chainRateLimitHits++; return; }
           if (!chainResp.ok) return;
           const chainBody: any = await chainResp.json();
           const expMap = type === "C" ? chainBody?.callExpDateMap : chainBody?.putExpDateMap;
@@ -774,6 +781,19 @@ export async function handler(req: any, res: any): Promise<void> {
             }
           }
         })
+      );
+    }
+
+    // Surface chain-level rate limits properly instead of the misleading "no options found".
+    if (chainRateLimitHits > 0) {
+      if (specs.length === 0) {
+        res.status(429).json({
+          error: `Schwab API rate-limited on chain fetches (${chainRateLimitHits}/${chainTickers.length} tickers). Wait 30–60 s and try again.`,
+        });
+        return;
+      }
+      warnings.push(
+        `Rate-limited on ${chainRateLimitHits} chain fetch(es) — results may be incomplete. Try again for full coverage.`,
       );
     }
 

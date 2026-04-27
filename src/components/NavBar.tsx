@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { Theme, ThemeMode } from "../theme";
 import { assets } from "../theme";
@@ -29,6 +29,25 @@ export function NavBar({
 }: NavBarProps) {
   const width = compact ? SIDEBAR_WIDTH_COMPACT : SIDEBAR_WIDTH;
   const [tooltip, setTooltip] = useState<{ label: string; top: number } | null>(null);
+  const navMenuRef = useRef<HTMLDivElement>(null);
+  const [showScrollArrow, setShowScrollArrow] = useState(false);
+
+  useEffect(() => {
+    const el = navMenuRef.current;
+    if (!el) return;
+    const check = () => {
+      const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
+      setShowScrollArrow(!atBottom && el.scrollHeight > el.clientHeight);
+    };
+    check();
+    el.addEventListener("scroll", check, { passive: true });
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => {
+      el.removeEventListener("scroll", check);
+      ro.disconnect();
+    };
+  }, []);
 
   const sidebarStyle: CSSProperties = {
     position: "fixed",
@@ -86,6 +105,7 @@ export function NavBar({
     gap: t.spacing(1),
     overflowY: "auto",
     overflowX: "hidden",
+    scrollbarWidth: "none",
   };
 
   const linkStyle = (active: boolean): CSSProperties => ({
@@ -214,7 +234,7 @@ export function NavBar({
           />
         </button>
       </div>
-      <div className="app-nav-menu" style={navStyle}>
+      <div className="app-nav-menu" style={navStyle} ref={navMenuRef}>
         {links.map(({ page: p, label, icon, externalUrl }) => (
           <a
             key={p}
@@ -246,6 +266,23 @@ export function NavBar({
           </a>
         ))}
       </div>
+      {showScrollArrow && (
+        <div
+          aria-hidden
+          style={{
+            textAlign: "center",
+            padding: "2px 0 4px",
+            color: t.colors.primary,
+            pointerEvents: "none",
+            lineHeight: 1,
+            flexShrink: 0,
+          }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 20 }}>
+            expand_more
+          </span>
+        </div>
+      )}
       <div className="app-nav-footer" style={footerStyle}>
         <button
           type="button"
