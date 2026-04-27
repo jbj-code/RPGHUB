@@ -313,9 +313,8 @@ function formatSchwabSymbol(args: {
 
 /**
  * Fetch market cap for each ticker via /instruments?projection=fundamental.
- * FundamentalInst.marketCap is in millions of dollars; we normalise to full dollars.
- * NOTE: Verify the unit using the Schwab Explorer (/marketdata/v1/instruments?symbol=AAPL&projection=fundamental).
- * If Schwab returns full dollars, remove the ×1_000_000 multiplier below.
+ * Schwab returns marketCap in full dollars (e.g. DDOG ≈ 45816670078 = $45.8B).
+ * Response is a symbol-keyed map: { "DDOG": { fundamental: { marketCap: ... } } }
  */
 async function fetchMarketCapsBatched(
   tickers: string[],
@@ -333,18 +332,28 @@ async function fetchMarketCapsBatched(
           const resp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
           if (!resp.ok) return;
           const body: any = await resp.json();
-          const instruments = Array.isArray(body) ? body : [body];
-          const inst =
-            instruments.find(
-              (x: any) =>
-                typeof x?.symbol === "string" &&
-                x.symbol.toUpperCase() === ticker.toUpperCase(),
-            ) ?? instruments[0];
+
+          // Schwab returns a symbol-keyed map like the quotes endpoint:
+          // { "DDOG": { cusip, symbol, fundamental: {...} } }
+          // Fall back to array or bare-object shapes just in case.
+          let inst: any;
+          if (typeof body === "object" && body !== null && !Array.isArray(body)) {
+            inst =
+              body[ticker] ??
+              body[ticker.toUpperCase()] ??
+              (Object.values(body)[0] as any);
+          } else if (Array.isArray(body)) {
+            inst =
+              body.find(
+                (x: any) =>
+                  typeof x?.symbol === "string" &&
+                  x.symbol.toUpperCase() === ticker.toUpperCase(),
+              ) ?? body[0];
+          }
+
           const mc = inst?.fundamental?.marketCap;
           caps[ticker] =
-            typeof mc === "number" && Number.isFinite(mc) && mc > 0
-              ? mc * 1_000_000
-              : null;
+            typeof mc === "number" && Number.isFinite(mc) && mc > 0 ? mc : null;
         } catch {
           caps[ticker] = null;
         }
