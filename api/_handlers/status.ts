@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { getValidAccessToken } from "../_schwab-utils";
+import { getValidAccessToken } from "../_schwab-utils.js";
 
 export async function handler(req: any, res: any): Promise<void> {
   try {
