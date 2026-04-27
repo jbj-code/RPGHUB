@@ -36,6 +36,10 @@ type RankedOption = {
   premiumPerContract: number;
   impliedVolPct?: number | null;
   realizedVol20dPct?: number | null;
+  /** |delta| from option quote — probability of finishing ITM / being assigned. */
+  delta?: number | null;
+  /** Sector from Schwab fundamentals. Null for ETFs or when not returned. */
+  sector?: string | null;
   schwabSymbol: string;
   occSymbol: string;
 };
@@ -832,6 +836,176 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
           </div>
         )}
 
+        {/* ── Top Picks summary card ── */}
+        {hasResults && (() => {
+          const picks = OTM_LEVELS.map((lvl) => ({ lvl, row: resultsByOtmPct[lvl]?.[0] ?? null })).filter((p) => p.row != null) as Array<{ lvl: number; row: RankedOption }>;
+          if (picks.length === 0) return null;
+
+          // Find the "best free lunch" pick = highest IV/RV for write, lowest for buy
+          let bestFreeLunchIdx = -1;
+          let bestRatio = outcomePositionSide === "write" ? -Infinity : Infinity;
+          picks.forEach(({ row }, i) => {
+            const iv = row.impliedVolPct ?? null;
+            const rv = row.realizedVol20dPct ?? null;
+            if (iv == null || rv == null || rv <= 0) return;
+            const ratio = iv / rv;
+            if (outcomePositionSide === "write" ? ratio > bestRatio : ratio < bestRatio) {
+              bestRatio = ratio;
+              bestFreeLunchIdx = i;
+            }
+          });
+
+          return (
+            <div style={{ ...cardStyle, marginBottom: t.spacing(4) }}>
+              <div style={{ display: "flex", alignItems: "center", gap: t.spacing(3), marginBottom: t.spacing(3) }}>
+                <h3 style={{ ...sectionTitleStyle, marginBottom: 0 }}>Top Picks</h3>
+                <span style={{ fontSize: "0.78rem", color: t.colors.textMuted }}>Best-scoring opportunity at each OTM level — no ticker repeats across levels</span>
+              </div>
+              <div style={{ display: "flex", gap: t.spacing(3), flexWrap: "wrap" }}>
+                {picks.map(({ lvl, row }, i) => {
+                  const iv = row.impliedVolPct ?? null;
+                  const rv = row.realizedVol20dPct ?? null;
+                  const ratio = iv != null && rv != null && rv > 0 ? iv / rv : null;
+                  const isFreeLunch = i === bestFreeLunchIdx;
+                  return (
+                    <div
+                      key={lvl}
+                      style={{
+                        flex: "1 1 170px",
+                        minWidth: 160,
+                        borderRadius: t.radius.md,
+                        border: `1.5px solid ${isFreeLunch ? "#D4AF37" : t.colors.border}`,
+                        backgroundColor: isFreeLunch ? "rgba(212,175,55,0.06)" : t.colors.background,
+                        padding: t.spacing(3),
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: t.spacing(1),
+                      }}
+                    >
+                      {/* OTM badge */}
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{
+                          fontSize: "0.68rem",
+                          fontWeight: 700,
+                          color: t.colors.secondary,
+                          textTransform: "uppercase",
+                          letterSpacing: "0.05em",
+                        }}>
+                          {lvl}% OTM
+                        </span>
+                        {isFreeLunch && (
+                          <span style={{
+                            fontSize: "0.62rem",
+                            fontWeight: 700,
+                            color: "#D4AF37",
+                            textTransform: "uppercase",
+                            letterSpacing: "0.04em",
+                          }}>
+                            ★ Best IV/RV
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Ticker */}
+                      <div style={{ fontWeight: 800, fontSize: "1.25rem", color: t.colors.text, lineHeight: 1 }}>
+                        {row.ticker}
+                      </div>
+
+                      {/* Company + sector */}
+                      <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, lineHeight: 1.3, overflow: "hidden" }}>
+                        <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.company}</div>
+                        {row.sector && (
+                          <span style={{ display: "block", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {row.sector}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Key stats */}
+                      <div style={{ marginTop: t.spacing(1), display: "flex", flexDirection: "column", gap: 3 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
+                          <span style={{ color: t.colors.textMuted }}>Ann yield</span>
+                          <span style={{ fontWeight: 700, color: t.colors.success }}>{row.annYieldPct.toFixed(1)}%</span>
+                        </div>
+                        {ratio != null && (
+                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
+                            <span style={{ color: t.colors.textMuted }}>IV/RV</span>
+                            <span style={{ fontWeight: 700, color: ratio >= 1.0 ? t.colors.success : t.colors.danger }}>
+                              {ratio.toFixed(2)}×
+                            </span>
+                          </div>
+                        )}
+                        {row.delta != null && (
+                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
+                            <span style={{ color: t.colors.textMuted }}>Δ Prob</span>
+                            <span style={{ fontWeight: 600, color: t.colors.text }}>{(row.delta * 100).toFixed(0)}%</span>
+                          </div>
+                        )}
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
+                          <span style={{ color: t.colors.textMuted }}>Strike</span>
+                          <span style={{ fontWeight: 600, color: t.colors.text }}>{formatStrikePrice(row.strike)}</span>
+                        </div>
+                      </div>
+
+                      {/* Schwab symbol display + copy */}
+                      {(() => {
+                        const copyKey = `summary-${lvl}-${row.ticker}`;
+                        const copied = lastCopiedOpportunityKey === copyKey;
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void navigator.clipboard.writeText(row.schwabSymbol);
+                              setLastCopiedOpportunityKey(copyKey);
+                              window.setTimeout(() => setLastCopiedOpportunityKey((p) => p === copyKey ? null : p), 1200);
+                            }}
+                            title={`Copy: ${row.schwabSymbol}`}
+                            style={{
+                              marginTop: t.spacing(1),
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "space-between",
+                              gap: 4,
+                              width: "100%",
+                              padding: `${t.spacing(1)} ${t.spacing(2)}`,
+                              border: `1px solid ${copied ? t.colors.success : t.colors.border}`,
+                              borderRadius: t.radius.sm,
+                              background: copied ? `${t.colors.success}12` : "none",
+                              cursor: "pointer",
+                              fontFamily: "ui-monospace, monospace",
+                              transition: "border-color 0.15s ease, background 0.15s ease",
+                            }}
+                          >
+                            <span style={{
+                              fontSize: "0.68rem",
+                              color: copied ? t.colors.success : t.colors.text,
+                              fontWeight: 600,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                              flex: 1,
+                              textAlign: "left",
+                            }}>
+                              {row.schwabSymbol}
+                            </span>
+                            <span
+                              className="material-symbols-outlined"
+                              style={{ fontSize: 13, flexShrink: 0, color: copied ? t.colors.success : t.colors.textMuted }}
+                              aria-hidden
+                            >
+                              {copied ? "check" : "content_copy"}
+                            </span>
+                          </button>
+                        );
+                      })()}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
+
         {OTM_LEVELS.map((otmPct) => {
           const arr = resultsByOtmPct[otmPct] ?? [];
           if (!hasResults && !scanning) return null;
@@ -860,26 +1034,34 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                         <th style={thNumStyle}>
                           <HelpTooltip
                             theme={t}
-                            text="Schwab implied volatility on the contract when returned; used with RV 20d in the ranking tilt."
+                            text="Probability of the option finishing in-the-money (being assigned on a short, or expiring worthless on a long). Derived from delta. Lower = safer for premium sellers."
                           >
-                            <span style={{ cursor: "help" }}>IV</span>
+                            <span style={{ cursor: "help" }}>Δ Prob</span>
                           </HelpTooltip>
                         </th>
                         <th style={thNumStyle}>
-                          <HelpTooltip theme={t} text="Annualized ~20-day realized vol from daily closes on the underlying.">
+                          <HelpTooltip
+                            theme={t}
+                            text="IV: Schwab implied volatility on the contract. The IV/RV ratio below it is the 'free lunch' signal — when IV/RV > 1.0 the market is paying you more premium than the stock is actually moving. Higher is better for premium sellers."
+                          >
+                            <span style={{ cursor: "help" }}>IV / RV ratio</span>
+                          </HelpTooltip>
+                        </th>
+                        <th style={thNumStyle}>
+                          <HelpTooltip theme={t} text="Annualized ~20-day realized vol from daily closes on the underlying. Compare to IV: when IV > RV you are collecting premium above the stock's actual movement — the volatility risk premium.">
                             <span style={{ cursor: "help" }}>RV 20d</span>
                           </HelpTooltip>
                         </th>
                         <th style={thNumStyle}>{tableQuotePrimary}</th>
                         <th style={thNumStyle}>{tableAnnLabel}</th>
                         <th style={thNumStyle}>{tablePremLabel}</th>
-                        <th style={{ ...thStyle, textAlign: "center", borderTopRightRadius: t.radius.md }}>Action</th>
+                        <th style={{ ...thStyle, borderTopRightRadius: t.radius.md }}>Order Symbol</th>
                       </tr>
                     </thead>
                     <tbody>
                       {arr.length === 0 ? (
                         <tr>
-                          <td colSpan={12} style={{ ...tdStyle, color: t.colors.textMuted }}>
+                          <td colSpan={13} style={{ ...tdStyle, color: t.colors.textMuted }}>
                             No results for this OTM level
                           </td>
                         </tr>
@@ -902,7 +1084,25 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                                 #{r.rank}
                               </td>
                               <td style={{ ...tdStyle, fontWeight: 600 }}>{r.ticker}</td>
-                              <td style={tdStyle}>{r.company}</td>
+                              <td style={{ ...tdStyle, maxWidth: 180 }}>
+                                <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  {r.company}
+                                </div>
+                                {r.sector && (
+                                  <span style={{
+                                    display: "block",
+                                    fontSize: "0.7rem",
+                                    color: t.colors.textMuted,
+                                    fontWeight: 400,
+                                    marginTop: 1,
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    whiteSpace: "nowrap",
+                                  }}>
+                                    {r.sector}
+                                  </span>
+                                )}
+                              </td>
                               <td
                                 style={{
                                   ...tdNumStyle,
@@ -917,7 +1117,37 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                               </td>
                               <td style={tdNumStyle}>{formatStrikePrice(r.currentPrice)}</td>
                               <td style={tdNumStyle}>{formatStrikePrice(r.strike)}</td>
-                              <td style={{ ...tdNumStyle, color: t.colors.textMuted }}>{formatVolPct(r.impliedVolPct ?? null)}</td>
+                              {/* Δ Prob — assignment probability from delta */}
+                              <td style={{
+                                ...tdNumStyle,
+                                color: r.delta == null
+                                  ? t.colors.textMuted
+                                  : r.delta <= 0.15
+                                    ? t.colors.success
+                                    : r.delta <= 0.30
+                                      ? t.colors.text
+                                      : t.colors.danger,
+                              }}>
+                                {r.delta == null ? "—" : `${(r.delta * 100).toFixed(0)}%`}
+                              </td>
+                              {/* IV with IV/RV ratio free-lunch badge */}
+                              <td style={tdNumStyle}>
+                                {formatVolPct(r.impliedVolPct ?? null)}
+                                {r.impliedVolPct != null && r.realizedVol20dPct != null && r.realizedVol20dPct > 0 && (() => {
+                                  const ratio = r.impliedVolPct / r.realizedVol20dPct;
+                                  const isRich = outcomePositionSide === "write" ? ratio >= 1.0 : ratio < 1.0;
+                                  const color = isRich
+                                    ? t.colors.success
+                                    : ratio < 0.85
+                                      ? t.colors.danger
+                                      : t.colors.textMuted;
+                                  return (
+                                    <span style={{ display: "block", fontSize: "0.7rem", fontWeight: 600, color }}>
+                                      {ratio.toFixed(2)}× IV/RV
+                                    </span>
+                                  );
+                                })()}
+                              </td>
                               <td style={{ ...tdNumStyle, color: t.colors.textMuted }}>{formatVolPct(r.realizedVol20dPct ?? null)}</td>
                               <td style={tdNumStyle}>
                                 {(() => {
@@ -951,50 +1181,59 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                                 {r.annYieldPct.toFixed(2)}%
                               </td>
                               <td style={tdNumStyle}>{formatPremium(r.premiumPerContract)}</td>
-                              <td style={{ ...tdStyle, textAlign: "center" }}>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    void navigator.clipboard.writeText(r.schwabSymbol);
-                                    setLastCopiedOpportunityKey(copyKey);
-                                    window.setTimeout(
-                                      () => setLastCopiedOpportunityKey((prev) => prev === copyKey ? null : prev),
-                                      1200
-                                    );
-                                  }}
-                                  title="Copy Schwab order symbol"
-                                  aria-label="Copy Schwab order symbol"
-                                  className="options-optimizer-copy-symbol"
-                                  style={{
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    width: 34,
-                                    height: 34,
-                                    padding: 0,
-                                    border: "none",
-                                    background: "none",
-                                    cursor: "pointer",
-                                    color: t.colors.textMuted,
-                                    borderRadius: t.radius.sm,
-                                    position: "relative",
-                                  }}
-                                >
-                                  <span
-                                    className="material-symbols-outlined"
-                                    style={{ fontSize: 22, position: "absolute", opacity: lastCopiedOpportunityKey === copyKey ? 0 : 1, transition: "opacity 0.2s ease", pointerEvents: "none" }}
-                                    aria-hidden
-                                  >
-                                    content_copy
-                                  </span>
-                                  <span
-                                    className="material-symbols-outlined"
-                                    style={{ fontSize: 22, position: "absolute", opacity: lastCopiedOpportunityKey === copyKey ? 1 : 0, transition: "opacity 0.2s ease", pointerEvents: "none" }}
-                                    aria-hidden
-                                  >
-                                    check
-                                  </span>
-                                </button>
+                              <td style={{ ...tdStyle, textAlign: "left", minWidth: 170, maxWidth: 200 }}>
+                                {(() => {
+                                  const copied = lastCopiedOpportunityKey === copyKey;
+                                  return (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        void navigator.clipboard.writeText(r.schwabSymbol);
+                                        setLastCopiedOpportunityKey(copyKey);
+                                        window.setTimeout(
+                                          () => setLastCopiedOpportunityKey((prev) => prev === copyKey ? null : prev),
+                                          1200
+                                        );
+                                      }}
+                                      title={`Copy: ${r.schwabSymbol}`}
+                                      aria-label="Copy Schwab order symbol"
+                                      style={{
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        justifyContent: "space-between",
+                                        gap: 4,
+                                        width: "100%",
+                                        padding: `${t.spacing(1)} ${t.spacing(2)}`,
+                                        border: `1px solid ${copied ? t.colors.success : t.colors.border}`,
+                                        borderRadius: t.radius.sm,
+                                        background: copied ? `${t.colors.success}12` : "none",
+                                        cursor: "pointer",
+                                        fontFamily: "ui-monospace, monospace",
+                                        transition: "border-color 0.15s ease, background 0.15s ease",
+                                      }}
+                                    >
+                                      <span style={{
+                                        fontSize: "0.68rem",
+                                        color: copied ? t.colors.success : t.colors.text,
+                                        fontWeight: 600,
+                                        overflow: "hidden",
+                                        textOverflow: "ellipsis",
+                                        whiteSpace: "nowrap",
+                                        flex: 1,
+                                        textAlign: "left",
+                                      }}>
+                                        {r.schwabSymbol}
+                                      </span>
+                                      <span
+                                        className="material-symbols-outlined"
+                                        style={{ fontSize: 13, flexShrink: 0, color: copied ? t.colors.success : t.colors.textMuted }}
+                                        aria-hidden
+                                      >
+                                        {copied ? "check" : "content_copy"}
+                                      </span>
+                                    </button>
+                                  );
+                                })()}
                               </td>
                             </tr>
                           );

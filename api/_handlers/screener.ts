@@ -25,7 +25,7 @@ const UNIVERSE_SYMBOLS: string[] = [
   "FFIV","CTSH","EPAM",
   // SaaS / cloud / fintech
   "DDOG","ZS","NET","CRWD","PANW","FTNT","OKTA","SNOW","PLTR","TEAM",
-  "SQ","SHOP","ZM","DOCU","ABNB","UBER","LYFT","DASH","RBLX","COIN",
+  "SQ","SHOP","ZM","DOCU","ABNB","UBER","LYFT","DASH","COIN",
   "HOOD","SOFI","UPST","AFRM","BILL","MDB","GTLB","PCTY","PAYC","APP",
   "HIMS","DOCS","APPN","CSGP","ASAN","SMAR",
   // Semiconductors (additional)
@@ -58,7 +58,7 @@ const UNIVERSE_SYMBOLS: string[] = [
   // Industrials
   "CAT","DE","HON","RTX","GE","LMT","BA","NOC","GD","LHX","TDG","ITW",
   "ETN","EMR","ROK","IR","GWW","MMM","UPS","FDX","NSC","CSX","UNP","WAB",
-  "GNRC","TT","JCI","AME","FAST","GGG","XTSLA",
+  "GNRC","TT","JCI","AME","FAST","GGG",
   // Materials
   "LIN","APD","SHW","FCX","NEM","GOLD","ALB","EMN","CF","MOS","NUE",
   "STLD","PKG","SEE","CCK","ATI",
@@ -77,6 +77,8 @@ const UNIVERSE_SYMBOLS: string[] = [
   // Travel / hospitality / airlines
   "MAR","HLT","H","LVS","MGM","WYNN","RCL","CCL","NCLH",
   "AAL","DAL","UAL","LUV","JBLU","CZR",
+  // Crypto-adjacent / high-vol narrative (consistently elevated IV vs RV)
+  "MSTR","MARA","RIOT","DKNG","CELH","SNAP","SMCI",
   // Liquid ETFs (broad options market)
   "SPY","QQQ","IWM","GLD","SLV","TLT","HYG","EFA","EEM","GDX",
   "XLF","XLK","XLE","XLV","XLI","XLY","XLP","XLU","XLB","XLRE",
@@ -167,6 +169,10 @@ type RankedOption = {
   impliedVolPct: number | null;
   /** ~20 trading-day annualized realized vol from daily closes (%), else null. */
   realizedVol20dPct: number | null;
+  /** |delta| from option quote (0–1). Approximates probability of finishing ITM / being assigned. */
+  delta: number | null;
+  /** Sector from Schwab fundamentals (e.g. "Technology"). Null for ETFs or when not returned. */
+  sector: string | null;
   /** Internal composite score used for ranking (higher is better). */
   score: number;
   schwabSymbol: string;
@@ -414,6 +420,7 @@ export async function handler(req: any, res: any): Promise<void> {
     const currentPriceByTicker: Record<string, number> = {};
     const marketCapByTicker: Record<string, number | null> = {};
     const earningsDateMsByTicker: Record<string, number | null> = {};
+    const sectorByTicker: Record<string, string | null> = {};
 
     for (const sym of tickers) {
       const q = quotesBody[sym] ?? quotesBody[sym.replace(/\s+/g, "")];
@@ -444,6 +451,12 @@ export async function handler(req: any, res: any): Promise<void> {
         src?.nextEarningDate ??
         null;
       earningsDateMsByTicker[sym] = toEpochMs(earningsCandidate);
+
+      const sectorCandidate = fund?.sector ?? fund?.industry ?? src?.sector ?? null;
+      sectorByTicker[sym] =
+        typeof sectorCandidate === "string" && sectorCandidate.length > 0
+          ? sectorCandidate
+          : null;
 
       // Extract company name from Schwab quote description (prefer mover name if already set)
       if (!companyBySymbol[sym]) {
@@ -862,6 +875,8 @@ export async function handler(req: any, res: any): Promise<void> {
         premiumPerContract: round2(premiumPerContract),
         impliedVolPct: ivPct == null ? null : round2(ivPct),
         realizedVol20dPct: rvPct == null ? null : round2(rvPct),
+        delta: rawDelta != null ? round2(clamp(Math.abs(rawDelta), 0, 1)) : null,
+        sector: sectorByTicker[spec.ticker] ?? null,
         score: round2(score),
         schwabSymbol,
         occSymbol,
@@ -883,6 +898,29 @@ export async function handler(req: any, res: any): Promise<void> {
       warnings.push(
         `Excluded ${liquidityFiltered.oi} contracts with very low open interest.`
       );
+    }
+
+    // Cross-OTM deduplication: each ticker appears in at most one bucket.
+    // Collect all candidates across all levels, sort by score descending, then
+    // greedily assign each ticker to the first (highest-scoring) level it appears in.
+    // This prevents a single high-IV name from flooding every OTM table.
+    {
+      const allCandidates: Array<{ ticker: string; otmPct: number; score: number }> = [];
+      for (const otmPct of otmLevels) {
+        for (const row of resultsByOtmPct[otmPct] ?? []) {
+          allCandidates.push({ ticker: row.ticker, otmPct, score: row.score });
+        }
+      }
+      allCandidates.sort((a, b) => b.score - a.score);
+      const tickerToOtm: Record<string, number> = {};
+      for (const c of allCandidates) {
+        if (!(c.ticker in tickerToOtm)) tickerToOtm[c.ticker] = c.otmPct;
+      }
+      for (const otmPct of otmLevels) {
+        resultsByOtmPct[otmPct] = (resultsByOtmPct[otmPct] ?? []).filter(
+          (r) => tickerToOtm[r.ticker] === otmPct
+        );
+      }
     }
 
     for (const otmPct of otmLevels) {
