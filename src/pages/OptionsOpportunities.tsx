@@ -268,10 +268,10 @@ function HelpTooltip({ theme: t, text, children }: HelpTooltipProps) {
 export type OptionsOpportunitiesProps = { theme: Theme; sidebarWidth: number };
 
 const otmLabels: Record<number, { headline: string; detail: string }> = {
-  5:  { headline: "5% OTM",  detail: "Higher risk, higher yield" },
-  10: { headline: "10% OTM", detail: "Aggressive" },
-  15: { headline: "15% OTM", detail: "Moderate" },
-  20: { headline: "20% OTM", detail: "Conservative, lower yield" },
+  5:  { headline: "5–9% OTM",   detail: "Higher risk, higher yield" },
+  10: { headline: "10–14% OTM", detail: "Aggressive" },
+  15: { headline: "15–19% OTM", detail: "Moderate" },
+  20: { headline: "20–30% OTM", detail: "Conservative, lower yield" },
 };
 
 export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportunitiesProps) {
@@ -435,7 +435,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
         otmLevels: Array.from(OTM_LEVELS),
         topN: 10,
         // % points: listed strike OTM distance must be within this of target (wider grid / $ strikes).
-        strikeTolerancePct: 3,
+
         monthlyOnly,
       };
       if (isFullUniverse) payload.minMarketCap = minMarketCap;
@@ -518,7 +518,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
           </button>
         </div>
         <p style={{ ...descStyle, marginTop: t.spacing(1), marginBottom: 0 }}>
-          Scan US equities and ETFs for risk-adjusted options opportunities at 5%, 10%, 15%, and 20% OTM using live Schwab data (liquidity + probability + annualized return/debit).
+          Scan US equities and ETFs for risk-adjusted options opportunities across 5–9%, 10–14%, 15–19%, and 20–30% OTM bands using live Schwab data (liquidity + probability + annualized return/debit).
           {activeBucket.symbols.length > 0 ? (
             <>
               {" "}
@@ -570,7 +570,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
 
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>What this does</p>
               <p style={{ marginBottom: t.spacing(3) }}>
-                Scans ~700 US equities, ETFs, and live Schwab movers at <strong>5%, 10%, 15%, and 20% OTM</strong> to surface the best risk-adjusted options opportunities. Each ticker appears in exactly one OTM bucket — the level where it scores best. Results are ready to trade: click the copy icon to grab the Schwab-formatted order symbol.
+                Scans ~200 US equities, ETFs, and live Schwab movers across <strong>5–9%, 10–14%, 15–19%, and 20–30% OTM bands</strong> to surface the best risk-adjusted options opportunities. Every listed strike within each band is evaluated and the top contract per ticker is surfaced — no single "closest" strike is forced. Each ticker appears in exactly one OTM bucket — the level where it scores best. Results are ready to trade: click the copy icon to grab the Schwab-formatted order symbol.
               </p>
 
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Write (sell to open) — "free lunch" signal</p>
@@ -904,7 +904,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
             </span>
             <p style={{ margin: 0, fontWeight: 600 }}>Configure parameters and click Run scan</p>
             <p style={{ margin: 0, fontSize: "0.85rem" }}>
-              Results will appear here grouped by OTM level (5%, 10%, 15%, 20%)
+              Results will appear here grouped by OTM band (5–9%, 10–14%, 15–19%, 20–30%)
             </p>
           </div>
         )}
@@ -964,7 +964,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                           textTransform: "uppercase",
                           letterSpacing: "0.05em",
                         }}>
-                          {lvl}% OTM
+                          {{ 5: "5–9%", 10: "10–14%", 15: "15–19%", 20: "20–30%" }[lvl] ?? `${lvl}%`} OTM
                         </span>
                         {isFreeLunch && (
                           <span style={{

@@ -314,7 +314,12 @@ function formatSchwabSymbol(args: {
 /**
  * Fetch market cap for each ticker via /instruments?projection=fundamental.
  * Schwab returns marketCap in full dollars (e.g. DDOG ≈ 45816670078 = $45.8B).
- * Response is a symbol-keyed map: { "DDOG": { fundamental: { marketCap: ... } } }
+ *
+ * Handles all known Schwab response shapes:
+ *   • Wrapped array:   { "instruments": [{ symbol, fundamental }] }  ← most common
+ *   • Symbol-keyed map: { "DDOG": { fundamental } }
+ *   • Bare array:      [{ symbol, fundamental }]
+ *   • Single object:   { symbol, fundamental }
  */
 async function fetchMarketCapsBatched(
   tickers: string[],
@@ -333,22 +338,25 @@ async function fetchMarketCapsBatched(
           if (!resp.ok) return;
           const body: any = await resp.json();
 
-          // Schwab returns a symbol-keyed map like the quotes endpoint:
-          // { "DDOG": { cusip, symbol, fundamental: {...} } }
-          // Fall back to array or bare-object shapes just in case.
           let inst: any;
-          if (typeof body === "object" && body !== null && !Array.isArray(body)) {
+          if (Array.isArray(body)) {
+            // Bare array: [{ symbol, fundamental }]
             inst =
-              body[ticker] ??
-              body[ticker.toUpperCase()] ??
-              (Object.values(body)[0] as any);
-          } else if (Array.isArray(body)) {
-            inst =
-              body.find(
-                (x: any) =>
-                  typeof x?.symbol === "string" &&
-                  x.symbol.toUpperCase() === ticker.toUpperCase(),
-              ) ?? body[0];
+              body.find((x: any) => x?.symbol?.toUpperCase() === ticker.toUpperCase()) ??
+              body[0];
+          } else if (typeof body === "object" && body !== null) {
+            const firstVal = Object.values(body)[0];
+            if (Array.isArray(firstVal)) {
+              // Wrapped array: { "instruments": [{ symbol, fundamental }] }
+              inst =
+                (firstVal as any[]).find(
+                  (x: any) => x?.symbol?.toUpperCase() === ticker.toUpperCase(),
+                ) ?? (firstVal as any[])[0];
+            } else {
+              // Symbol-keyed map or single object
+              inst =
+                body[ticker] ?? body[ticker.toUpperCase()] ?? firstVal;
+            }
           }
 
           const mc = inst?.fundamental?.marketCap;
@@ -361,6 +369,44 @@ async function fetchMarketCapsBatched(
     );
   }
   return caps;
+}
+
+/**
+ * OTM buckets for the screener. Each bucket covers a range of OTM distances so that
+ * every listed strike within the band is evaluated and the best-ranked contract surfaces,
+ * rather than locking onto one "closest" strike per target level.
+ *
+ *  5-bucket  →  5% – 9.9% OTM   (higher risk, higher yield)
+ * 10-bucket  → 10% – 14.9% OTM  (aggressive)
+ * 15-bucket  → 15% – 19.9% OTM  (moderate)
+ * 20-bucket  → 20% – 30%   OTM  (conservative)
+ */
+const OTM_BUCKETS = [
+  { label: 5 as const,  min: 5,  max: 10 },
+  { label: 10 as const, min: 10, max: 15 },
+  { label: 15 as const, min: 15, max: 20 },
+  { label: 20 as const, min: 20, max: 31 }, // 31 effectively covers up to 30%
+] as const;
+
+/** Returns every OTM strike in [minOtmPct, maxOtmPct) for the given side. */
+function getStrikesInRange(
+  strikes: number[],
+  spot: number,
+  minOtmPct: number,
+  maxOtmPct: number,
+  side: "C" | "P",
+): number[] {
+  return strikes.filter((strike) => {
+    if (side === "P") {
+      if (strike >= spot) return false;
+      const otm = ((spot - strike) / spot) * 100;
+      return otm >= minOtmPct && otm < maxOtmPct;
+    } else {
+      if (strike <= spot) return false;
+      const otm = ((strike - spot) / spot) * 100;
+      return otm >= minOtmPct && otm < maxOtmPct;
+    }
+  });
 }
 
 export async function handler(req: any, res: any): Promise<void> {
@@ -396,11 +442,11 @@ export async function handler(req: any, res: any): Promise<void> {
   const otmLevels = _otmRaw.length > 0 ? _otmRaw : [5, 10, 15, 20];
 
   const topN = Math.min(Math.max(1, Number(body.topN) || 5), 20);
-  const strikeTolerancePct = Number(body.strikeTolerancePct) || 1.25;
   const minMarketCap = body.minMarketCap != null ? Number(body.minMarketCap) : null;
-  // Internal cap prevents Schwab rate-limit (HTTP 429) and Vercel timeouts.
-  // Not exposed to the UI — we always scan the broadest set we can safely handle.
-  const MAX_UNDERLYINGS = 150;
+  // Two-tier cap: survey a wide universe through price history, then focus chain
+  // fetches on the most volatile names (highest realized vol = richest options).
+  const MAX_HISTORY_UNDERLYINGS = 200;
+  const MAX_CHAIN_UNDERLYINGS = 100;
 
   try {
     const supabaseUrl = process.env.SUPABASE_URL;
@@ -536,9 +582,9 @@ export async function handler(req: any, res: any): Promise<void> {
       return mb - ma;
     });
 
-    // Safety cap to avoid Schwab rate-limits and Vercel timeouts
-    if (effectiveTickers.length > MAX_UNDERLYINGS) {
-      effectiveTickers = effectiveTickers.slice(0, MAX_UNDERLYINGS);
+    // Safety cap for price-history fetches (wider universe surveyed here)
+    if (effectiveTickers.length > MAX_HISTORY_UNDERLYINGS) {
+      effectiveTickers = effectiveTickers.slice(0, MAX_HISTORY_UNDERLYINGS);
     }
 
     if (effectiveTickers.length === 0) {
@@ -611,6 +657,17 @@ export async function handler(req: any, res: any): Promise<void> {
       );
     }
 
+    // 4b) Re-rank for chain fetching: sort by realized vol descending, cap at MAX_CHAIN_UNDERLYINGS.
+    // Low-vol names (ETFs, utilities) almost never produce competitive options; focusing chain
+    // calls on the most volatile 100 names frees up budget to survey 200 names upfront.
+    const chainTickers = [...effectiveTickers]
+      .sort((a, b) => {
+        const ra = realizedVol20dPctByTicker[a] ?? -1;
+        const rb = realizedVol20dPctByTicker[b] ?? -1;
+        return rb - ra;
+      })
+      .slice(0, MAX_CHAIN_UNDERLYINGS);
+
     // 5) Option chains per ticker, parallel batches of 10
     type OptionSpec = {
       ticker: string;
@@ -624,43 +681,11 @@ export async function handler(req: any, res: any): Promise<void> {
     };
     const specs: OptionSpec[] = [];
 
-    /** Pick listed strike nearest target OTM; only true OTM legs (puts: strike < spot, calls: strike > spot). */
-    const chooseStrike = (args: {
-      strikes: number[];
-      spot: number;
-      targetOtmPct: number;
-      side: "C" | "P";
-      strikeTolerancePct: number;
-    }): number | null => {
-      const { strikes, spot, targetOtmPct, side, strikeTolerancePct } = args;
-      if (strikes.length === 0 || spot <= 0) return null;
-      let best: { strike: number; diff: number } | null = null;
-      for (const strike of strikes) {
-        const distPct =
-          side === "P"
-            ? ((spot - strike) / spot) * 100
-            : ((strike - spot) / spot) * 100;
-        if (!Number.isFinite(distPct)) continue;
-        // Short-premium scan: only out-of-the-money by standard definition (not ITM).
-        if (side === "P") {
-          if (strike >= spot) continue;
-        } else {
-          if (strike <= spot) continue;
-        }
-        if (distPct <= 0) continue;
-        const diff = Math.abs(distPct - targetOtmPct);
-        if (!best || diff < best.diff) best = { strike, diff };
-        if (diff === 0 && diff <= strikeTolerancePct) return strike;
-      }
-      if (!best) return null;
-      if (best.diff > strikeTolerancePct) return null;
-      return best.strike;
-    };
 
     const CHAIN_CONCURRENCY = 10;
-    for (let ci = 0; ci < effectiveTickers.length; ci += CHAIN_CONCURRENCY) {
+    for (let ci = 0; ci < chainTickers.length; ci += CHAIN_CONCURRENCY) {
       await Promise.allSettled(
-        effectiveTickers.slice(ci, ci + CHAIN_CONCURRENCY).map(async (ticker) => {
+        chainTickers.slice(ci, ci + CHAIN_CONCURRENCY).map(async (ticker) => {
           const spot = currentPriceByTicker[ticker];
           if (!spot || spot <= 0) return;
 
@@ -715,41 +740,38 @@ export async function handler(req: any, res: any): Promise<void> {
           }
           if (strikes.length === 0) return;
 
-          for (const otmPct of otmLevels) {
-            const chosen = chooseStrike({
-              strikes,
-              spot,
-              targetOtmPct: otmPct,
-              side: type,
-              strikeTolerancePct,
-            });
-            if (!chosen) continue;
-            let contractsRaw: any = strikesObjForExpiry[String(chosen)];
-            if (!Array.isArray(contractsRaw) || contractsRaw.length === 0) {
-              for (const [sk, arr] of Object.entries<any>(strikesObjForExpiry)) {
-                if (Number(sk) === chosen && Array.isArray(arr) && arr.length > 0) {
-                  contractsRaw = arr;
-                  break;
+          // For each OTM bucket, evaluate every listed strike in the range.
+          // The ranking step picks the best contract per ticker per bucket.
+          for (const bucket of OTM_BUCKETS) {
+            const validStrikes = getStrikesInRange(strikes, spot, bucket.min, bucket.max, type);
+            for (const strike of validStrikes) {
+              let contractsRaw: any = strikesObjForExpiry[String(strike)];
+              if (!Array.isArray(contractsRaw) || contractsRaw.length === 0) {
+                for (const [sk, arr] of Object.entries<any>(strikesObjForExpiry)) {
+                  if (Number(sk) === strike && Array.isArray(arr) && arr.length > 0) {
+                    contractsRaw = arr;
+                    break;
+                  }
                 }
               }
+              let impliedVolPctFromChain: number | null = null;
+              if (Array.isArray(contractsRaw) && contractsRaw.length > 0) {
+                const c0 = contractsRaw[0];
+                // Skip mini (10-share) and non-standard contracts to avoid 10× wrong premiums.
+                if (c0?.isMini === true || c0?.isNonStandard === true) continue;
+                impliedVolPctFromChain =
+                  c0 && typeof c0 === "object" ? impliedVolPercentFromQuote(c0) : null;
+              }
+              specs.push({
+                ticker,
+                expiry: expiration,
+                type,
+                otmPct: bucket.label,
+                strike,
+                currentPrice: spot,
+                impliedVolPctFromChain,
+              });
             }
-            let impliedVolPctFromChain: number | null = null;
-            if (Array.isArray(contractsRaw) && contractsRaw.length > 0) {
-              const c0 = contractsRaw[0];
-              // Skip mini (10-share) and non-standard contracts to avoid 10× wrong premiums.
-              if (c0?.isMini === true || c0?.isNonStandard === true) continue;
-              impliedVolPctFromChain =
-                c0 && typeof c0 === "object" ? impliedVolPercentFromQuote(c0) : null;
-            }
-            specs.push({
-              ticker,
-              expiry: expiration,
-              type,
-              otmPct,
-              strike: chosen,
-              currentPrice: spot,
-              impliedVolPctFromChain,
-            });
           }
         })
       );
@@ -885,14 +907,28 @@ export async function handler(req: any, res: any): Promise<void> {
         ? ((probITM * 100) / Math.max(annAbs, 0.05)) * liqScore
         : annAbs * Math.pow(1 - probITM, 1.35) * liqScore;
 
-      // Absolute IV level boost: higher raw IV = richer premium environment.
-      // 0.6% boost per percentage-point of IV above 20%; capped at 2.0× (hit around 150% IV).
-      // Separate from the IV/RV ratio multiplier — rewards names where the market is pricing
-      // in unusually high absolute movement, not just relative to recent realized vol.
-      const ivLevelMult =
-        ivPct != null && ivPct > 20
-          ? clamp(1 + 0.006 * (ivPct - 20), 1.0, 2.0)
-          : 1.0;
+      // IV level multiplier — symmetric but opposite for writes vs buys.
+      //
+      // Writes: boost when raw IV is high AND premium is at least fair (IV/RV ≥ 0.90).
+      //   +0.6% per pp above 20%, capped at 2.0×. Ensures high-IV rich names rank above
+      //   moderate-IV but liquid ones purely on spread tightness.
+      //
+      // Buys: penalise when IV is high AND IV/RV ≥ 1.0 (overpriced premium).
+      //   If IV is high but IV/RV < 1.0 (stock moves more than implied), no penalty —
+      //   that's actually cheap for the buyer.
+      const ivLevelMult = (() => {
+        if (ivPct == null || ivPct <= 20) return 1.0;
+        if (!isBuyToOpen) {
+          if (rvPct != null && rvPct > 0 && ivPct / rvPct < 0.90) return 1.0;
+          return clamp(1 + 0.006 * (ivPct - 20), 1.0, 2.0);
+        } else {
+          // Penalise expensive options: IV high AND IV/RV ≥ 1.0
+          if (rvPct != null && rvPct > 0 && ivPct / rvPct >= 1.0) {
+            return clamp(1 - 0.004 * (ivPct - 20), 0.5, 1.0);
+          }
+          return 1.0;
+        }
+      })();
 
       // Gamma penalty for writers: high gamma means delta (assignment probability) can accelerate
       // rapidly as the stock moves toward the strike. Penalise high-gamma contracts up to 15%.
@@ -991,14 +1027,21 @@ export async function handler(req: any, res: any): Promise<void> {
 
     for (const otmPct of otmLevels) {
       const arr = resultsByOtmPct[otmPct] ?? [];
-      arr.sort((a, b) =>
+      // Within-bucket dedup: with range-based spec collection a ticker may have multiple
+      // contracts in the same bucket (e.g. AMKR at 6% and 8.5% OTM both in the 5-9% band).
+      // Keep only the highest-scoring contract per ticker before final ranking.
+      const tickerBest = new Map<string, (typeof arr)[0]>();
+      for (const row of arr) {
+        const ex = tickerBest.get(row.ticker);
+        if (!ex || row.score > ex.score) tickerBest.set(row.ticker, row);
+      }
+      const deduped = Array.from(tickerBest.values()).sort((a, b) =>
         b.score !== a.score
           ? b.score - a.score
-          // Tie on score: for writes prefer higher yield; for buys prefer less negative (cheaper) debit
           : b.annYieldPct - a.annYieldPct
       );
-      arr.slice(0, topN).forEach((r, idx) => (r.rank = idx + 1));
-      resultsByOtmPct[otmPct] = arr.slice(0, topN);
+      deduped.slice(0, topN).forEach((r, idx) => (r.rank = idx + 1));
+      resultsByOtmPct[otmPct] = deduped.slice(0, topN);
     }
 
     const positionSide = isBuyToOpen ? "buy" : "write";
