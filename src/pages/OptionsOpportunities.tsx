@@ -1290,14 +1290,14 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                                   // For put writers and call buyers: positive skew is good.
                                   // For call writers and put buyers: negative skew is good.
                                   const isWrite = outcomePositionSide === "write";
-                                  const isPutSide = (r.occSymbol ?? "").includes("P");
+                                  const isPutSide = optionType === "puts";
                                   const isGood = isWrite ? (isPutSide ? skew > 0 : skew < 0) : (!isPutSide ? skew < 0 : skew > 0);
                                   const color = Math.abs(skew) < 2
                                     ? t.colors.textMuted
                                     : isGood ? t.colors.success : t.colors.danger;
                                   return (
                                     <span style={{ fontWeight: 600, color }}>
-                                      {skew > 0 ? "+" : ""}{skew.toFixed(1)}pp
+                                      {skew > 0 ? "+" : ""}{skew.toFixed(1)}
                                     </span>
                                   );
                                 })()}
