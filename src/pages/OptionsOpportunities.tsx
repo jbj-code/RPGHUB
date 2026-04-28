@@ -99,6 +99,37 @@ function formatVolPct(n: number | null | undefined): string {
   return `${n.toFixed(1)}%`;
 }
 
+/** Build a tab-separated string for the given bucket — paste directly into Excel. */
+function buildBucketTsv(rows: RankedOption[], positionSide: PositionSide): string {
+  const n = (v: number | null | undefined, d = 2) => (v == null || !Number.isFinite(v) ? "" : v.toFixed(d));
+  const headers = [
+    "Rank", "Ticker", "Company", "1M Perf %", "Price", "Strike", "OTM %",
+    "Δ Prob %", "IV %", "RV 20d %", "Skew", "Bid", "Ask",
+    positionSide === "buy" ? "Ann. Debit %" : "Ann. Yield %",
+    positionSide === "buy" ? "Debit ($)" : "Premium ($)",
+    "OCC Symbol",
+  ];
+  const dataRows = rows.map((r) => [
+    r.rank,
+    r.ticker,
+    r.company,
+    n(r.oneMonthPerfPct),
+    n(r.currentPrice),
+    n(r.strike),
+    n(r.actualOtmPct),
+    r.delta != null ? n(r.delta * 100, 1) : "",
+    n(r.impliedVolPct, 1),
+    n(r.realizedVol20dPct, 1),
+    r.skewPct != null ? n(r.skewPct, 1) : "",
+    n(r.bid),
+    n(r.ask ?? r.bid),
+    n(r.annYieldPct),
+    n(r.premiumPerContract),
+    r.occSymbol,
+  ].join("\t"));
+  return [headers.join("\t"), ...dataRows].join("\n");
+}
+
 function formatStrikePrice(n: number): string {
   if (!Number.isFinite(n)) return "—";
   return Number.isInteger(n) ? `$${n.toLocaleString("en-US")}` : `$${n.toFixed(2)}`;
@@ -397,6 +428,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
   const [warnings, setWarnings] = useState<string[]>([]);
   const [resultsByOtmPct, setResultsByOtmPct] = useState<Record<number, RankedOption[]>>({});
   const [lastCopiedOpportunityKey, setLastCopiedOpportunityKey] = useState<string | null>(null);
+  const [lastCopiedBucketKey, setLastCopiedBucketKey] = useState<string | null>(null);
   const [lastScanAt, setLastScanAt] = useState<Date | null>(null);
   /** Matches the scan that produced current tables (so labels stay correct if you change controls). */
   const [outcomePositionSide, setOutcomePositionSide] = useState<PositionSide>("write");
@@ -1134,9 +1166,50 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
           if (!hasResults && !scanning) return null;
           return (
             <div key={otmPct} className="page-card" style={cardStyle}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: t.spacing(3), marginBottom: t.spacing(3) }}>
-                <h3 style={{ ...sectionTitleStyle, marginBottom: 0 }}>{otmLabels[otmPct].headline}</h3>
-                <span style={{ fontSize: "0.8rem", color: t.colors.textMuted }}>{otmLabels[otmPct].detail}</span>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: t.spacing(3) }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: t.spacing(3) }}>
+                  <h3 style={{ ...sectionTitleStyle, marginBottom: 0 }}>{otmLabels[otmPct].headline}</h3>
+                  <span style={{ fontSize: "0.8rem", color: t.colors.textMuted }}>{otmLabels[otmPct].detail}</span>
+                </div>
+                {arr.length > 0 && (() => {
+                  const bucketKey = `bucket-${otmPct}`;
+                  const bucketCopied = lastCopiedBucketKey === bucketKey;
+                  return (
+                    <button
+                      type="button"
+                      title="Copy table to clipboard (Excel format)"
+                      aria-label="Copy table to clipboard"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(buildBucketTsv(arr, outcomePositionSide));
+                        setLastCopiedBucketKey(bucketKey);
+                        window.setTimeout(
+                          () => setLastCopiedBucketKey((p) => p === bucketKey ? null : p),
+                          1500
+                        );
+                      }}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: t.spacing(1),
+                        padding: `${t.spacing(1)}px ${t.spacing(2)}px`,
+                        border: `1px solid ${bucketCopied ? t.colors.success : t.colors.border}`,
+                        borderRadius: t.radius.sm,
+                        background: bucketCopied ? `${t.colors.success}12` : "none",
+                        color: bucketCopied ? t.colors.success : t.colors.textMuted,
+                        fontSize: "0.78rem",
+                        fontWeight: 500,
+                        cursor: "pointer",
+                        transition: "color 0.15s, border-color 0.15s, background 0.15s",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <span className="material-symbols-outlined" style={{ fontSize: 15 }} aria-hidden>
+                        {bucketCopied ? "check" : "content_copy"}
+                      </span>
+                      {bucketCopied ? "Copied!" : "Copy table"}
+                    </button>
+                  );
+                })()}
               </div>
 
               {scanning && arr.length === 0 ? (
