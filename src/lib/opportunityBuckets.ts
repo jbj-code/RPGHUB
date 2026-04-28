@@ -12,7 +12,7 @@ export const OPPORTUNITY_BUCKETS: OpportunityBucket[] = [
   {
     id: "full",
     label: "Full universe + movers",
-    description: "Broad US list (~700+ names) plus live index movers.",
+    description: "Broad US list (~420+ names) plus live index movers.",
     symbols: [],
   },
   {

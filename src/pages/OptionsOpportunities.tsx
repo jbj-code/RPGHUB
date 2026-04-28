@@ -27,6 +27,8 @@ type RankedOption = {
   company: string;
   oneMonthPerfPct: number | null;
   otmPct: number;
+  /** Real OTM % from strike vs spot (e.g. 7.3 % for a strike $7.30 OTM on a $100 stock). */
+  actualOtmPct?: number;
   currentPrice: number;
   strike: number;
   bid: number;
@@ -36,6 +38,8 @@ type RankedOption = {
   premiumPerContract: number;
   impliedVolPct?: number | null;
   realizedVol20dPct?: number | null;
+  /** Put-call skew (avg OTM put IV − avg OTM call IV) in percentage points. Positive = puts pricier. */
+  skewPct?: number | null;
   /** |delta| from option quote — probability of finishing ITM / being assigned. */
   delta?: number | null;
   /** Theta: dollars of time decay per contract per day (positive = earned for writes). */
@@ -1170,6 +1174,14 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                             <span style={{ cursor: "help" }}>IV / RV ratio</span>
                           </HelpTooltip>
                         </th>
+                        <th style={thNumStyle}>
+                          <HelpTooltip
+                            theme={t}
+                            text="Put-call skew: average IV of OTM puts minus average IV of equidistant OTM calls (5–20 % OTM range). Positive = puts more expensive than calls = market pricing in downside fear. For put writers: high skew means richer premium. For call writers: negative context."
+                          >
+                            <span style={{ cursor: "help" }}>Skew</span>
+                          </HelpTooltip>
+                        </th>
                         <th style={thNumStyle}>{tableQuotePrimary}</th>
                         <th style={thNumStyle}>{tableAnnLabel}</th>
                         <th style={thNumStyle}>{tablePremLabel}</th>
@@ -1179,7 +1191,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                     <tbody>
                       {arr.length === 0 ? (
                         <tr>
-                          <td colSpan={12} style={{ ...tdStyle, color: t.colors.textMuted }}>
+                          <td colSpan={13} style={{ ...tdStyle, color: t.colors.textMuted }}>
                             No results for this OTM level
                           </td>
                         </tr>
@@ -1220,7 +1232,14 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                                 {formatPct(r.oneMonthPerfPct)}
                               </td>
                               <td style={tdNumStyle}>{formatStrikePrice(r.currentPrice)}</td>
-                              <td style={tdNumStyle}>{formatStrikePrice(r.strike)}</td>
+                              <td style={tdNumStyle}>
+                                {formatStrikePrice(r.strike)}
+                                {r.actualOtmPct != null && (
+                                  <span style={{ display: "block", fontSize: "0.7rem", color: t.colors.textMuted, fontWeight: 500 }}>
+                                    {r.actualOtmPct.toFixed(1)}% OTM
+                                  </span>
+                                )}
+                              </td>
                               {/* Δ Prob — assignment probability from delta */}
                               <td style={{
                                 ...tdNumStyle,
@@ -1255,6 +1274,28 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                                   return (
                                     <span style={{ display: "block", fontSize: "0.7rem", fontWeight: 600, color }}>
                                       {ratio.toFixed(2)}× IV/RV
+                                    </span>
+                                  );
+                                })()}
+                              </td>
+                              {/* Put-call skew */}
+                              <td style={tdNumStyle}>
+                                {r.skewPct == null ? (
+                                  <span style={{ color: t.colors.textMuted }}>—</span>
+                                ) : (() => {
+                                  const skew = r.skewPct;
+                                  // Positive skew = puts pricier; green for put writers, neutral for calls
+                                  // For put writers and call buyers: positive skew is good.
+                                  // For call writers and put buyers: negative skew is good.
+                                  const isWrite = outcomePositionSide === "write";
+                                  const isPutSide = (r.occSymbol ?? "").includes("P");
+                                  const isGood = isWrite ? (isPutSide ? skew > 0 : skew < 0) : (!isPutSide ? skew < 0 : skew > 0);
+                                  const color = Math.abs(skew) < 2
+                                    ? t.colors.textMuted
+                                    : isGood ? t.colors.success : t.colors.danger;
+                                  return (
+                                    <span style={{ fontWeight: 600, color }}>
+                                      {skew > 0 ? "+" : ""}{skew.toFixed(1)}pp
                                     </span>
                                   );
                                 })()}

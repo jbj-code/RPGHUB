@@ -1,8 +1,9 @@
 // Options Opportunity Screener
 // Uses a hardcoded broad US equity universe (no external CSV) plus Schwab's live
-// movers endpoint to capture high-volatility candidates. Sorts by market cap
-// (largest/most-liquid first, via /instruments?projection=fundamental), fetches chains
-// for the top underlyings, and ranks by annualised yield.
+// movers endpoint to capture high-volatility candidates. Fetches price history to
+// compute 20-day realized vol, then focuses chain fetches on the top 100 most-volatile
+// names. Ranks by a volatility-weighted composite score: annualised yield × ivBonus
+// (sqrt of IV/30) × IV/RV ratio × put-call skew multiplier × gamma penalty.
 
 import { createClient } from "@supabase/supabase-js";
 import { toOCCSymbol, getValidAccessToken } from "../_schwab-utils.js";
@@ -167,7 +168,12 @@ type RankedOption = {
   ticker: string;
   company: string;
   oneMonthPerfPct: number | null;
+  /** Broad frontend section key (5 | 10 | 15 | 20). */
   otmPct: number;
+  /** 1 % sub-band label used for diversity selection (not sent to frontend). */
+  subBandPct: number;
+  /** Real OTM % computed from strike / spot price. */
+  actualOtmPct: number;
   currentPrice: number;
   strike: number;
   bid: number;
@@ -180,6 +186,8 @@ type RankedOption = {
   impliedVolPct: number | null;
   /** ~20 trading-day annualized realized vol from daily closes (%), else null. */
   realizedVol20dPct: number | null;
+  /** Put-call skew (avg OTM put IV − avg OTM call IV) for this underlying, in percentage points. */
+  skewPct: number | null;
   /** |delta| from option quote (0–1). Approximates probability of finishing ITM / being assigned. */
   delta: number | null;
   /** Theta from option quote: dollars of time-decay earned (write) or lost (buy) per calendar day per contract. */
@@ -322,60 +330,54 @@ function formatSchwabSymbol(args: {
  * Fetch market cap for each ticker via /instruments?projection=fundamental.
  * Schwab returns marketCap in full dollars (e.g. DDOG ≈ 45816670078 = $45.8B).
  *
- * Handles all known Schwab response shapes:
- *   • Wrapped array:   { "instruments": [{ symbol, fundamental }] }  ← most common
- *   • Symbol-keyed map: { "DDOG": { fundamental } }
- *   • Bare array:      [{ symbol, fundamental }]
- *   • Single object:   { symbol, fundamental }
+ * Uses comma-separated batches of 20 symbols per request (confirmed working).
+ * Response shape: { "instruments": [{ symbol, fundamental: { marketCap, ... } }] }
  */
 async function fetchMarketCapsBatched(
   tickers: string[],
   accessToken: string,
 ): Promise<Record<string, number | null>> {
   const caps: Record<string, number | null> = {};
-  const BATCH = 10;
+  const BATCH = 25;
   for (let i = 0; i < tickers.length; i += BATCH) {
-    // Small pause between batches to avoid contributing to Schwab 429 bursts.
     if (i > 0) await new Promise((r) => setTimeout(r, 80));
-    await Promise.allSettled(
-      tickers.slice(i, i + BATCH).map(async (ticker) => {
-        try {
-          const url =
-            `https://api.schwabapi.com/marketdata/v1/instruments?` +
-            new URLSearchParams({ symbol: ticker, projection: "fundamental" }).toString();
-          const resp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-          if (!resp.ok) return;
-          const body: any = await resp.json();
+    const batch = tickers.slice(i, i + BATCH);
+    try {
+      const url =
+        `https://api.schwabapi.com/marketdata/v1/instruments?` +
+        new URLSearchParams({ symbol: batch.join(","), projection: "fundamental" }).toString();
+      const resp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (!resp.ok) continue;
+      const body: any = await resp.json();
 
-          let inst: any;
-          if (Array.isArray(body)) {
-            // Bare array: [{ symbol, fundamental }]
-            inst =
-              body.find((x: any) => x?.symbol?.toUpperCase() === ticker.toUpperCase()) ??
-              body[0];
-          } else if (typeof body === "object" && body !== null) {
-            const firstVal = Object.values(body)[0];
-            if (Array.isArray(firstVal)) {
-              // Wrapped array: { "instruments": [{ symbol, fundamental }] }
-              inst =
-                (firstVal as any[]).find(
-                  (x: any) => x?.symbol?.toUpperCase() === ticker.toUpperCase(),
-                ) ?? (firstVal as any[])[0];
-            } else {
-              // Symbol-keyed map or single object
-              inst =
-                body[ticker] ?? body[ticker.toUpperCase()] ?? firstVal;
-            }
-          }
+      // Normalise to an array of instrument objects
+      let instruments: any[];
+      if (Array.isArray(body)) {
+        instruments = body;
+      } else if (Array.isArray(body?.instruments)) {
+        instruments = body.instruments;               // most common: { "instruments": [...] }
+      } else if (typeof body === "object" && body !== null) {
+        // Symbol-keyed map: { "DDOG": { fundamental: {...} } }
+        instruments = Object.entries(body).map(([sym, val]) => ({
+          symbol: sym,
+          ...((val as any) ?? {}),
+        }));
+      } else {
+        continue;
+      }
 
-          const mc = inst?.fundamental?.marketCap;
-          caps[ticker] =
-            typeof mc === "number" && Number.isFinite(mc) && mc > 0 ? mc : null;
-        } catch {
-          caps[ticker] = null;
-        }
-      }),
-    );
+      for (const inst of instruments) {
+        const sym = inst?.symbol?.toUpperCase?.();
+        if (!sym) continue;
+        const mc = inst?.fundamental?.marketCap;
+        caps[sym] = typeof mc === "number" && Number.isFinite(mc) && mc > 0 ? mc : null;
+      }
+    } catch {
+      // Mark batch as unavailable rather than crashing the whole scan
+      for (const ticker of batch) {
+        if (!(ticker in caps)) caps[ticker] = null;
+      }
+    }
   }
   return caps;
 }
@@ -390,12 +392,18 @@ async function fetchMarketCapsBatched(
  * 15-bucket  → 15% – 19.9% OTM  (moderate)
  * 20-bucket  → 20% – 30%   OTM  (conservative)
  */
-const OTM_BUCKETS = [
-  { label: 5 as const,  min: 5,  max: 10 },
-  { label: 10 as const, min: 10, max: 15 },
-  { label: 15 as const, min: 15, max: 20 },
-  { label: 20 as const, min: 20, max: 31 }, // 31 effectively covers up to 30%
-] as const;
+// 1% granularity from 5 % through 29 % (upper bound of last bucket = 30 %).
+// Finer bands let the diversity-selection step populate every OTM sub-level so the
+// user sees options at 5 %, 6 %, 7 % … not just the "sweet-spot" 7–8 % cluster.
+const OTM_BUCKETS = Array.from({ length: 25 }, (_, i) => ({ label: i + 5, min: i + 5, max: i + 6 }));
+
+/** Map a 1 % bucket label to the broad frontend section key (5 | 10 | 15 | 20). */
+function broadBucket(label: number): 5 | 10 | 15 | 20 {
+  if (label >= 20) return 20;
+  if (label >= 15) return 15;
+  if (label >= 10) return 10;
+  return 5;
+}
 
 /** Returns every OTM strike in [minOtmPct, maxOtmPct) for the given side. */
 function getStrikesInRange(
@@ -416,6 +424,47 @@ function getStrikesInRange(
       return otm >= minOtmPct && otm < maxOtmPct;
     }
   });
+}
+
+/**
+ * Put-call skew: average IV of OTM puts (5–20 %) minus average IV of equidistant OTM calls.
+ * Positive value = market is paying up for downside protection (normal / fearful market).
+ * Uses whichever strikes are present in the chain response.
+ */
+function computePutCallSkew(
+  callStrikesObj: Record<string, any> | null,
+  putStrikesObj: Record<string, any> | null,
+  spot: number,
+): number | null {
+  const MIN_OTM = 5, MAX_OTM = 20;
+  let callSum = 0, callCnt = 0, putSum = 0, putCnt = 0;
+
+  for (const [sk, contracts] of Object.entries(callStrikesObj ?? {})) {
+    const strike = Number(sk);
+    if (!Number.isFinite(strike) || strike <= spot) continue;
+    const otm = ((strike - spot) / spot) * 100;
+    if (otm < MIN_OTM || otm >= MAX_OTM) continue;
+    if (Array.isArray(contracts) && contracts.length > 0) {
+      const c = contracts[0];
+      if (c?.isMini || c?.isNonStandard) continue;
+      const iv = impliedVolPercentFromQuote(c);
+      if (iv != null && iv > 0) { callSum += iv; callCnt++; }
+    }
+  }
+  for (const [sk, contracts] of Object.entries(putStrikesObj ?? {})) {
+    const strike = Number(sk);
+    if (!Number.isFinite(strike) || strike >= spot) continue;
+    const otm = ((spot - strike) / spot) * 100;
+    if (otm < MIN_OTM || otm >= MAX_OTM) continue;
+    if (Array.isArray(contracts) && contracts.length > 0) {
+      const c = contracts[0];
+      if (c?.isMini || c?.isNonStandard) continue;
+      const iv = impliedVolPercentFromQuote(c);
+      if (iv != null && iv > 0) { putSum += iv; putCnt++; }
+    }
+  }
+  if (callCnt === 0 || putCnt === 0) return null;
+  return round2(putSum / putCnt - callSum / callCnt);
 }
 
 export async function handler(req: any, res: any): Promise<void> {
@@ -454,8 +503,10 @@ export async function handler(req: any, res: any): Promise<void> {
   const minMarketCap = body.minMarketCap != null ? Number(body.minMarketCap) : null;
   // Two-tier cap: survey a wide universe through price history, then focus chain
   // fetches on the most volatile names (highest realized vol = richest options).
-  const MAX_HISTORY_UNDERLYINGS = 200;
-  const MAX_CHAIN_UNDERLYINGS = 100;
+  // Price-history concurrency raised to 20 (vs 10) to keep the history step under ~8 s
+  // even at 280 underlyings. Chain concurrency stays at 10 — each chain call is heavier.
+  const MAX_HISTORY_UNDERLYINGS = 280;
+  const MAX_CHAIN_UNDERLYINGS = 120;
 
   try {
     const supabaseUrl = process.env.SUPABASE_URL;
@@ -563,9 +614,15 @@ export async function handler(req: any, res: any): Promise<void> {
       }
     }
 
-    // 2b) Market cap via /instruments?projection=fundamental (only when filter is active)
+    // 2b) Market cap — always fetched (fast with batch calls: ~2 s for 340 tickers).
+    // Used for two purposes:
+    //   a) Sorting the universe so the 200-ticker price-history cap always covers the
+    //      most liquid/largest names (not arbitrary insertion order).
+    //   b) Filtering by minMarketCap when that option is active.
+    // ETFs / instruments with no market cap data (null) are kept through both sort and filter.
     const marketCapByTicker: Record<string, number | null> = {};
-    if (minMarketCap != null && Number.isFinite(minMarketCap) && minMarketCap > 0) {
+    if (!clientUniverse || clientUniverse.length === 0) {
+      // Skip for custom buckets — user chose those symbols deliberately.
       const caps = await fetchMarketCapsBatched(tickers, accessToken);
       Object.assign(marketCapByTicker, caps);
     }
@@ -583,13 +640,15 @@ export async function handler(req: any, res: any): Promise<void> {
           "Market cap data not returned by Schwab for these symbols; skipping market cap filter."
         );
       } else {
+        // Null market cap (e.g. ETFs) is treated as passing the filter.
         effectiveTickers = effectiveTickers.filter(
           (t) => marketCapByTicker[t] == null || (marketCapByTicker[t] ?? 0) >= minMarketCap
         );
       }
     }
 
-    // Sort by market cap descending so we always scan the largest/most liquid names first
+    // Sort by market cap descending so the 200-ticker price-history cap always covers the
+    // largest / most-liquid names. Tickers with no market cap data sort to the end.
     effectiveTickers.sort((a, b) => {
       const ma = marketCapByTicker[a] ?? -1;
       const mb = marketCapByTicker[b] ?? -1;
@@ -613,7 +672,7 @@ export async function handler(req: any, res: any): Promise<void> {
     // 4) 1-month price performance + ~20d realized vol, parallel batches of 10
     const upsideByTicker: Record<string, number | null> = {};
     const realizedVol20dPctByTicker: Record<string, number | null> = {};
-    const HISTORY_CONCURRENCY = 10;
+    const HISTORY_CONCURRENCY = 20;
     for (let hi = 0; hi < effectiveTickers.length; hi += HISTORY_CONCURRENCY) {
       await Promise.allSettled(
         effectiveTickers.slice(hi, hi + HISTORY_CONCURRENCY).map(async (symbol) => {
@@ -687,14 +746,33 @@ export async function handler(req: any, res: any): Promise<void> {
       ticker: string;
       expiry: string;
       type: "C" | "P";
+      /** Broad frontend section key (5 | 10 | 15 | 20). */
       otmPct: number;
+      /** 1 % sub-band label (5–29) used for diversity selection. */
+      subBandPct: number;
       strike: number;
       currentPrice: number;
       /** IV from chain contract when quote omits it (same normalization as quotes). */
       impliedVolPctFromChain?: number | null;
     };
     const specs: OptionSpec[] = [];
+    const skewPctByTicker: Record<string, number | null> = {};
     let chainRateLimitHits = 0;
+
+    /** Find the closest-matching strikes object for a given expMap + target date. */
+    function resolveExpiryStrikesObj(expMap: Record<string, any>): any {
+      let best: any = null, bestDiffMs: number | null = null;
+      for (const [expKey, strikesObj] of Object.entries(expMap)) {
+        const exp = toExpiryYYYYMMDD(expKey);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(exp)) continue;
+        const d = new Date(exp + "T00:00:00Z");
+        if (Number.isNaN(d.getTime())) continue;
+        const diff = Math.abs(d.getTime() - expiryDate!.getTime());
+        if (diff === 0) return strikesObj;
+        if (bestDiffMs == null || diff < bestDiffMs) { bestDiffMs = diff; best = strikesObj; }
+      }
+      return best ?? Object.values(expMap)[0] ?? null;
+    }
 
     const CHAIN_CONCURRENCY = 10;
     for (let ci = 0; ci < chainTickers.length; ci += CHAIN_CONCURRENCY) {
@@ -703,10 +781,10 @@ export async function handler(req: any, res: any): Promise<void> {
           const spot = currentPriceByTicker[ticker];
           if (!spot || spot <= 0) return;
 
-          const contractType = type === "C" ? "CALL" : "PUT";
+          // Request ALL so both maps are returned; non-primary side used for skew.
           const params = new URLSearchParams({
             symbol: ticker,
-            contractType,
+            contractType: "ALL",
             includeUnderlyingQuote: "FALSE",
             strategy: "SINGLE",
             fromDate: fromStr,
@@ -722,29 +800,21 @@ export async function handler(req: any, res: any): Promise<void> {
           if (chainResp.status === 429) { chainRateLimitHits++; return; }
           if (!chainResp.ok) return;
           const chainBody: any = await chainResp.json();
-          const expMap = type === "C" ? chainBody?.callExpDateMap : chainBody?.putExpDateMap;
-          if (!expMap || typeof expMap !== "object") return;
 
-          let strikesObjForExpiry: any = null;
-          let bestExpiryDiffMs: number | null = null;
-
-          for (const [expKey, strikesObj] of Object.entries<any>(expMap)) {
-            const exp = toExpiryYYYYMMDD(expKey);
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(exp)) continue;
-            const expDate = new Date(exp + "T00:00:00Z");
-            if (Number.isNaN(expDate.getTime())) continue;
-            const diffMs = Math.abs(expDate.getTime() - expiryDate.getTime());
-            if (diffMs === 0) { strikesObjForExpiry = strikesObj; break; }
-            if (bestExpiryDiffMs == null || diffMs < bestExpiryDiffMs) {
-              bestExpiryDiffMs = diffMs;
-              strikesObjForExpiry = strikesObj;
-            }
-          }
-
-          if (!strikesObjForExpiry) {
-            strikesObjForExpiry = Object.entries<any>(expMap)[0]?.[1] ?? null;
-          }
+          const primaryExpMap = type === "C" ? chainBody?.callExpDateMap : chainBody?.putExpDateMap;
+          if (!primaryExpMap || typeof primaryExpMap !== "object") return;
+          const strikesObjForExpiry = resolveExpiryStrikesObj(primaryExpMap);
           if (!strikesObjForExpiry || typeof strikesObjForExpiry !== "object") return;
+
+          // Compute put-call skew using both sides at the same expiry window.
+          const otherExpMap = type === "C" ? chainBody?.putExpDateMap : chainBody?.callExpDateMap;
+          const otherSO = otherExpMap && typeof otherExpMap === "object"
+            ? resolveExpiryStrikesObj(otherExpMap) : null;
+          skewPctByTicker[ticker] = computePutCallSkew(
+            type === "C" ? strikesObjForExpiry : otherSO,
+            type === "P" ? strikesObjForExpiry : otherSO,
+            spot,
+          );
 
           const strikes: number[] = [];
           for (const [strikeStr, contracts] of Object.entries<any>(strikesObjForExpiry)) {
@@ -754,8 +824,7 @@ export async function handler(req: any, res: any): Promise<void> {
           }
           if (strikes.length === 0) return;
 
-          // For each OTM bucket, evaluate every listed strike in the range.
-          // The ranking step picks the best contract per ticker per bucket.
+          // Iterate 1 % sub-bands; diversity selection later ensures each OTM level represented.
           for (const bucket of OTM_BUCKETS) {
             const validStrikes = getStrikesInRange(strikes, spot, bucket.min, bucket.max, type);
             for (const strike of validStrikes) {
@@ -771,8 +840,7 @@ export async function handler(req: any, res: any): Promise<void> {
               let impliedVolPctFromChain: number | null = null;
               if (Array.isArray(contractsRaw) && contractsRaw.length > 0) {
                 const c0 = contractsRaw[0];
-                // Skip mini (10-share) and non-standard contracts to avoid 10× wrong premiums.
-                if (c0?.isMini === true || c0?.isNonStandard === true) continue;
+                  if (c0?.isMini === true || c0?.isNonStandard === true) continue;
                 impliedVolPctFromChain =
                   c0 && typeof c0 === "object" ? impliedVolPercentFromQuote(c0) : null;
               }
@@ -780,7 +848,8 @@ export async function handler(req: any, res: any): Promise<void> {
                 ticker,
                 expiry: expiration,
                 type,
-                otmPct: bucket.label,
+                subBandPct: bucket.label,          // 1 % sub-band (5–29)
+                otmPct: broadBucket(bucket.label),  // broad key   (5 | 10 | 15 | 20)
                 strike,
                 currentPrice: spot,
                 impliedVolPctFromChain,
@@ -893,13 +962,14 @@ export async function handler(req: any, res: any): Promise<void> {
       // Adaptive thresholds: farther-OTM options have low absolute prices where even a $0.10
       // spread on a $0.25 option is 40%. Apply tiered (not linear) allowances so 15-20% OTM
       // tables aren't starved of candidates.
-      const otmTierAdj = spec.otmPct <= 5 ? 0 : spec.otmPct <= 10 ? 0.10 : spec.otmPct <= 15 ? 0.22 : 0.38;
-      const maxSpreadPct = (isBuyToOpen ? 0.32 : 0.25) + otmTierAdj;
+      // More forgiving spread thresholds: far-OTM options legitimately have wide markets.
+      const otmTierAdj = spec.otmPct <= 5 ? 0 : spec.otmPct <= 10 ? 0.12 : spec.otmPct <= 15 ? 0.25 : 0.45;
+      const maxSpreadPct = (isBuyToOpen ? 0.42 : 0.35) + otmTierAdj;
       if (spreadPct > maxSpreadPct) {
         liquidityFiltered.spread++;
         continue;
       }
-      const minOI = spec.otmPct <= 5 ? 50 : spec.otmPct <= 10 ? 30 : spec.otmPct <= 15 ? 20 : 10;
+      const minOI = spec.otmPct <= 5 ? 25 : spec.otmPct <= 10 ? 12 : spec.otmPct <= 15 ? 6 : 3;
       const oi = quote?.openInterest ?? null;
       if (oi != null && oi < minOI) {
         liquidityFiltered.oi++;
@@ -930,43 +1000,65 @@ export async function handler(req: any, res: any): Promise<void> {
       const ivPct = quote?.impliedVolPct ?? spec.impliedVolPctFromChain ?? null;
       const rvPct = realizedVol20dPctByTicker[spec.ticker] ?? null;
       const volMult = volIvRvMultiplier(isBuyToOpen, ivPct, rvPct);
-      const baseScore = isBuyToOpen
-        ? ((probITM * 100) / Math.max(annAbs, 0.05)) * liqScore
-        : annAbs * Math.pow(1 - probITM, 1.35) * liqScore;
 
-      // IV level multiplier — symmetric but opposite for writes vs buys.
+      // IV bonus: volatility as a primary scoring factor, not just a multiplier.
       //
-      // Writes: boost when raw IV is high AND premium is at least fair (IV/RV ≥ 0.90).
-      //   +0.6% per pp above 20%, capped at 2.0×. Ensures high-IV rich names rank above
-      //   moderate-IV but liquid ones purely on spread tightness.
+      // Writes: sqrt(IV / 30) — normalised to 1.0 at 30 % IV.
+      //   80 % IV → ×1.63  |  120 % IV → ×2.0  |  15 % IV → ×0.71
+      //   High raw IV is the primary signal for premium richness. The IV/RV ratio
+      //   (volMult) then further rewards when that premium is also "rich" vs realised vol.
       //
-      // Buys: penalise when IV is high AND IV/RV ≥ 1.0 (overpriced premium).
-      //   If IV is high but IV/RV < 1.0 (stock moves more than implied), no penalty —
-      //   that's actually cheap for the buyer.
-      const ivLevelMult = (() => {
-        if (ivPct == null || ivPct <= 20) return 1.0;
-        if (!isBuyToOpen) {
-          if (rvPct != null && rvPct > 0 && ivPct / rvPct < 0.90) return 1.0;
-          return clamp(1 + 0.006 * (ivPct - 20), 1.0, 2.0);
-        } else {
-          // Penalise expensive options: IV high AND IV/RV ≥ 1.0
-          if (rvPct != null && rvPct > 0 && ivPct / rvPct >= 1.0) {
-            return clamp(1 - 0.004 * (ivPct - 20), 0.5, 1.0);
-          }
-          return 1.0;
+      // Buys: sqrt(30 / IV) — inverse; rewards cheap options (low IV relative to 30 % norm).
+      //   20 % IV → ×1.22  |  15 % IV → ×1.41  |  60 % IV → ×0.71
+      //   volMult (RV/IV ratio) then further boosts when the stock is moving more than implied.
+      const ivBonus = (() => {
+        if (ivPct == null || ivPct <= 0) return 1.0;
+        if (isBuyToOpen) {
+          return clamp(Math.sqrt(30 / Math.max(ivPct, 5)), 0.45, 1.80);
         }
+        return clamp(Math.sqrt(ivPct / 30), 0.35, 2.50);
       })();
 
-      // Gamma penalty for writers: high gamma means delta (assignment probability) can accelerate
-      // rapidly as the stock moves toward the strike. Penalise high-gamma contracts up to 15%.
+      // IV bonus is baked directly into base score so vol is a first-class factor.
+      // For writes, annYieldPct is already IV-driven (higher IV → more expensive options).
+      // Cap it at 80 before multiplying by ivBonus so a 300 % annualised yield on MSTR
+      // doesn't completely crowd out every other name — diversity across tickers is valuable.
+      const baseScore = isBuyToOpen
+        ? ((probITM * 100) / Math.max(annAbs, 0.05)) * liqScore * ivBonus
+        : Math.min(annAbs, 80) * Math.pow(1 - probITM, 1.35) * liqScore * ivBonus;
+
+      // Gamma penalty for writers: high gamma means delta can accelerate rapidly as the stock
+      // moves toward the strike. Penalise high-gamma contracts up to 15%.
       const gammaPenalty = (() => {
         if (isBuyToOpen) return 1; // buyers want high gamma (convexity)
         const g = quote?.gamma;
         if (g == null || g <= 0) return 1;
-        return clamp(1 - g * 5, 0.85, 1.0); // gentle penalty; gamma typically 0.01–0.05 at this strike range
+        return clamp(1 - g * 5, 0.85, 1.0);
       })();
 
-      const score = baseScore * volMult * ivLevelMult * gammaPenalty;
+      // Put-call skew multiplier: market-structure signal for premium richness.
+      //
+      // Positive skew (puts > calls) = market paying extra for downside protection.
+      //   Put writes: boost — you collect the richest premium side. +0.8% per pp, cap 1.20×.
+      //   Call writes: slight discount — calls are relatively cheap. −0.4% per pp, floor 0.90×.
+      //   Put buys: discount — buying the expensive side. −0.8% per pp, floor 0.80×.
+      //   Call buys: bonus  — calls are cheap vs puts.   +0.4% per pp, cap 1.15×.
+      const skewMult = (() => {
+        const skew = skewPctByTicker[spec.ticker] ?? null;
+        if (skew == null) return 1.0;
+        const s = clamp(skew, -30, 30);
+        if (!isBuyToOpen) {
+          return type === "P"
+            ? clamp(1 + s * 0.008, 0.90, 1.20)   // put write: boost for high put skew
+            : clamp(1 - s * 0.004, 0.90, 1.05);   // call write: slight discount
+        } else {
+          return type === "P"
+            ? clamp(1 - s * 0.008, 0.80, 1.10)   // put buy: penalise expensive puts
+            : clamp(1 + s * 0.004, 0.90, 1.15);  // call buy: bonus when calls are cheap
+        }
+      })();
+
+      const score = baseScore * volMult * gammaPenalty * skewMult;
       if (ivPct != null) rankedRowsWithIv++;
       else rankedRowsWithoutIv++;
 
@@ -978,6 +1070,13 @@ export async function handler(req: any, res: any): Promise<void> {
         strike: spec.strike,
       });
 
+      // Compute actual OTM % from real strike vs spot (used for display and diversity sorting).
+      const actualOtmPct = round2(
+        type === "C"
+          ? ((spec.strike - spec.currentPrice) / spec.currentPrice) * 100
+          : ((spec.currentPrice - spec.strike) / spec.currentPrice) * 100
+      );
+
       if (!resultsByOtmPct[spec.otmPct]) resultsByOtmPct[spec.otmPct] = [];
       resultsByOtmPct[spec.otmPct].push({
         rank: 0,
@@ -988,6 +1087,8 @@ export async function handler(req: any, res: any): Promise<void> {
             ? null
             : round2(upsideByTicker[spec.ticker]!),
         otmPct: spec.otmPct,
+        subBandPct: spec.subBandPct,
+        actualOtmPct,
         currentPrice: round2(spec.currentPrice),
         strike: round2(spec.strike),
         bid: round2(bid),
@@ -997,6 +1098,7 @@ export async function handler(req: any, res: any): Promise<void> {
         premiumPerContract: round2(premiumPerContract),
         impliedVolPct: ivPct == null ? null : round2(ivPct),
         realizedVol20dPct: rvPct == null ? null : round2(rvPct),
+        skewPct: skewPctByTicker[spec.ticker] ?? null,
         delta: rawDelta != null ? round2(clamp(Math.abs(rawDelta), 0, 1)) : null,
         // thetaPerDay: dollars of time decay per contract per day.
         // Schwab theta is negative (value decays); flip sign for writes so display is positive $ earned/day.
@@ -1054,18 +1156,16 @@ export async function handler(req: any, res: any): Promise<void> {
 
     for (const otmPct of otmLevels) {
       const arr = resultsByOtmPct[otmPct] ?? [];
-      // Within-bucket dedup: with range-based spec collection a ticker may have multiple
-      // contracts in the same bucket (e.g. AMKR at 6% and 8.5% OTM both in the 5-9% band).
-      // Keep only the highest-scoring contract per ticker before final ranking.
+      // Keep the single best-scoring contract per ticker within the broad section.
+      // The 7–8 % clustering within a 5–9 % band is correct — that IS the optimal yield/risk
+      // point. actualOtmPct in the result lets users see the precise strike distance.
       const tickerBest = new Map<string, (typeof arr)[0]>();
       for (const row of arr) {
         const ex = tickerBest.get(row.ticker);
         if (!ex || row.score > ex.score) tickerBest.set(row.ticker, row);
       }
       const deduped = Array.from(tickerBest.values()).sort((a, b) =>
-        b.score !== a.score
-          ? b.score - a.score
-          : b.annYieldPct - a.annYieldPct
+        b.score !== a.score ? b.score - a.score : b.annYieldPct - a.annYieldPct
       );
       deduped.slice(0, topN).forEach((r, idx) => (r.rank = idx + 1));
       resultsByOtmPct[otmPct] = deduped.slice(0, topN);
