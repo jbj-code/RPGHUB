@@ -1168,8 +1168,8 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                           <HelpTooltip
                             theme={t}
                             text={outcomePositionSide === "buy"
-                              ? "IV / RV: Schwab implied vol / ~20-day realized vol. When IV/RV < 1.0 you are paying less than the stock's actual movement — favorable for buyers. Green = cheap (ratio < 1), red = expensive. RV 20d is the annualised realized vol shown next to IV."
-                              : "IV / RV: Schwab implied vol / ~20-day realized vol. The IV/RV ratio is the 'free lunch' signal — when IV/RV > 1.0 the market pays you more premium than the stock is actually moving. Green = rich (ratio ≥ 1), red = cheap. RV 20d is the annualised realized vol shown next to IV."}
+                              ? "IV / RV ratio — compares what the option market implies will happen (IV) to what the stock has actually done over the past 20 trading days (RV). For buying: below 1.0 (green) means options are cheap relative to real movement — you're getting more bang for your buck. Above 1.0 (red) means options are expensive. The ratio is a key ranking signal alongside raw IV."
+                              : "IV / RV ratio — compares what the option market implies will happen (IV) to what the stock has actually done over the past 20 trading days (RV). For selling: above 1.0 (green) means options are rich relative to real movement — you collect more premium than the stock's actual risk justifies. This is the core 'free lunch' signal. Below 0.90 (red) means the stock is moving more than options imply — avoid writing these."}
                           >
                             <span style={{ cursor: "help" }}>IV / RV ratio</span>
                           </HelpTooltip>
@@ -1177,7 +1177,9 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                         <th style={thNumStyle}>
                           <HelpTooltip
                             theme={t}
-                            text="Put-call skew: average IV of OTM puts minus average IV of equidistant OTM calls (5–20 % OTM range). Positive = puts more expensive than calls = market pricing in downside fear. For put writers: high skew means richer premium. For call writers: negative context."
+                            text={outcomePositionSide === "buy"
+                              ? "Skew — measures whether puts or calls are more expensive. Calculated as (avg IV of OTM puts) minus (avg IV of OTM calls), 5–20% range. Positive = puts pricier (market fears a drop). Negative = calls pricier (market expects a rally). For buying calls: negative skew is good — calls are relatively cheap. For buying puts: positive skew means you're paying a premium for downside protection."
+                              : "Skew — measures whether puts or calls are more expensive. Calculated as (avg IV of OTM puts) minus (avg IV of OTM calls), 5–20% range. Positive = puts pricier (market fears a drop) — great for put writes since you collect richer premium. Negative = calls pricier or near-neutral — typical for most stocks, fine for call writes. Small values near 0pp mean puts and calls are priced similarly."}
                           >
                             <span style={{ cursor: "help" }}>Skew</span>
                           </HelpTooltip>

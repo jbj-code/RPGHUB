@@ -82,8 +82,28 @@ const UNIVERSE_SYMBOLS: string[] = [
   // Travel / hospitality / airlines
   "MAR","HLT","H","LVS","MGM","WYNN","RCL","CCL","NCLH",
   "AAL","DAL","UAL","LUV","JBLU","CZR",
-  // Crypto-adjacent / high-vol narrative (consistently elevated IV vs RV)
-  "MSTR","MARA","RIOT","DKNG","CELH","SNAP","SMCI",
+  // High-vol narrative / crypto-adjacent
+  "MARA","RIOT","DKNG","CELH","SNAP","SMCI",
+  // S&P 500 additions — fills coverage gaps toward full index
+  // Financials (regional banks + insurance + exchanges)
+  "FITB","RF","CFG","HBAN","KEY","MTB","ZION",
+  "HIG","WTW","CINF","AIZ","L","CBOE","MSCI","VRSK","FDS","AJG",
+  // Technology / professional services
+  "ADP","PAYX","CDW","GDDY","CTSH",
+  // Consumer / retail / homebuilders
+  "ORLY","AZO","LEN","DHI","PHM","NVR","TOL","TSCO","DECK","RL","PVH","TPR","VFC",
+  // Industrials / transport / waste
+  "CARR","OTIS","WM","RSG","CTAS","EXPD","CHRW","JBHT","XPO","SAIA","PWR","PCAR",
+  // Materials / chemicals
+  "PPG","IFF","LYB","BALL","OLN","FMC","RPM",
+  // Healthcare / med-tech additions
+  "STE","WAT","CRL","ZTS","RVTY","PODD",
+  // Renewables / clean energy (high IV)
+  "FSLR","ENPH","PLUG","BE",
+  // Utilities additions
+  "PEG","AES","CMS","PPL","LNT","AEE","ETR","FE","EIX",
+  // REITs additions
+  "HST","KIM","MAA","FRT","CPT","UDR","CUBE",
   // Liquid ETFs (broad options market)
   "SPY","QQQ","IWM","GLD","SLV","TLT","HYG","EFA","EEM","GDX",
   "XLF","XLK","XLE","XLV","XLI","XLY","XLP","XLU","XLB","XLRE",
