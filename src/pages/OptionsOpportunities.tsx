@@ -99,33 +99,32 @@ function formatVolPct(n: number | null | undefined): string {
   return `${n.toFixed(1)}%`;
 }
 
-/** Build a tab-separated string for the given bucket — paste directly into Excel. */
+/** Build a tab-separated string for the given bucket — paste directly into Excel.
+ *  IV, RV and Ann.Yield are in decimal form (0.83 = 83%) for easy Excel calculations. */
 function buildBucketTsv(rows: RankedOption[], positionSide: PositionSide): string {
   const n = (v: number | null | undefined, d = 2) => (v == null || !Number.isFinite(v) ? "" : v.toFixed(d));
+  const pct = (v: number | null | undefined) => (v == null || !Number.isFinite(v) ? "" : (v / 100).toFixed(4));
   const headers = [
-    "Rank", "Ticker", "Company", "1M Perf %", "Price", "Strike", "OTM %",
-    "Δ Prob %", "IV %", "RV 20d %", "Skew", "Bid", "Ask",
-    positionSide === "buy" ? "Ann. Debit %" : "Ann. Yield %",
+    "Rank", "Ticker", "Company", "1M Return", "Price", "Strike", "OTM %",
+    "IV", "RV 20d", "Skew", "Bid", "Ask",
+    positionSide === "buy" ? "Ann. Debit" : "Ann. Yield",
     positionSide === "buy" ? "Debit ($)" : "Premium ($)",
-    "OCC Symbol",
   ];
   const dataRows = rows.map((r) => [
     r.rank,
     r.ticker,
     r.company,
-    n(r.oneMonthPerfPct),
+    pct(r.oneMonthPerfPct),
     n(r.currentPrice),
     n(r.strike),
     n(r.actualOtmPct),
-    r.delta != null ? n(r.delta * 100, 1) : "",
-    n(r.impliedVolPct, 1),
-    n(r.realizedVol20dPct, 1),
+    pct(r.impliedVolPct),
+    pct(r.realizedVol20dPct),
     r.skewPct != null ? n(r.skewPct, 1) : "",
     n(r.bid),
     n(r.ask ?? r.bid),
-    n(r.annYieldPct),
+    pct(r.annYieldPct),
     n(r.premiumPerContract),
-    r.occSymbol,
   ].join("\t"));
   return [headers.join("\t"), ...dataRows].join("\n");
 }
@@ -1224,7 +1223,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                         <th style={{ ...thStyle, borderTopLeftRadius: t.radius.md }}>Rank</th>
                         <th style={thStyle}>Ticker</th>
                         <th style={thStyle}>Company</th>
-                        <th style={thNumStyle}>1M Perf</th>
+                        <th style={thNumStyle}>1M Return</th>
                         <th style={thNumStyle}>Px</th>
                         <th style={thNumStyle}>Strike</th>
                         <th style={thNumStyle}>

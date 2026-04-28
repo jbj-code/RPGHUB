@@ -419,10 +419,10 @@ async function fetchMarketCapsBatched(
  * 15-bucket  → 15% – 19.9% OTM  (moderate)
  * 20-bucket  → 20% – 30%   OTM  (conservative)
  */
-// 1% granularity from 5 % through 29 % (upper bound of last bucket = 30 %).
-// Finer bands let the diversity-selection step populate every OTM sub-level so the
-// user sees options at 5 %, 6 %, 7 % … not just the "sweet-spot" 7–8 % cluster.
-const OTM_BUCKETS = Array.from({ length: 25 }, (_, i) => ({ label: i + 5, min: i + 5, max: i + 6 }));
+// 1% granularity from 5% through 39% (upper bound of last bucket = 40%).
+// Extended to 40% to capture deep-OTM options on high-vol names (BE, ENPH, MARA, etc.)
+// that have liquid strikes well beyond 30% OTM.
+const OTM_BUCKETS = Array.from({ length: 35 }, (_, i) => ({ label: i + 5, min: i + 5, max: i + 6 }));
 
 /** Map a 1 % bucket label to the broad frontend section key (5 | 10 | 15 | 20). */
 function broadBucket(label: number): 5 | 10 | 15 | 20 {
@@ -430,6 +430,20 @@ function broadBucket(label: number): 5 | 10 | 15 | 20 {
   if (label >= 15) return 15;
   if (label >= 10) return 10;
   return 5;
+}
+
+/**
+ * Expected actualOtmPct range for each broad bucket, with a ±2% tolerance to
+ * absorb rounding and intraday price drift between equity-quote fetch and chain fetch.
+ */
+function actualOtmMatchesBucket(actualOtmPct: number, broadKey: 5 | 10 | 15 | 20): boolean {
+  const BUFFER = 2;
+  switch (broadKey) {
+    case 5:  return actualOtmPct >= 5  - BUFFER && actualOtmPct < 10 + BUFFER;
+    case 10: return actualOtmPct >= 10 - BUFFER && actualOtmPct < 15 + BUFFER;
+    case 15: return actualOtmPct >= 15 - BUFFER && actualOtmPct < 20 + BUFFER;
+    case 20: return actualOtmPct >= 20 - BUFFER && actualOtmPct < 42;
+  }
 }
 
 /** Returns every OTM strike in [minOtmPct, maxOtmPct) for the given side. */
@@ -1103,6 +1117,10 @@ export async function handler(req: any, res: any): Promise<void> {
           ? ((spec.strike - spec.currentPrice) / spec.currentPrice) * 100
           : ((spec.currentPrice - spec.strike) / spec.currentPrice) * 100
       );
+
+      // Guard: if the real OTM doesn't match the assigned bucket (e.g. due to intraday
+      // price drift between equity-quote fetch and chain fetch), discard the result.
+      if (!actualOtmMatchesBucket(actualOtmPct, spec.otmPct as 5 | 10 | 15 | 20)) continue;
 
       if (!resultsByOtmPct[spec.otmPct]) resultsByOtmPct[spec.otmPct] = [];
       resultsByOtmPct[spec.otmPct].push({
