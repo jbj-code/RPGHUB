@@ -270,13 +270,19 @@ function impliedVolPercentFromQuote(src: any): number | null {
 
 /**
  * Tilt score using IV vs short realized vol (same underlying).
- * Sell: boost when IV > RV (rich premium = "free lunch"). Buy: boost when RV > IV (cheap implied vs recent move).
  *
- * For writes the penalty is ASYMMETRIC — selling cheap premium (IV < RV) is penalised more
- * steeply than the reward for rich premium (IV > RV). This prevents highly-liquid names with
- * mediocre IV/RV (e.g. INTC) from outranking genuinely rich-premium names purely on liquidity.
- *  - IV > RV (r > 1): coefficient 0.40 → up to +50% boost at cap of 1.50
- *  - IV < RV (r < 1): coefficient 0.70 → steeper penalty, floor 0.45
+ * WRITES (sell to open):
+ *   IV > RV (r > 1): coefficient 0.40 → up to +50 % boost, cap 1.50.
+ *   IV < RV (r < 1): TWO-TIER steep penalty.
+ *     r ≥ 0.90: coefficient 1.20 (moderate — premium is slightly cheap but still collectable)
+ *     r < 0.90: coefficient 2.50 (severe  — stock is meaningfully out-moving implied vol;
+ *               writing here is statistically negative-expectancy, essentially eliminate it)
+ *   Floor 0.25 ensures even the worst case doesn't produce a negative score.
+ *
+ * BUYS (buy to open):
+ *   RV > IV (r > 1): coefficient 0.40 → up to +50 % boost (cheap options vs realised move).
+ *   RV < IV (r < 1): coefficient 0.40 → symmetric mild penalty.
+ *   Both clamped [0.60, 1.50].
  */
 function volIvRvMultiplier(isBuyToOpen: boolean, ivPct: number | null, rvPct: number | null): number {
   if (ivPct == null || rvPct == null || ivPct < 0.75 || rvPct < 0.75) return 1;
@@ -285,9 +291,10 @@ function volIvRvMultiplier(isBuyToOpen: boolean, ivPct: number | null, rvPct: nu
     return clamp(1 + 0.4 * (r - 1), 0.60, 1.50);
   }
   const r = ivPct / rvPct;
-  // Asymmetric: steeper penalty when selling cheap premium (IV < RV)
-  const coeff = r < 1 ? 0.70 : 0.40;
-  return clamp(1 + coeff * (r - 1), 0.45, 1.50);
+  if (r >= 1) return clamp(1 + 0.40 * (r - 1), 1.0, 1.50);
+  // Cheap-premium penalty for writes — two-tier steepness
+  const coeff = r >= 0.90 ? 1.20 : 2.50;
+  return clamp(1 + coeff * (r - 1), 0.25, 1.0);
 }
 
 /** Non-empty validated list from client → scan only these symbols (no movers merge). */
