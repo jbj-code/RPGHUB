@@ -19,13 +19,15 @@ Single stock → get_options_chain. Multiple tickers → find_best_options.
 Specify option_type=PUT or CALL when known.
 
 DATA — get_options_chain:
-snap: {best_write_yield_pct, top_oi, atm_iv_pct} — headline numbers, use in opening sentence.
-top_for_writing: ranked by yield_ann desc (rank:1 = best yield). For CSP/covered call picks.
-top_for_buying: ranked by OI desc (rank:1 = most liquid). For directional put/call picks.
-Fields: k=strike, exp, mark, d=delta, iv=IV%, theta=$/day, oi, dte, yield_ann=ann.yield%, otm_pct=OTM%+
+snap: {atm_iv_pct, best_write_yield_pct, top_oi, expected_move} — use all in opening sentence.
+  expected_move = 1σ dollar move to expiry (underlying × IV × √(DTE/365)); cite as "±$X expected move".
+  iv_rv_ratio = IV/20-day realized vol. >1.2 = rich premium (good to sell), <0.8 = cheap (good to buy).
+top_for_writing: rank:1 = highest yield_ann. For CSP/covered call.
+top_for_buying: rank:1 = most liquid (OI). For directional puts/calls.
+Fields: rank, k=strike, exp, mark=(bid+ask)/2, iv=IV%, theta=$/day, oi, dte, yield_ann=ann.yield%, otm_pct=OTM%+(positive=OTM), breakeven=strike∓mark
 
 DATA — find_best_options:
-ranked[]: sorted by yield_ann desc. Fields: rank, ticker, current_price, k, mark, yield_ann, d, iv, otm_pct, dte, oi.
+ranked[]: rank:1 = best. Fields: rank, ticker, current_price, k, mark, breakeven, yield_ann, iv, otm_pct, dte, oi.
 
 DATA — get_fundamentals:
 market_cap_b, pe, eps_ttm, rev_growth_yoy, gross/net_margin_pct, beta, short_float_pct
@@ -33,7 +35,7 @@ market_cap_b, pe, eps_ttm, rev_growth_yoy, gross/net_margin_pct, beta, short_flo
 OUTPUT:
 "[TICKER] at $[price]." + 1 sentence directional context.
 [chart spec here if price history available — BEFORE tables]
-Table: Strike | Exp | Mark | Delta | IV% | Yield/yr | OI | Notes
+Table: Strike | Exp | Mark | OTM% | IV% | Yield/yr | Breakeven | OI | Notes
 1 sentence: best pick + why.
 
 Chart: \`\`\`chart\n{"type":"line","title":"TICKER — 3M","xKey":"date","series":[{"key":"close","label":"Close"}],"data":[...]}\`\`\`
@@ -116,12 +118,16 @@ function compressOptionsChain(raw: any): any {
             ? r2((mark / strike) * (365 / dte) * 100)
             : null;
 
+        // breakeven: price the underlying must stay above (put write) / below (call write)
+        // or move past (for buyers). Same formula regardless of buy/sell direction.
+        const breakeven: number | null =
+          mark > 0 ? (side === "put" ? r2(strike - mark) : r2(strike + mark)) : null;
+
         all.push({
           k: strike,
           exp: expDate,
           side: side === "put" ? "P" : "C",
           mark,
-          d: c?.delta != null ? r2(c.delta) : null,
           iv: c?.volatility != null ? r2(c.volatility) : null,
           theta: c?.theta != null ? r2(c.theta) : null,
           oi,
@@ -129,6 +135,7 @@ function compressOptionsChain(raw: any): any {
           itm,
           yield_ann,
           otm_pct,
+          breakeven,
         });
       }
     }
@@ -162,6 +169,11 @@ function compressOptionsChain(raw: any): any {
   if (top_for_writing[0]?.yield_ann != null) snap.best_write_yield_pct = top_for_writing[0].yield_ann;
   if (top_for_buying[0]?.oi != null) snap.top_oi = top_for_buying[0].oi;
 
+  // expected_move: 1σ dollar range to the nearest expiration using ATM IV
+  if (atmContract && underlyingPrice != null && atm_iv_pct != null && atmContract.dte != null && atmContract.dte > 0) {
+    snap.expected_move = r2(underlyingPrice * (atm_iv_pct / 100) * Math.sqrt(atmContract.dte / 365));
+  }
+
   return {
     underlying_price: underlyingPrice,
     snap,
@@ -180,18 +192,25 @@ function compressScreener(raw: any): any {
   for (const rows of Object.values(resultsByOtmPct as Record<string, any[]>)) {
     if (!rows?.length) continue;
     for (const r of rows) {
+      const mark = r.mark ?? null;
+      const strike = r.strike;
+      const optType: string = raw.optionType ?? "P";
+      const breakeven = mark != null
+        ? (optType === "C" ? r2(strike + mark) : r2(strike - mark))
+        : null;
+
       allRows.push({
         ticker: r.ticker,
-        k: r.strike,
-        current_price: r.currentPrice,    // always include so AI can sanity-check strikes vs price
-        mark: r.mark ?? null,
-        yield_ann: r.annYieldPct,         // pre-computed annualized yield (bid/strike × 365/dte)
-        d: r.delta,
+        k: strike,
+        current_price: r.currentPrice,
+        mark,
+        yield_ann: r.annYieldPct,
         iv: r.impliedVolPct,
         theta: r.thetaPerDay,
-        otm_pct: r.actualOtmPct,          // real % distance from current price (positive = OTM)
+        otm_pct: r.actualOtmPct,
         dte: r.dte ?? raw.dte,
         oi: r.openInterest ?? null,
+        breakeven,
       });
     }
   }
@@ -463,8 +482,11 @@ async function executeTool(name: string, input: Record<string, any>): Promise<un
       }
 
       try {
-        const params = new URLSearchParams({
-          symbol: String(symbol).toUpperCase().trim(),
+        const sym = String(symbol).toUpperCase().trim();
+
+        // Fetch chain + 20-day price history in parallel — history is needed for IV/RV ratio
+        const chainParams = new URLSearchParams({
+          symbol: sym,
           contractType: String(option_type),
           strikeCount: String(Math.min(Number(strike_count) || 12, 30)),
           includeUnderlyingQuote: "TRUE",
@@ -472,13 +494,51 @@ async function executeTool(name: string, input: Record<string, any>): Promise<un
           fromDate,
           toDate,
         });
-        const resp = await fetch(
-          `https://api.schwabapi.com/marketdata/v1/chains?${params}`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-        if (!resp.ok) return { error: `Schwab chains ${resp.status}` };
-        const raw = await resp.json();
-        return compressOptionsChain(raw);
+        const rvHistoryParams = new URLSearchParams({
+          symbol: sym,
+          periodType: "month",
+          period: "2",
+          frequencyType: "daily",
+          frequency: "1",
+          needExtendedHoursData: "false",
+        });
+
+        const [chainResp, histResp] = await Promise.all([
+          fetch(`https://api.schwabapi.com/marketdata/v1/chains?${chainParams}`, { headers: { Authorization: `Bearer ${token}` } }),
+          fetch(`https://api.schwabapi.com/marketdata/v1/pricehistory?${rvHistoryParams}`, { headers: { Authorization: `Bearer ${token}` } }),
+        ]);
+
+        if (!chainResp.ok) return { error: `Schwab chains ${chainResp.status}` };
+        const raw = await chainResp.json();
+
+        // Compute 20-day annualized realized vol from daily closes
+        let rv20d: number | null = null;
+        if (histResp.ok) {
+          try {
+            const hist: any = await histResp.json();
+            const closes: number[] = (hist?.candles ?? [])
+              .map((c: any) => c?.close)
+              .filter((x: unknown): x is number => typeof x === "number" && x > 0);
+            if (closes.length >= 12) {
+              const tail = closes.slice(-22);
+              const rets: number[] = [];
+              for (let i = 1; i < tail.length; i++) rets.push(Math.log(tail[i]! / tail[i - 1]!));
+              const mean = rets.reduce((s, x) => s + x, 0) / rets.length;
+              const variance = rets.reduce((s, x) => s + (x - mean) ** 2, 0) / Math.max(rets.length - 1, 1);
+              rv20d = r2(Math.sqrt(variance) * Math.sqrt(252) * 100);
+            }
+          } catch { /* RV is supplemental — ignore errors */ }
+        }
+
+        const result = compressOptionsChain(raw);
+
+        // Attach IV/RV ratio to snap — tells Claude whether premium is rich or cheap
+        if (rv20d != null && result?.snap?.atm_iv_pct != null) {
+          result.snap.rv_20d = rv20d;
+          result.snap.iv_rv_ratio = r2(result.snap.atm_iv_pct / rv20d);
+        }
+
+        return result;
       } catch (e) {
         return { error: String(e) };
       }
@@ -538,6 +598,11 @@ async function runAgent(
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const allMessages = [...messages];
 
+  // Prompt caching: the system prompt + tools are identical every call.
+  // Anthropic charges 0.1× for cache reads vs full input price — saves ~90% on
+  // system prompt tokens across the 3-5 API calls per agent loop.
+  const cachedSystem = [{ type: "text" as const, text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" as const } }];
+
   for (let step = 0; step < 5; step++) {
     let textContent = "";
     const pending = new Map<number, { id: string; name: string; inputJson: string }>();
@@ -547,10 +612,11 @@ async function runAgent(
     const stream = client.messages.stream({
       model: "claude-sonnet-4-6",
       max_tokens: 2048,
-      system: SYSTEM_PROMPT,
+      system: cachedSystem as any,
       tools: TOOLS,
       messages: allMessages,
-    });
+      betas: ["prompt-caching-2024-07-31"] as any,
+    } as any);
 
     for await (const event of stream) {
       switch (event.type) {
