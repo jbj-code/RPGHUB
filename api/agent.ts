@@ -406,56 +406,49 @@ async function runAgent(
   emit(JSON.stringify({ type: "done" }));
 }
 
-// --- Vercel Web API handler ---
-export default async function handler(req: Request): Promise<Response> {
+// --- Vercel serverless handler (Express-style, same pattern as every other api/*.ts) ---
+export default async function handler(req: any, res: any): Promise<void> {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") { res.status(200).end(); return; }
+
   if (req.method !== "POST") {
-    return new Response("Method Not Allowed", { status: 405 });
+    res.status(405).json({ error: "Method Not Allowed" });
+    return;
   }
 
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
-    return new Response("Invalid JSON body", { status: 400 });
-  }
-
+  const body = req.body ?? {};
   const messages: Anthropic.Messages.MessageParam[] = Array.isArray(body?.messages)
     ? body.messages
     : [];
   const scope: string = typeof body?.scope === "string" ? body.scope : "options";
 
   if (messages.length === 0) {
-    return new Response("No messages provided", { status: 400 });
+    res.status(400).json({ error: "No messages provided" });
+    return;
   }
 
-  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-  const writer = writable.getWriter();
-  const encoder = new TextEncoder();
+  // Stream newline-delimited JSON events back to the client
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-store");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
 
   const emit = (line: string) => {
     try {
-      writer.write(encoder.encode(line + "\n"));
+      res.write(line + "\n");
     } catch {
-      // Writer already closed — ignore
+      // Client disconnected — ignore
     }
   };
 
-  // Run the agent loop; always close the stream when finished or on error
-  runAgent(messages, scope, emit)
-    .catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      emit(JSON.stringify({ type: "error", message: msg }));
-    })
-    .finally(() => {
-      writer.close().catch(() => {});
-    });
-
-  return new Response(readable, {
-    headers: {
-      "Content-Type": "text/plain; charset=utf-8",
-      "Cache-Control": "no-cache, no-store",
-      // Disable buffering on proxies so tokens stream immediately
-      "X-Accel-Buffering": "no",
-    },
-  });
+  try {
+    await runAgent(messages, scope, emit);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    emit(JSON.stringify({ type: "error", message: msg }));
+  } finally {
+    res.end();
+  }
 }
