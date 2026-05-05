@@ -595,12 +595,15 @@ async function runAgent(
   messages: Anthropic.Messages.MessageParam[],
   emit: (line: string) => void
 ): Promise<void> {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  // anthropic-beta header enables prompt caching — must be on the client, not in the request body.
+  // Anthropic charges 0.1× for cache reads vs full price, saving ~90% on system prompt tokens
+  // across the 3-5 API calls in a single agent loop.
+  const client = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    defaultHeaders: { "anthropic-beta": "prompt-caching-2024-07-31" },
+  });
   const allMessages = [...messages];
 
-  // Prompt caching: the system prompt + tools are identical every call.
-  // Anthropic charges 0.1× for cache reads vs full input price — saves ~90% on
-  // system prompt tokens across the 3-5 API calls per agent loop.
   const cachedSystem = [{ type: "text" as const, text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" as const } }];
 
   for (let step = 0; step < 5; step++) {
@@ -615,7 +618,6 @@ async function runAgent(
       system: cachedSystem as any,
       tools: TOOLS,
       messages: allMessages,
-      betas: ["prompt-caching-2024-07-31"] as any,
     } as any);
 
     for await (const event of stream) {
