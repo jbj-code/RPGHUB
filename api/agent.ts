@@ -8,40 +8,36 @@ import { getValidAccessToken } from "./_schwab-utils.js";
 import { handler as screenerHandler } from "./_handlers/screener.js";
 import { handler as quotesHandler } from "./_handlers/quotes.js";
 
-// --- System prompt ---
-// Key rules:
-//  1. No reasoning/thinking text between tool calls — output text only in the FINAL response.
-//  2. Prefer get_options_chain (fast, 2-3s) over find_best_options (slow, 15-30s) for single-ticker queries.
-//  3. Keep final responses concise and structured.
-const SYSTEM_PROMPT = `You are the RPG HUB financial assistant. You have live Schwab market data via tools.
+// System prompt: dense but minimal. Every token earns its place.
+// "Do not" rules waste tokens — instead the data structure enforces correct behavior:
+//   rank:1 in each list is the best pick by that metric. snap{} gives instant headline numbers.
+const SYSTEM_PROMPT = `You are RPG HUB's financial assistant. Live Schwab data via tools.
 
-TOOL CALLING RULES (critical):
-- Do NOT output any text before making tool calls. Call tools immediately and silently.
-- Do NOT output reasoning, "let me...", "now I have...", or thinking text between tool calls.
-- Call ALL needed tools in ONE batch (parallel). Never make a tool call, get results, then make another tool call you could have made up front. Output your final response ONLY after all tools return.
-- Single-stock options → get_options_chain (fast, 2-3s). Multi-ticker screening → find_best_options.
-- For "best option" queries: get_options_chain with dte_range [14, 60] + get_price_history (90d, daily) in ONE parallel batch.
-- Always set option_type = "PUT" or "CALL" when known — halves the data size.
-- For "best put/call to buy": 20-45 DTE, delta -0.3 to -0.5 (puts) / 0.3 to 0.5 (calls), OI > 500.
-- For covered calls / CSPs: 21-45 DTE, 5-15% OTM, theta > 0.
+TOOLS: Batch all calls in ONE parallel request — no text before or between them.
+Single stock → get_options_chain. Multiple tickers → find_best_options.
+"Best option" default: get_options_chain(dte_range:[14,60]) + get_price_history("3m") together.
+Specify option_type=PUT or CALL when known.
 
-FIELD KEY:
-- Options: k=strike, d=delta, iv=implied vol%, theta=daily decay, oi=open interest, itm=in-the-money
-- Fundamentals: market_cap_b=billions, pe=P/E, eps_ttm=EPS TTM, rev_growth_yoy=%, beta=market sensitivity
+DATA — get_options_chain:
+snap: {best_write_yield_pct, top_oi, atm_iv_pct} — headline numbers, use in opening sentence.
+top_for_writing: ranked by yield_ann desc (rank:1 = best yield). For CSP/covered call picks.
+top_for_buying: ranked by OI desc (rank:1 = most liquid). For directional put/call picks.
+Fields: k=strike, exp, mark, d=delta, iv=IV%, theta=$/day, oi, dte, yield_ann=ann.yield%, otm_pct=OTM%+
 
-OUTPUT FORMAT (strict):
-1. One sentence: price + directional context.
-2. If you have price history: put the chart spec HERE (immediately after the opening sentence), before any table.
-3. Options table: Strike | Exp | Mark | Delta | IV% | Theta | OI | Notes
-4. One sentence recommendation. Done.
+DATA — find_best_options:
+ranked[]: sorted by yield_ann desc. Fields: rank, ticker, current_price, k, mark, yield_ann, d, iv, otm_pct, dte, oi.
 
-Chart format:
-\`\`\`chart
-{"type":"line","title":"TICKER — N MONTH PRICE","xKey":"date","series":[{"key":"close","label":"Close"}],"data":[{"date":"2026-01-15","close":24.5}]}
-\`\`\`
+DATA — get_fundamentals:
+market_cap_b, pe, eps_ttm, rev_growth_yoy, gross/net_margin_pct, beta, short_float_pct
 
-Chart rules: omit "color" field (system applies brand color automatically). Keep data ≤ 60 pts (use weekly candles for > 90 days).
-No "Bottom Line" sections. No "---" dividers. No apologies. No filler. Max 200 words of prose total.`;
+OUTPUT:
+"[TICKER] at $[price]." + 1 sentence directional context.
+[chart spec here if price history available — BEFORE tables]
+Table: Strike | Exp | Mark | Delta | IV% | Yield/yr | OI | Notes
+1 sentence: best pick + why.
+
+Chart: \`\`\`chart\n{"type":"line","title":"TICKER — 3M","xKey":"date","series":[{"key":"close","label":"Close"}],"data":[...]}\`\`\`
+≤60 data points. No color field. No dividers. No filler. ≤150 words prose.`;
 
 // --- Round to 2 decimal places ---
 function r2(n: number): number {
@@ -64,11 +60,8 @@ function compressQuotes(raw: any): any {
     out[sym] = {
       name: ref?.description ?? null,
       price: r2(price),
-      prev_close: q?.closePrice != null ? r2(q.closePrice) : null,
-      open: q?.openPrice != null ? r2(q.openPrice) : null,
-      high: q?.highPrice != null ? r2(q.highPrice) : null,
-      low: q?.lowPrice != null ? r2(q.lowPrice) : null,
       chg_pct: q?.netPercentChangeInDouble != null ? r2(q.netPercentChangeInDouble) : null,
+      prev_close: q?.closePrice != null ? r2(q.closePrice) : null,
       volume: q?.totalVolume ?? null,
       high52w: q?.["52WeekHigh"] ?? q?.fiftyTwoWkHigh ?? null,
       low52w: q?.["52WeekLow"] ?? q?.fiftyTwoWkLow ?? null,
@@ -77,20 +70,22 @@ function compressQuotes(raw: any): any {
   return Object.keys(out).length > 0 ? out : { error: "No valid quotes returned" };
 }
 
+// compressOptionsChain: "deterministic pipeline" pattern.
+// Pre-computes yield_ann + otm_pct for every contract in TypeScript (100% accurate),
+// then returns two pre-ranked flat lists instead of the raw nested structure.
+// Claude receives a leaderboard — it never needs to re-sort or re-calculate.
 function compressOptionsChain(raw: any): any {
   if (!raw || raw.error) return raw;
-  const underlyingPrice = raw?.underlyingPrice ?? raw?.underlying?.last ?? null;
-  const result: any = { underlying_price: underlyingPrice };
+  const underlyingPrice: number | null = raw?.underlyingPrice ?? raw?.underlying?.last ?? null;
+
+  const all: any[] = [];
 
   for (const side of ["call", "put"] as const) {
     const expDateMap = raw[`${side}ExpDateMap`];
     if (!expDateMap || typeof expDateMap !== "object") continue;
-    const sideKey = `${side}s`;
-    result[sideKey] = {};
 
     for (const [expKey, strikesObj] of Object.entries(expDateMap as Record<string, any>)) {
       const expDate = expKey.split(":")[0];
-      const contracts: any[] = [];
 
       for (const [strikeStr, arr] of Object.entries(strikesObj as Record<string, any>)) {
         if (!Array.isArray(arr) || arr.length === 0) continue;
@@ -99,31 +94,80 @@ function compressOptionsChain(raw: any): any {
         const bid = c?.bid ?? 0;
         const ask = c?.ask ?? 0;
         if (bid <= 0 && ask <= 0) continue;
-        const mark = c?.mark ?? c?.theoreticalOptionValue ?? r2((bid + ask) / 2);
-        contracts.push({
-          k: parseFloat(strikeStr),                                    // strike
-          bid: r2(bid),
-          ask: r2(ask),
-          mark: r2(mark),                                              // mid price (best fill estimate)
-          d: c?.delta != null ? r2(c.delta) : null,                   // delta
-          g: c?.gamma != null ? r2(c.gamma) : null,                   // gamma (risk of delta change)
-          iv: c?.volatility != null ? r2(c.volatility) : null,        // implied vol %
-          vega: c?.vega != null ? r2(c.vega) : null,                  // $ change per 1% IV move
-          theta: c?.theta != null ? r2(c.theta) : null,               // daily time decay
-          oi: c?.openInterest ?? null,                                 // open interest (liquidity)
-          vol: c?.totalVolume ?? null,                                 // today's volume
-          dte: c?.daysToExpiration ?? null,
-          itm: c?.inTheMoney ?? null,                                  // in-the-money flag
-        });
-      }
 
-      if (contracts.length > 0) {
-        contracts.sort((a, b) => a.k - b.k);
-        result[sideKey][expDate] = contracts;
+        const strike = parseFloat(strikeStr);
+        const mark = r2(c?.mark ?? c?.theoreticalOptionValue ?? (bid + ask) / 2);
+        const dte: number | null = c?.daysToExpiration ?? null;
+        const oi: number | null = c?.openInterest ?? null;
+        const itm: boolean = c?.inTheMoney ?? false;
+
+        // ── Pre-computed metrics (deterministic TypeScript, not LLM) ──────────
+        // otm_pct: positive = OTM (good for writing), negative = ITM
+        const otm_pct: number | null =
+          underlyingPrice != null && strike > 0
+            ? side === "put"
+              ? r2((underlyingPrice - strike) / underlyingPrice * 100)
+              : r2((strike - underlyingPrice) / underlyingPrice * 100)
+            : null;
+
+        // yield_ann: annualized premium yield % based on mark / strike (writing perspective)
+        const yield_ann: number | null =
+          dte != null && dte > 0 && strike > 0 && mark > 0
+            ? r2((mark / strike) * (365 / dte) * 100)
+            : null;
+
+        all.push({
+          k: strike,
+          exp: expDate,
+          side: side === "put" ? "P" : "C",
+          mark,
+          d: c?.delta != null ? r2(c.delta) : null,
+          iv: c?.volatility != null ? r2(c.volatility) : null,
+          theta: c?.theta != null ? r2(c.theta) : null,
+          oi,
+          dte,
+          itm,
+          yield_ann,
+          otm_pct,
+        });
       }
     }
   }
-  return result;
+
+  // ── Headline snap — Claude reads these numbers in its opening sentence ───────
+  // ATM IV: closest OTM contract to the underlying price
+  const atmContract = all
+    .filter((c) => c.otm_pct != null && c.otm_pct >= 0 && c.iv != null)
+    .sort((a, b) => (a.otm_pct ?? 99) - (b.otm_pct ?? 99))[0] ?? null;
+  const atm_iv_pct = atmContract?.iv ?? null;
+
+  // ── Pre-ranked lists — rank:1 = best pick for that strategy ──────────────
+
+  // Writing (CSP / covered call): OTM (>2%), decent OI, sorted by yield_ann desc
+  const writingCandidates = all
+    .filter((c) => !c.itm && (c.otm_pct ?? 0) >= 2 && c.yield_ann != null && (c.oi ?? 0) >= 50)
+    .sort((a, b) => (b.yield_ann ?? 0) - (a.yield_ann ?? 0));
+
+  const top_for_writing = writingCandidates.slice(0, 12).map((c, i) => ({ rank: i + 1, ...c }));
+
+  // Buying (directional): sorted by OI desc (liquidity first for buyers)
+  const buyingCandidates = all
+    .filter((c) => (c.oi ?? 0) > 0)
+    .sort((a, b) => (b.oi ?? 0) - (a.oi ?? 0));
+
+  const top_for_buying = buyingCandidates.slice(0, 10).map((c, i) => ({ rank: i + 1, ...c }));
+
+  const snap: Record<string, any> = {};
+  if (atm_iv_pct != null) snap.atm_iv_pct = atm_iv_pct;
+  if (top_for_writing[0]?.yield_ann != null) snap.best_write_yield_pct = top_for_writing[0].yield_ann;
+  if (top_for_buying[0]?.oi != null) snap.top_oi = top_for_buying[0].oi;
+
+  return {
+    underlying_price: underlyingPrice,
+    snap,
+    top_for_writing,
+    top_for_buying,
+  };
 }
 
 function compressScreener(raw: any): any {
@@ -131,31 +175,35 @@ function compressScreener(raw: any): any {
   const resultsByOtmPct = raw?.resultsByOtmPct;
   if (!resultsByOtmPct) return raw;
 
-  const compressed: Record<string, any[]> = {};
-  for (const [otmPct, rows] of Object.entries(resultsByOtmPct as Record<string, any[]>)) {
+  // Flatten all rows across OTM buckets, sort by yield_ann descending (pre-ranked leaderboard)
+  const allRows: any[] = [];
+  for (const rows of Object.values(resultsByOtmPct as Record<string, any[]>)) {
     if (!rows?.length) continue;
-    compressed[`otm_${otmPct}pct`] = rows.map((r) => ({
-      ticker: r.ticker,
-      company: r.company ?? null,
-      k: r.strike,
-      bid: r.bid,
-      ask: r.ask,
-      mark: r.mark ?? null,
-      yield_ann: r.annYieldPct,
-      d: r.delta,
-      iv: r.impliedVolPct,
-      theta: r.thetaPerDay,
-      actual_otm: r.actualOtmPct,
-      dte: r.dte ?? raw.dte,
-    }));
+    for (const r of rows) {
+      allRows.push({
+        ticker: r.ticker,
+        k: r.strike,
+        current_price: r.currentPrice,    // always include so AI can sanity-check strikes vs price
+        mark: r.mark ?? null,
+        yield_ann: r.annYieldPct,         // pre-computed annualized yield (bid/strike × 365/dte)
+        d: r.delta,
+        iv: r.impliedVolPct,
+        theta: r.thetaPerDay,
+        otm_pct: r.actualOtmPct,          // real % distance from current price (positive = OTM)
+        dte: r.dte ?? raw.dte,
+        oi: r.openInterest ?? null,
+      });
+    }
   }
+
+  allRows.sort((a, b) => (b.yield_ann ?? 0) - (a.yield_ann ?? 0));
 
   return {
     exp: raw.expiration,
     type: raw.optionType,
     dte: raw.dte,
     side: raw.positionSide,
-    results: compressed,
+    ranked: allRows.slice(0, 20).map((r, i) => ({ rank: i + 1, ...r })),
     ...(raw.warnings?.length > 0 ? { warnings: raw.warnings } : {}),
   };
 }
@@ -254,35 +302,30 @@ async function getSchwabToken(): Promise<string | null> {
   return getValidAccessToken(supabase, row);
 }
 
-// --- Anthropic tool definitions ---
-// Descriptions are short and include speed hints so Claude picks the right tool.
+// Tool definitions: descriptions drive token cost every call — keep them precise and short.
 const TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: "get_quotes",
-    description: "Real-time price, % change, volume, 52-week range for one or more stocks. Fast (~1s).",
+    description: "Real-time price, change%, volume, 52w range. Fast.",
     input_schema: {
       type: "object" as const,
       properties: {
-        symbols: {
-          type: "array",
-          items: { type: "string" },
-          description: 'Uppercase tickers, e.g. ["U", "AAPL"]',
-        },
+        symbols: { type: "array", items: { type: "string" } },
       },
       required: ["symbols"],
     },
   },
   {
     name: "get_price_history",
-    description: "Historical daily OHLCV prices for a stock. Use for charting or trend analysis. Fast (~2s).",
+    description: "Historical OHLCV for charting/trends. Fast.",
     input_schema: {
       type: "object" as const,
       properties: {
-        symbol: { type: "string", description: "Ticker" },
+        symbol: { type: "string" },
         period: {
           type: "string",
           enum: ["1m", "3m", "6m", "1y", "2y"],
-          description: "1m=1 month, 3m=3 months, 1y=1 year",
+          description: "1m/3m/6m/1y/2y",
         },
       },
       required: ["symbol", "period"],
@@ -291,30 +334,22 @@ const TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: "get_options_chain",
     description:
-      "Options chain for a specific stock: strikes, bid/ask, delta, IV, OI, theta. FAST (2-3s). Use for single-stock analysis. Supply EITHER expiration_date (specific date) OR dte_range [min, max] (e.g. [14,60] for all expirations 14-60 days out in one call). Omit both to auto-fetch the 7-50 day window. Always set option_type to CALL or PUT when you know the type — halves the data.",
+      "Pre-ranked options chain for one stock (by yield & liquidity). Fast (2-3s). Supply expiration_date OR dte_range [min,max] e.g.[14,60]. Specify option_type=PUT or CALL when known.",
     input_schema: {
       type: "object" as const,
       properties: {
-        symbol: { type: "string", description: "Underlying ticker, e.g. 'U'" },
-        expiration_date: {
-          type: "string",
-          description: "Specific YYYY-MM-DD expiration. Use this OR dte_range, not both.",
-        },
+        symbol: { type: "string" },
+        expiration_date: { type: "string", description: "YYYY-MM-DD" },
         dte_range: {
           type: "array",
           items: { type: "number" },
-          description:
-            "e.g. [14, 60] fetches all expirations 14-60 DTE in a single call. Ideal for open-ended 'best option right now' queries.",
+          description: "[minDTE, maxDTE]",
         },
         option_type: {
           type: "string",
           enum: ["ALL", "CALL", "PUT"],
-          description: "Always specify CALL or PUT when you know the type. Default ALL.",
         },
-        strike_count: {
-          type: "number",
-          description: "Strikes around ATM (default 12, max 30). 12 is sufficient for most analysis.",
-        },
+        strike_count: { type: "number", description: "Default 12, max 30." },
       },
       required: ["symbol"],
     },
@@ -322,14 +357,13 @@ const TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: "get_fundamentals",
     description:
-      "Key fundamentals for one or more stocks: market cap, P/E, EPS, revenue growth, gross margin, net margin, beta, short float %, average volume, debt/equity, book value. Fast (~1s). Use when the user asks about valuation, company size, or when context about the company enriches an options recommendation.",
+      "Market cap, P/E, EPS, growth, margins, beta, short float for stocks. Fast.",
     input_schema: {
       type: "object" as const,
       properties: {
         symbols: {
           type: "array",
           items: { type: "string" },
-          description: 'Uppercase tickers, e.g. ["U", "AAPL"]',
         },
       },
       required: ["symbols"],
@@ -338,24 +372,20 @@ const TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: "find_best_options",
     description:
-      "Screen and rank options across multiple stocks by yield, IV, and liquidity. SLOW (15-30s). Only use when comparing options across several tickers, not for a single stock.",
+      "Screen & rank options across 2+ stocks by yield/IV/liquidity. SLOW (15-30s). Multi-ticker only — use get_options_chain for a single stock.",
     input_schema: {
       type: "object" as const,
       properties: {
-        tickers: {
-          type: "array",
-          items: { type: "string" },
-          description: "Stocks to scan (use 2+ tickers — for 1 stock use get_options_chain instead)",
-        },
+        tickers: { type: "array", items: { type: "string" } },
         expiration_date: { type: "string", description: "YYYY-MM-DD" },
         option_type: { type: "string", enum: ["puts", "calls"] },
         otm_levels: {
           type: "array",
           items: { type: "number" },
-          description: "OTM % bands: 5=5-10% OTM, 10=10-15%, 15=15-20%, 20=20-30%. Default [5,10,15,20].",
+          description: "OTM bands [5,10,15,20] = 5-10%, 10-15%, etc.",
         },
-        top_n: { type: "number", description: "Top N per OTM level (default 3)" },
-        position_side: { type: "string", enum: ["write", "buy"], description: "Default: write" },
+        top_n: { type: "number", description: "Per OTM level (default 3)" },
+        position_side: { type: "string", enum: ["write", "buy"] },
       },
       required: ["tickers", "expiration_date", "option_type"],
     },
