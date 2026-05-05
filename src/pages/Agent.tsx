@@ -174,14 +174,14 @@ function MessageContent({ text, isStreaming, t }: { text: string; isStreaming: b
   );
 }
 
-// --- Tool call status strip ---
+// --- Tool call status strip (Cursor-style: compact, icon + short label) ---
 
 function ToolStrip({ calls, t }: { calls: ActiveToolCall[]; t: Theme }) {
   if (calls.length === 0) return null;
   return (
     <div
       className="agent-message"
-      style={{ alignSelf: "flex-start", display: "flex", flexDirection: "column", gap: t.spacing(1) }}
+      style={{ alignSelf: "flex-start", display: "flex", flexWrap: "wrap", gap: t.spacing(1) }}
     >
       {calls.map((tc, i) => (
         <div
@@ -190,30 +190,30 @@ function ToolStrip({ calls, t }: { calls: ActiveToolCall[]; t: Theme }) {
           style={{
             display: "inline-flex",
             alignItems: "center",
-            gap: t.spacing(1.5),
-            padding: `${t.spacing(0.9)} ${t.spacing(2)}`,
+            gap: t.spacing(1),
+            padding: `${t.spacing(0.6)} ${t.spacing(1.5)}`,
             backgroundColor: tc.done
-              ? `${t.colors.secondary}18`
-              : `${t.colors.primary}0f`,
-            border: `1px solid ${tc.done ? t.colors.secondary : t.colors.primary}35`,
-            borderRadius: 999,
-            fontSize: "0.77rem",
-            color: tc.done ? t.colors.secondary : t.colors.primary,
+              ? `${t.colors.secondary}12`
+              : `${t.colors.border}`,
+            border: `1px solid ${tc.done ? t.colors.secondary + "40" : t.colors.border}`,
+            borderRadius: 6,
+            fontSize: "0.73rem",
+            color: tc.done ? t.colors.secondary : t.colors.textMuted,
             fontFamily: t.typography.fontFamily,
-            fontWeight: 600,
+            fontWeight: 500,
+            letterSpacing: "0.01em",
           }}
         >
-          <span className="material-symbols-outlined" style={{ fontSize: 13, lineHeight: 1 }} aria-hidden>
-            {tc.done ? "check_circle" : "data_thresholding"}
-          </span>
-          {tc.label}
-          {!tc.done && (
-            <span style={{ display: "inline-flex", gap: 3 }}>
+          {tc.done ? (
+            <span className="material-symbols-outlined" style={{ fontSize: 12, lineHeight: 1, color: t.colors.secondary }} aria-hidden>check</span>
+          ) : (
+            <span style={{ display: "inline-flex", gap: 2, alignItems: "center" }}>
               {[0, 1, 2].map((j) => (
-                <span key={j} style={{ width: 4, height: 4, borderRadius: "50%", backgroundColor: "currentColor", animation: `agent-thinking-dot 1.0s ease-in-out ${j * 0.18}s infinite` }} />
+                <span key={j} style={{ width: 3, height: 3, borderRadius: "50%", backgroundColor: "currentColor", animation: `agent-thinking-dot 1.0s ease-in-out ${j * 0.2}s infinite` }} />
               ))}
             </span>
           )}
+          {tc.label}
         </div>
       ))}
     </div>
