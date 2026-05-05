@@ -1,18 +1,10 @@
-// Agent page — chat interface powered by Anthropic with live Schwab tool calls.
+// Agent page — premium chat interface powered by Anthropic with live Schwab tool calls.
 // Streams tokens in real-time; parses ```chart blocks and renders them via Recharts.
 
 import { useEffect, useRef, useState } from "react";
 import {
-  LineChart,
-  Line,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
+  LineChart, Line, BarChart, Bar,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
 import type { Theme } from "../theme";
 import { PAGE_LAYOUT } from "../theme";
@@ -45,25 +37,19 @@ type Segment = { kind: "text"; content: string } | { kind: "chart"; spec: ChartS
 
 // --- Helpers ---
 
-/** Split message text into text segments and embedded chart specs. */
 function parseSegments(text: string): Segment[] {
   const segments: Segment[] = [];
   const regex = /```chart\n([\s\S]*?)```/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
-
   while ((match = regex.exec(text)) !== null) {
     const before = text.slice(lastIndex, match.index).trim();
     if (before) segments.push({ kind: "text", content: before });
     try {
-      const spec = JSON.parse(match[1].trim()) as ChartSpec;
-      segments.push({ kind: "chart", spec });
-    } catch {
-      // Malformed chart JSON — skip silently
-    }
+      segments.push({ kind: "chart", spec: JSON.parse(match[1].trim()) as ChartSpec });
+    } catch { /* skip malformed */ }
     lastIndex = match.index + match[0].length;
   }
-
   const after = text.slice(lastIndex).trim();
   if (after) segments.push({ kind: "text", content: after });
   return segments;
@@ -72,22 +58,6 @@ function parseSegments(text: string): Segment[] {
 // --- Chart component ---
 
 function AgentChart({ spec, t }: { spec: ChartSpec; t: Theme }) {
-  const chartStyle: React.CSSProperties = {
-    backgroundColor: t.colors.background,
-    borderRadius: t.radius.md,
-    border: `1px solid ${t.colors.border}`,
-    padding: `${t.spacing(2)} ${t.spacing(3)} ${t.spacing(3)}`,
-    marginTop: t.spacing(2),
-  };
-
-  const titleStyle: React.CSSProperties = {
-    margin: `0 0 ${t.spacing(2)}`,
-    fontSize: "0.78rem",
-    fontWeight: 600,
-    color: t.colors.textMuted,
-    fontFamily: t.typography.fontFamily,
-  };
-
   const tooltipStyle: React.CSSProperties = {
     backgroundColor: t.colors.surface,
     border: `1px solid ${t.colors.border}`,
@@ -95,16 +65,25 @@ function AgentChart({ spec, t }: { spec: ChartSpec; t: Theme }) {
     fontSize: "0.78rem",
     fontFamily: t.typography.fontFamily,
   };
-
   const tickStyle = { fontSize: 11, fill: t.colors.textMuted, fontFamily: t.typography.fontFamily };
-
-  // Shorten YYYY-MM-DD date labels on the X axis to MM/DD for line charts
-  const dateTickFormatter = (v: string) =>
+  const dateFormat = (v: string) =>
     typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v.slice(5) : v;
 
   return (
-    <div style={chartStyle}>
-      {spec.title && <p style={titleStyle}>{spec.title}</p>}
+    <div
+      style={{
+        backgroundColor: t.colors.background,
+        borderRadius: t.radius.md,
+        border: `1px solid ${t.colors.border}`,
+        padding: `${t.spacing(2)} ${t.spacing(3)} ${t.spacing(3)}`,
+        marginTop: t.spacing(2),
+      }}
+    >
+      {spec.title && (
+        <p style={{ margin: `0 0 ${t.spacing(1.5)}`, fontSize: "0.76rem", fontWeight: 700, color: t.colors.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", fontFamily: t.typography.fontFamily }}>
+          {spec.title}
+        </p>
+      )}
       <ResponsiveContainer width="100%" height={200}>
         {spec.type === "bar" ? (
           <BarChart data={spec.data} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
@@ -112,9 +91,7 @@ function AgentChart({ spec, t }: { spec: ChartSpec; t: Theme }) {
             <XAxis dataKey={spec.xKey} tick={tickStyle} />
             <YAxis tick={tickStyle} />
             <Tooltip contentStyle={tooltipStyle} />
-            {spec.series.length > 1 && (
-              <Legend wrapperStyle={{ fontSize: 11, fontFamily: t.typography.fontFamily }} />
-            )}
+            {spec.series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
             {spec.series.map((s) => (
               <Bar key={s.key} dataKey={s.key} name={s.label} fill={s.color} radius={[3, 3, 0, 0]} />
             ))}
@@ -122,22 +99,12 @@ function AgentChart({ spec, t }: { spec: ChartSpec; t: Theme }) {
         ) : (
           <LineChart data={spec.data} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={t.colors.border} />
-            <XAxis dataKey={spec.xKey} tick={tickStyle} tickFormatter={dateTickFormatter} />
+            <XAxis dataKey={spec.xKey} tick={tickStyle} tickFormatter={dateFormat} />
             <YAxis tick={tickStyle} domain={["auto", "auto"]} />
-            <Tooltip contentStyle={tooltipStyle} labelFormatter={(v) => dateTickFormatter(String(v))} />
-            {spec.series.length > 1 && (
-              <Legend wrapperStyle={{ fontSize: 11, fontFamily: t.typography.fontFamily }} />
-            )}
+            <Tooltip contentStyle={tooltipStyle} labelFormatter={(v) => dateFormat(String(v))} />
+            {spec.series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
             {spec.series.map((s) => (
-              <Line
-                key={s.key}
-                type="monotone"
-                dataKey={s.key}
-                name={s.label}
-                stroke={s.color}
-                dot={false}
-                strokeWidth={2}
-              />
+              <Line key={s.key} type="monotone" dataKey={s.key} name={s.label} stroke={s.color} dot={false} strokeWidth={2} />
             ))}
           </LineChart>
         )}
@@ -146,26 +113,35 @@ function AgentChart({ spec, t }: { spec: ChartSpec; t: Theme }) {
   );
 }
 
-// --- Message bubble content ---
+// --- Thinking dots (shown while streaming with no text yet) ---
+
+function ThinkingDots({ t }: { t: Theme }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 0" }}>
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          style={{
+            display: "inline-block",
+            width: 6,
+            height: 6,
+            borderRadius: "50%",
+            backgroundColor: t.colors.textMuted,
+            animation: `agent-thinking-dot 1.2s ease-in-out ${i * 0.2}s infinite`,
+          }}
+        />
+      ))}
+    </span>
+  );
+}
+
+// --- Message content renderer ---
 
 function MessageContent({ text, isStreaming, t }: { text: string; isStreaming: boolean; t: Theme }) {
   const segments = parseSegments(text);
 
   if (segments.length === 0) {
-    // Show cursor while streaming and no text yet
-    return isStreaming ? (
-      <span
-        style={{
-          display: "inline-block",
-          width: 8,
-          height: "1em",
-          backgroundColor: t.colors.textMuted,
-          borderRadius: 2,
-          animation: "agent-blink 1s step-end infinite",
-        }}
-        aria-label="typing"
-      />
-    ) : null;
+    return isStreaming ? <ThinkingDots t={t} /> : null;
   }
 
   return (
@@ -184,9 +160,9 @@ function MessageContent({ text, isStreaming, t }: { text: string; isStreaming: b
                   height: "0.85em",
                   backgroundColor: t.colors.textMuted,
                   borderRadius: 2,
-                  marginLeft: 2,
+                  marginLeft: 3,
                   verticalAlign: "text-bottom",
-                  animation: "agent-blink 1s step-end infinite",
+                  animation: "agent-blink 0.9s step-end infinite",
                 }}
                 aria-hidden
               />
@@ -198,16 +174,61 @@ function MessageContent({ text, isStreaming, t }: { text: string; isStreaming: b
   );
 }
 
+// --- Tool call status strip ---
+
+function ToolStrip({ calls, t }: { calls: ActiveToolCall[]; t: Theme }) {
+  if (calls.length === 0) return null;
+  return (
+    <div
+      className="agent-message"
+      style={{ alignSelf: "flex-start", display: "flex", flexDirection: "column", gap: t.spacing(1) }}
+    >
+      {calls.map((tc, i) => (
+        <div
+          key={i}
+          className="agent-tool-pill"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: t.spacing(1.5),
+            padding: `${t.spacing(0.9)} ${t.spacing(2)}`,
+            backgroundColor: tc.done
+              ? `${t.colors.secondary}18`
+              : `${t.colors.primary}0f`,
+            border: `1px solid ${tc.done ? t.colors.secondary : t.colors.primary}35`,
+            borderRadius: 999,
+            fontSize: "0.77rem",
+            color: tc.done ? t.colors.secondary : t.colors.primary,
+            fontFamily: t.typography.fontFamily,
+            fontWeight: 600,
+          }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 13, lineHeight: 1 }} aria-hidden>
+            {tc.done ? "check_circle" : "data_thresholding"}
+          </span>
+          {tc.label}
+          {!tc.done && (
+            <span style={{ display: "inline-flex", gap: 3 }}>
+              {[0, 1, 2].map((j) => (
+                <span key={j} style={{ width: 4, height: 4, borderRadius: "50%", backgroundColor: "currentColor", animation: `agent-thinking-dot 1.0s ease-in-out ${j * 0.18}s infinite` }} />
+              ))}
+            </span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // --- Main Agent page ---
 
 export function Agent({ theme: t }: AgentProps) {
-  const [scope, setScope] = useState<"options" | "stocks">("options");
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState<AgentMessage[]>([
     {
       id: "welcome",
       role: "assistant",
-      text: "Ask me anything about options or stocks and I'll pull live Schwab data to answer.",
+      text: "Ask me anything about options, stocks, or the market. I have live Schwab data and will use it automatically.",
     },
   ]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -216,12 +237,11 @@ export function Agent({ theme: t }: AgentProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-scroll to bottom when new content arrives
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, activeToolCalls]);
 
-  // Auto-resize textarea
+  // Auto-resize textarea as user types
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
@@ -237,12 +257,10 @@ export function Agent({ theme: t }: AgentProps) {
 
     const userMsg: AgentMessage = { id: `${Date.now()}-user`, role: "user", text };
     const assistantId = `${Date.now()}-assistant`;
-    const assistantMsg: AgentMessage = { id: assistantId, role: "assistant", text: "" };
 
-    // Build the conversation history for the API (exclude the welcome message)
     const history = [...messages.filter((m) => m.id !== "welcome"), userMsg];
 
-    setMessages((prev) => [...prev, userMsg, assistantMsg]);
+    setMessages((prev) => [...prev, userMsg, { id: assistantId, role: "assistant", text: "" }]);
     setDraft("");
     setIsStreaming(true);
     setActiveToolCalls([]);
@@ -252,7 +270,6 @@ export function Agent({ theme: t }: AgentProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          scope,
           messages: history.map((m) => ({ role: m.role, content: m.text })),
         }),
       });
@@ -261,9 +278,7 @@ export function Agent({ theme: t }: AgentProps) {
         const errText = await resp.text().catch(() => "Unknown error");
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === assistantId
-              ? { ...m, text: `Error ${resp.status}: ${errText.slice(0, 200)}` }
-              : m
+            m.id === assistantId ? { ...m, text: `Error ${resp.status}: ${errText.slice(0, 200)}` } : m
           )
         );
         return;
@@ -277,7 +292,6 @@ export function Agent({ theme: t }: AgentProps) {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
@@ -285,14 +299,7 @@ export function Agent({ theme: t }: AgentProps) {
         for (const line of lines) {
           if (!line.trim()) continue;
           try {
-            const event = JSON.parse(line) as {
-              type: string;
-              delta?: string;
-              name?: string;
-              label?: string;
-              message?: string;
-            };
-
+            const event = JSON.parse(line) as { type: string; delta?: string; name?: string; label?: string; message?: string };
             switch (event.type) {
               case "text":
                 fullText += event.delta ?? "";
@@ -300,43 +307,31 @@ export function Agent({ theme: t }: AgentProps) {
                   prev.map((m) => (m.id === assistantId ? { ...m, text: fullText } : m))
                 );
                 break;
-
               case "tool_start":
                 setActiveToolCalls((prev) => [
                   ...prev,
                   { name: event.name ?? "", label: event.label ?? "Working...", done: false },
                 ]);
                 break;
-
               case "tool_done":
                 setActiveToolCalls((prev) =>
-                  prev.map((tc) =>
-                    tc.name === event.name ? { ...tc, done: true } : tc
-                  )
+                  prev.map((tc) => (tc.name === event.name ? { ...tc, done: true } : tc))
                 );
                 break;
-
               case "error":
-                fullText = fullText || (event.message ?? "An unexpected error occurred.");
+                fullText = fullText || (event.message ?? "An error occurred.");
                 setMessages((prev) =>
                   prev.map((m) => (m.id === assistantId ? { ...m, text: fullText } : m))
                 );
                 break;
-
-              case "done":
-                break;
             }
-          } catch {
-            // Skip any malformed lines
-          }
+          } catch { /* skip malformed lines */ }
         }
       }
     } catch {
       setMessages((prev) =>
         prev.map((m) =>
-          m.id === assistantId
-            ? { ...m, text: "Network error — could not reach the agent." }
-            : m
+          m.id === assistantId ? { ...m, text: "Network error — could not reach the agent." } : m
         )
       );
     } finally {
@@ -345,299 +340,244 @@ export function Agent({ theme: t }: AgentProps) {
     }
   }
 
-  // --- Styles (all from theme — no magic values) ---
-
-  const pageStyle: React.CSSProperties = {
-    maxWidth: PAGE_LAYOUT.maxWidth,
-    width: "100%",
-    margin: "0 auto",
-    padding: `${t.spacing(5)} ${t.spacing(PAGE_LAYOUT.pagePaddingH)} ${t.spacing(4)}`,
-    boxSizing: "border-box",
-    fontFamily: t.typography.fontFamily,
-    color: t.colors.text,
-    minHeight: "calc(100vh - 80px)",
-    display: "flex",
-    flexDirection: "column",
-  };
-
-  const titleStyle: React.CSSProperties = {
-    fontWeight: t.typography.headingWeight,
-    fontSize: "1.625rem",
-    color: t.colors.text,
-    marginBottom: t.spacing(1),
-  };
-
-  const descStyle: React.CSSProperties = {
-    color: t.colors.textMuted,
-    fontSize: "0.95rem",
-    lineHeight: 1.5,
-    marginBottom: t.spacing(3),
-  };
-
-  const shellStyle: React.CSSProperties = {
-    flex: 1,
-    minHeight: 0,
-    display: "flex",
-    flexDirection: "column",
-    overflow: "hidden",
-  };
-
-  const toolbarStyle: React.CSSProperties = {
-    padding: `${t.spacing(1)} 0 ${t.spacing(2)}`,
-    borderBottom: `1px solid ${t.colors.border}`,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: t.spacing(2),
-    flexWrap: "wrap",
-  };
-
-  const messagesStyle: React.CSSProperties = {
-    flex: 1,
-    minHeight: 0,
-    overflowY: "auto",
-    padding: `${t.spacing(2)} 0`,
-    display: "flex",
-    flexDirection: "column",
-    gap: t.spacing(2),
-  };
-
-  const inputBarStyle: React.CSSProperties = {
-    borderTop: `1px solid ${t.colors.border}`,
-    padding: `${t.spacing(2)} 0 0`,
-  };
+  // --- Layout ---
 
   return (
-    <>
-      {/* Blinking cursor animation */}
-      <style>{`@keyframes agent-blink { 0%,100%{opacity:1} 50%{opacity:0} }`}</style>
-
-      <section className="agent-page" style={pageStyle}>
-        <h2 style={titleStyle}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
-            <span
-              className="material-symbols-outlined"
-              style={{ fontSize: "1.5rem", color: t.colors.secondary }}
-              aria-hidden
-            >
-              smart_toy
-            </span>
-            Agent
+    <section
+      className="agent-page page-card"
+      style={{
+        maxWidth: PAGE_LAYOUT.maxWidth,
+        width: "100%",
+        margin: "0 auto",
+        padding: `${t.spacing(5)} ${t.spacing(PAGE_LAYOUT.pagePaddingH)} ${t.spacing(4)}`,
+        boxSizing: "border-box",
+        fontFamily: t.typography.fontFamily,
+        color: t.colors.text,
+        minHeight: "calc(100vh - 80px)",
+        display: "flex",
+        flexDirection: "column",
+        // Override page-card hover box-shadow since this is a full-page layout, not a card
+        border: "none",
+        boxShadow: "none",
+        backgroundColor: "transparent",
+      }}
+    >
+      {/* Header */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: t.spacing(4),
+          paddingBottom: t.spacing(3),
+          borderBottom: `1px solid ${t.colors.border}`,
+        }}
+      >
+        <h2
+          style={{
+            margin: 0,
+            fontWeight: t.typography.headingWeight,
+            fontSize: "1.625rem",
+            color: t.colors.text,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: t.spacing(2),
+          }}
+        >
+          <span
+            className="material-symbols-outlined"
+            style={{ fontSize: "1.5rem", color: t.colors.secondary, lineHeight: 1 }}
+            aria-hidden
+          >
+            smart_toy
           </span>
+          Agent
         </h2>
 
-        <p style={descStyle}>
-          Chat with the hub. Ask about options, stocks, or your portfolio — tools run in the background.
-        </p>
+        {/* Status indicator */}
+        <div style={{ display: "flex", alignItems: "center", gap: t.spacing(1.5) }}>
+          <span
+            style={{
+              display: "inline-block",
+              width: 7,
+              height: 7,
+              borderRadius: "50%",
+              backgroundColor: isStreaming ? t.colors.secondary : `${t.colors.secondary}60`,
+              boxShadow: isStreaming ? `0 0 6px ${t.colors.secondary}` : "none",
+              transition: "box-shadow 0.3s ease, background-color 0.3s ease",
+            }}
+          />
+          <span style={{ fontSize: "0.78rem", color: t.colors.textMuted, fontWeight: 600 }}>
+            {isStreaming ? "Thinking…" : "claude sonnet 4.6"}
+          </span>
+        </div>
+      </div>
 
-        <div style={shellStyle}>
-          {/* Scope selector + status */}
-          <div style={toolbarStyle}>
-            <div style={{ display: "flex", alignItems: "center", gap: t.spacing(1.5), flexWrap: "wrap" }}>
-              <span
-                style={{
-                  fontSize: "0.75rem",
-                  color: t.colors.textMuted,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.04em",
-                  fontWeight: 600,
-                }}
-              >
-                Scope
-              </span>
-              {(["options", "stocks"] as const).map((value) => {
-                const active = scope === value;
-                return (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setScope(value)}
-                    disabled={isStreaming}
-                    style={{
-                      border: `1px solid ${active ? t.colors.primary : t.colors.border}`,
-                      backgroundColor: active ? `${t.colors.primary}14` : t.colors.background,
-                      color: active ? t.colors.primary : t.colors.textMuted,
-                      borderRadius: 999,
-                      padding: `${t.spacing(0.9)} ${t.spacing(2)}`,
-                      fontSize: "0.8rem",
-                      fontWeight: 700,
-                      cursor: isStreaming ? "not-allowed" : "pointer",
-                      opacity: isStreaming ? 0.6 : 1,
-                    }}
-                    aria-pressed={active}
-                  >
-                    {value === "options" ? "Options" : "Stocks"}
-                  </button>
-                );
-              })}
-            </div>
-            <span style={{ fontSize: "0.8rem", color: isStreaming ? t.colors.secondary : t.colors.textMuted }}>
-              {isStreaming ? "Thinking..." : "Claude 3.5 Sonnet"}
-            </span>
-          </div>
+      {/* Message thread */}
+      <div
+        role="log"
+        aria-live="polite"
+        aria-label="Conversation"
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
+          display: "flex",
+          flexDirection: "column",
+          gap: t.spacing(2.5),
+          paddingBottom: t.spacing(2),
+          // Scrollbar subtle
+          scrollbarWidth: "thin",
+          scrollbarColor: `${t.colors.border} transparent`,
+        }}
+      >
+        {messages.map((m) => {
+          const isUser = m.role === "user";
+          const isThisStreaming =
+            isStreaming && m.id === messages[messages.length - 1]?.id && !isUser;
 
-          {/* Message thread */}
-          <div style={messagesStyle} role="log" aria-live="polite" aria-label="Conversation">
-            {messages.map((m) => {
-              const isUser = m.role === "user";
-              const isThisStreaming = isStreaming && m.id === messages[messages.length - 1]?.id && !isUser;
-              return (
-                <div
-                  key={m.id}
-                  style={{
-                    alignSelf: isUser ? "flex-end" : "flex-start",
-                    maxWidth: "85%",
-                    border: `1px solid ${t.colors.border}`,
-                    borderRadius: 14,
-                    padding: t.spacing(2.75),
-                    backgroundColor: isUser ? `${t.colors.primary}10` : t.colors.surface,
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: "0.78rem",
-                      color: t.colors.textMuted,
-                      marginBottom: t.spacing(0.75),
-                      fontWeight: 600,
-                    }}
-                  >
-                    {isUser ? "You" : "Agent"}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: "0.93rem",
-                      color: t.colors.text,
-                      lineHeight: 1.65,
-                    }}
-                  >
-                    <MessageContent text={m.text} isStreaming={isThisStreaming} t={t} />
-                  </div>
-                </div>
-              );
-            })}
-
-            {/* Tool call status pills (shown while tools are running) */}
-            {activeToolCalls.length > 0 && (
-              <div
-                style={{
-                  alignSelf: "flex-start",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: t.spacing(1),
-                }}
-              >
-                {activeToolCalls.map((tc, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: t.spacing(1.5),
-                      padding: `${t.spacing(1)} ${t.spacing(2)}`,
-                      backgroundColor: tc.done ? `${t.colors.secondary}14` : `${t.colors.primary}10`,
-                      border: `1px solid ${tc.done ? t.colors.secondary : t.colors.primary}40`,
-                      borderRadius: 999,
-                      fontSize: "0.78rem",
-                      color: tc.done ? t.colors.secondary : t.colors.primary,
-                      fontFamily: t.typography.fontFamily,
-                      fontWeight: 600,
-                    }}
-                  >
-                    <span
-                      className="material-symbols-outlined"
-                      style={{ fontSize: 14, lineHeight: 1 }}
-                      aria-hidden
-                    >
-                      {tc.done ? "check_circle" : "data_thresholding"}
-                    </span>
-                    {tc.done ? tc.label.replace(/\.\.\.$/, " ✓") : tc.label}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div ref={messagesEndRef} />
-          </div>
-
-          {/* Input bar */}
-          <div style={inputBarStyle}>
+          return (
             <div
+              key={m.id}
+              className="agent-message"
               style={{
                 display: "flex",
-                gap: t.spacing(1.5),
-                alignItems: "flex-end",
-                border: `1px solid ${t.colors.border}`,
-                borderRadius: 18,
-                padding: t.spacing(1),
-                backgroundColor: t.colors.surface,
+                flexDirection: isUser ? "row-reverse" : "row",
+                alignItems: "flex-start",
+                gap: t.spacing(2),
               }}
             >
-              <textarea
-                ref={textareaRef}
-                id="agent-chat-input"
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    void sendDraft();
-                  }
-                }}
-                placeholder={`Ask about ${scope === "options" ? "options" : "stocks"}…`}
-                rows={1}
+              {/* Avatar dot */}
+              {!isUser && (
+                <div
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: "50%",
+                    backgroundColor: `${t.colors.secondary}20`,
+                    border: `1px solid ${t.colors.secondary}40`,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
+                    marginTop: 2,
+                  }}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 14, color: t.colors.secondary, lineHeight: 1 }} aria-hidden>
+                    smart_toy
+                  </span>
+                </div>
+              )}
+
+              {/* Bubble */}
+              <div
                 style={{
-                  flex: 1,
-                  minWidth: 220,
-                  border: "none",
-                  outline: "none",
-                  boxShadow: "none",
-                  background: "transparent",
-                  color: t.colors.text,
-                  fontFamily: t.typography.fontFamily,
-                  fontSize: "0.98rem",
-                  lineHeight: 1.5,
-                  resize: "none",
-                  padding: `${t.spacing(1.6)} ${t.spacing(2)}`,
-                  maxHeight: 140,
-                  overflowY: "auto",
+                  maxWidth: "78%",
+                  borderRadius: isUser ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
+                  padding: `${t.spacing(2.5)} ${t.spacing(3)}`,
+                  backgroundColor: isUser
+                    ? t.colors.primary
+                    : t.colors.surface,
+                  color: isUser ? "#ffffff" : t.colors.text,
+                  border: isUser ? "none" : `1px solid ${t.colors.border}`,
+                  boxShadow: isUser
+                    ? `0 2px 8px ${t.colors.primary}30`
+                    : "0 1px 3px rgba(0,0,0,0.05)",
+                  fontSize: "0.93rem",
+                  lineHeight: 1.65,
                 }}
-                disabled={isStreaming}
-                aria-label="Message input"
-              />
-              <button
-                type="button"
-                onClick={() => void sendDraft()}
-                disabled={!canSend}
-                title={canSend ? "Send" : isStreaming ? "Waiting for response…" : "Type a message"}
-                style={{
-                  width: 42,
-                  height: 42,
-                  minWidth: 42,
-                  borderRadius: "50%",
-                  border: "none",
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  backgroundColor: canSend ? t.colors.primary : t.colors.border,
-                  color: canSend ? "#FFFFFF" : t.colors.textMuted,
-                  cursor: canSend ? "pointer" : "not-allowed",
-                  alignSelf: "flex-end",
-                  transition: "transform 0.15s ease, opacity 0.15s ease",
-                  flexShrink: 0,
-                }}
-                aria-label="Send message"
               >
-                <span className="material-symbols-outlined" style={{ fontSize: 20, lineHeight: 1 }} aria-hidden>
-                  {isStreaming ? "stop_circle" : "arrow_upward"}
-                </span>
-              </button>
+                <MessageContent text={m.text} isStreaming={isThisStreaming} t={t} />
+              </div>
             </div>
-            <div style={{ marginTop: t.spacing(1), fontSize: "0.74rem", color: t.colors.textMuted }}>
-              Enter to send · Shift+Enter for new line
-            </div>
-          </div>
+          );
+        })}
+
+        {/* Tool call status */}
+        <ToolStrip calls={activeToolCalls} t={t} />
+
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Input bar */}
+      <div style={{ marginTop: t.spacing(3) }}>
+        <div
+          className="agent-input-wrap"
+          style={{
+            display: "flex",
+            alignItems: "flex-end",
+            gap: t.spacing(1.5),
+            backgroundColor: t.colors.surface,
+            border: `1px solid ${t.colors.border}`,
+            borderRadius: 18,
+            padding: `${t.spacing(1.25)} ${t.spacing(1.5)}`,
+            boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
+          }}
+        >
+          <textarea
+            ref={textareaRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void sendDraft();
+              }
+            }}
+            placeholder="Ask about options, stocks, or the market…"
+            rows={1}
+            disabled={isStreaming}
+            aria-label="Message input"
+            style={{
+              flex: 1,
+              border: "none",
+              outline: "none",
+              boxShadow: "none",
+              background: "transparent",
+              color: t.colors.text,
+              fontFamily: t.typography.fontFamily,
+              fontSize: "0.95rem",
+              lineHeight: 1.55,
+              resize: "none",
+              padding: `${t.spacing(0.75)} ${t.spacing(1)}`,
+              minHeight: 34,
+              maxHeight: 140,
+              overflowY: "auto",
+              cursor: isStreaming ? "not-allowed" : "text",
+              opacity: isStreaming ? 0.6 : 1,
+            }}
+          />
+          <button
+            type="button"
+            className="agent-send-btn"
+            onClick={() => void sendDraft()}
+            disabled={!canSend}
+            aria-label="Send message"
+            title={canSend ? "Send" : isStreaming ? "Waiting…" : "Type a message"}
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: "50%",
+              border: "none",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: canSend ? t.colors.primary : t.colors.border,
+              color: canSend ? "#ffffff" : t.colors.textMuted,
+              cursor: canSend ? "pointer" : "not-allowed",
+              flexShrink: 0,
+              marginBottom: 1,
+            }}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 18, lineHeight: 1 }} aria-hidden>
+              arrow_upward
+            </span>
+          </button>
         </div>
-      </section>
-    </>
+        <p style={{ margin: `${t.spacing(1)} 0 0`, fontSize: "0.72rem", color: t.colors.textMuted, textAlign: "center" }}>
+          Enter to send · Shift+Enter for new line
+        </p>
+      </div>
+    </section>
   );
 }

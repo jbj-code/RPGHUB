@@ -308,10 +308,8 @@ async function runAgent(
     const completedToolUses: { id: string; name: string; input: Record<string, any> }[] = [];
     let stopReason = "";
 
-    // Model ID — update to the latest Claude version you want to use.
-    // claude-3-5-sonnet-20241022 is battle-tested for tool use and financial reasoning.
     const stream = client.messages.stream({
-      model: "claude-3-5-sonnet-20241022",
+      model: "claude-sonnet-4-6",
       max_tokens: 4096,
       system: SYSTEM_PROMPT + scopeNote,
       tools: TOOLS,
@@ -422,7 +420,7 @@ export default async function handler(req: any, res: any): Promise<void> {
   const messages: Anthropic.Messages.MessageParam[] = Array.isArray(body?.messages)
     ? body.messages
     : [];
-  const scope: string = typeof body?.scope === "string" ? body.scope : "options";
+  const scope = "options";
 
   if (messages.length === 0) {
     res.status(400).json({ error: "No messages provided" });
