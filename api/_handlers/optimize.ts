@@ -70,11 +70,13 @@ export type RankedResult = {
   annYield: number;
   premiumPerContract: number;
   delta?: number | null;
-  btcAsk?: number | null;
-  netRollPerContract?: number | null;
-  netRollAnnualizedPct?: number | null;
-  netRollTotal?: number | null;
-  rollContractsUsed?: number | null;
+  gamma?: number | null;
+  theta?: number | null;
+  vega?: number | null;
+  /** Implied vol as percent (e.g. 32 = 32%). */
+  ivPct?: number | null;
+  openInterest?: number | null;
+  totalVolume?: number | null;
   trade: OptionsTrade;
 };
 
@@ -150,14 +152,6 @@ function modeledLimitPrice(bid?: number, ask?: number): number | null {
   return null;
 }
 
-/** Accept YYYY-MM-DD from date inputs or leading slice of ISO datetimes (fixes roll BTC lookup). */
-function normalizeExpiryYMD(raw: string): string | null {
-  const t = raw.trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
-  const m = t.match(/^(\d{4}-\d{2}-\d{2})/);
-  return m ? m[1]! : null;
-}
-
 /**
  * Desk-modeled executable price from a Schwab option quote.
  * Near expiry, bid/ask are often missing; fall back to last or mark * 92% (same discount as midpoint model).
@@ -197,6 +191,37 @@ function modeledPriceFromOptionQuote(src: any): number | null {
   return null;
 }
 
+const numField = (x: unknown): number | undefined =>
+  typeof x === "number" && Number.isFinite(x) ? x : undefined;
+
+/** IV as percent (e.g. 28.5). Accepts decimal (0–3) or percent from Schwab. */
+function impliedVolPercentFromQuote(src: any): number | null {
+  const candidates = [
+    numField(src?.volatility),
+    numField(src?.impliedVolatility),
+    numField(src?.implied_volatility),
+    numField(src?.theoreticalOptionVol),
+  ];
+  for (const v of candidates) {
+    if (v == null || v <= 0) continue;
+    if (v > 0 && v <= 3) return v * 100;
+    if (v > 3 && v < 450) return v;
+  }
+  return null;
+}
+
+type ParsedOptionQuote = {
+  bid: number;
+  ask: number;
+  modeled: number;
+  delta: number | null;
+  gamma: number | null;
+  theta: number | null;
+  vega: number | null;
+  ivPct: number | null;
+  openInterest: number | null;
+  totalVolume: number | null;
+};
 
 export async function handler(req: any, res: any): Promise<void> {
   const body = req.body ?? {};
@@ -204,13 +229,6 @@ export async function handler(req: any, res: any): Promise<void> {
     ? body.portfolioRows
     : [];
   const otmVariancePct = Number(body.otmVariancePct) || 0;
-  const rollMode = Boolean(body.rollMode);
-  const rollCreditOnly = Boolean(body.rollCreditOnly);
-  const assignmentAwareRanking = Boolean(body.assignmentAwareRanking);
-  const rollObjective =
-    body.rollObjective === "cashflow" || body.rollObjective === "yield" || body.rollObjective === "balanced"
-      ? body.rollObjective
-      : "balanced";
 
   const tickers = [
     ...new Set(
@@ -512,7 +530,7 @@ export async function handler(req: any, res: any): Promise<void> {
       if (q.option && typeof q.option === "object") return q.option;
       return q.quote ?? q.optionContract ?? q;
     };
-    const optionQuotes: Record<string, { bid: number; ask: number; modeled: number; delta: number | null }> = {};
+    const optionQuotes: Record<string, ParsedOptionQuote> = {};
     for (let i = 0; i < optionSpecs.length; i += BATCH) {
       const batch = optionSpecs.slice(i, i + BATCH);
       const occSymbols = batch.map((o) =>
@@ -550,64 +568,35 @@ export async function handler(req: any, res: any): Promise<void> {
           typeof src.delta === "number" && Number.isFinite(src.delta)
             ? src.delta
             : null;
+        const gamma = numField(src.gamma) ?? null;
+        const theta = numField(src.theta) ?? null;
+        const vega = numField(src.vega) ?? null;
+        const openInterest =
+          numField(src.openInterest) ?? numField(src.open_interest) ?? null;
+        const totalVolume =
+          numField(src.totalVolume) ??
+          numField(src.volume) ??
+          numField(src.lastTradingDayVolume) ??
+          null;
+        const ivPct = impliedVolPercentFromQuote(src);
         const key = `${spec.underlying} ${spec.expiry} ${spec.strike} ${spec.type}`;
-        optionQuotes[key] = { bid, ask, modeled, delta };
+        optionQuotes[key] = {
+          bid,
+          ask,
+          modeled,
+          delta,
+          gamma,
+          theta,
+          vega,
+          ivPct,
+          openInterest,
+          totalVolume,
+        };
       }
     }
 
     // CUSIP note: Schwab's /quotes and /instruments endpoints do not return cusip for option
     // contracts. The underlying equity's cusip (fetched in step 1 via reference) is used instead.
-
-    // 4b) Optional roll-mode BTC quote lookup for each row's current short leg.
-    const closePriceByRowId: Record<string, number> = {};
-    if (rollMode) {
-      const btcRows = portfolioRows
-        .map((row) => {
-          const expiryNorm = normalizeExpiryYMD(row.currentExpiry ?? "");
-          return {
-            rowId: row.id,
-            ticker: row.ticker.trim().toUpperCase(),
-            type: row.putCall === "Call" ? "C" : ("P" as "C" | "P"),
-            expiry: expiryNorm ?? "",
-            strike: Number(row.currentStrike),
-          };
-        })
-        .filter(
-          (r) =>
-            Boolean(r.rowId) &&
-            Boolean(r.ticker) &&
-            /^\d{4}-\d{2}-\d{2}$/.test(r.expiry) &&
-            Number.isFinite(r.strike) &&
-            r.strike > 0
-        );
-
-      const occByRowId: { rowId: string; occ: string }[] = btcRows.map((r) => ({
-        rowId: r.rowId,
-        occ: toOCCSymbol(r.ticker, r.expiry, r.type, r.strike),
-      }));
-
-      for (let i = 0; i < occByRowId.length; i += BATCH) {
-        const batch = occByRowId.slice(i, i + BATCH);
-        const occSymbols = batch.map((b) => b.occ);
-        const qUrl =
-          "https://api.schwabapi.com/marketdata/v1/quotes?" +
-          new URLSearchParams({ symbols: occSymbols.join(",") }).toString();
-        const qResp = await fetch(qUrl, {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
-        if (!qResp.ok) continue;
-        const qBody: any = await qResp.json();
-        for (const item of batch) {
-          const q = qBody[item.occ] ?? qBody[item.occ.replace(/\s+/g, "")];
-          const src = optionQuoteSrc(q);
-          if (!src || typeof src !== "object") continue;
-          const modeled = modeledPriceFromOptionQuote(src);
-          if (modeled != null && modeled > 0) {
-            closePriceByRowId[item.rowId] = modeled;
-          }
-        }
-      }
-    }
 
     // 5) Build RankedResult + OptionsTrade for each spec that has a quote
     const optionSideFromRow = (r: PortfolioRow): OptionSide => {
@@ -630,8 +619,7 @@ export async function handler(req: any, res: any): Promise<void> {
       if (bid <= 0 && ask <= 0) continue;
 
       const row = spec.row;
-      // In roll mode we always evaluate replacement candidates as SELL TO OPEN.
-      const isSell = rollMode ? true : row.action.startsWith("Sell");
+      const isSell = row.action.startsWith("Sell");
       const modeled = modeledLimitPrice(bid, ask);
       if (modeled == null || modeled <= 0) continue;
       const optionLimitPrice = modeled;
@@ -664,11 +652,7 @@ export async function handler(req: any, res: any): Promise<void> {
         strikePrice: spec.strike,
         currentPrice: spec.currentPrice,
         moneynessPct: Math.round(moneynessPct * 100) / 100,
-        optionSide: rollMode
-          ? row.putCall === "Put"
-            ? "PUT - SELL to OPEN"
-            : "CALL - SELL to OPEN"
-          : optionSideFromRow(row),
+        optionSide: optionSideFromRow(row),
         pctOffBid: 0,
         optionLimitPrice,
         currentBid: bid,
@@ -683,17 +667,6 @@ export async function handler(req: any, res: any): Promise<void> {
       };
 
       const upsidePct = upsideByTicker[spec.underlying] ?? 0;
-      const rollContractsUsed = Math.max(
-        1,
-        Math.round(Number(row.currentContracts) > 0 ? Number(row.currentContracts) : contracts)
-      );
-      const netRollPerContract =
-        rollMode && closePriceByRowId[row.id] != null
-          ? Math.round(
-              ((isSell ? 1 : -1) * optionLimitPrice * 100 - closePriceByRowId[row.id] * 100) *
-                100
-            ) / 100
-          : null;
       raw.push({
         rank: 0,
         ticker: spec.underlying,
@@ -705,54 +678,54 @@ export async function handler(req: any, res: any): Promise<void> {
         // Signed per-contract premium/cost so buy actions display as negative cash flow.
         premiumPerContract: Math.round((isSell ? 1 : -1) * optionLimitPrice * 100),
         delta: quote?.delta ?? null,
-        btcAsk: rollMode ? closePriceByRowId[row.id] ?? null : null,
-        netRollPerContract,
-        netRollAnnualizedPct: rollMode
-          ? closePriceByRowId[row.id] != null && spec.daysToMaturity > 0
-            ? Math.round(
-                ((((isSell ? 1 : -1) * optionLimitPrice * 100 - closePriceByRowId[row.id] * 100) / (spec.strike * 100)) *
-                  100 *
-                  (365 / spec.daysToMaturity)) *
-                  100
-              ) / 100
-            : null
-          : null,
-        netRollTotal:
-          rollMode && netRollPerContract != null
-            ? Math.round(netRollPerContract * rollContractsUsed * 100) / 100
-            : null,
-        rollContractsUsed: rollMode ? rollContractsUsed : null,
+        gamma: quote?.gamma ?? null,
+        theta: quote?.theta ?? null,
+        vega: quote?.vega ?? null,
+        ivPct: quote?.ivPct ?? null,
+        openInterest: quote?.openInterest ?? null,
+        totalVolume: quote?.totalVolume ?? null,
         trade,
       });
     }
 
     let ranked = raw;
     let message: string | null = null;
-    if (rollMode && rollCreditOnly) {
-      ranked = ranked.filter((r) => (r.netRollPerContract ?? -Infinity) > 0);
-      if (ranked.length === 0) {
-        message =
-          "No credit roll candidates found for these settings. Try turning off Credit only, widening OTM variance, or increasing DTE.";
+    /**
+     * Buy-to-open / long premium: annYield alone is ~linear in premium % for one name.
+     * Blend in Schwab quote fields — liquidity, delta & gamma per premium dollar, theta bleed, extreme IV.
+     */
+    const longPremiumScoreAdjust = (r: RankedResult): number => {
+      let adj = 0;
+      const mid = r.limitPrice;
+      const bid = r.trade.currentBid;
+      const ask = r.trade.currentAsk;
+      if (bid > 0 && ask > 0 && mid > 0) {
+        const spreadPct = ((ask - bid) / mid) * 100;
+        adj -= Math.min(14, spreadPct * 0.4);
       }
-    } else if (rollMode && ranked.length === 0) {
-      message =
-        "No roll candidates found for these settings. Try widening OTM variance or adjusting DTE.";
-    }
-    if (rollMode && raw.length > 0 && raw.every((r) => r.btcAsk == null)) {
-      const warn =
-        "Current-leg (BTC) modeled price missing: Net Roll and Roll metrics need a Schwab quote on your closing contract (bid/ask, last, or mark). Confirm Current expiry and strike match the option you hold.";
-      message = message ? `${message} ${warn}` : warn;
-    }
+      const prem = Math.max(mid, 0.05);
+      if (r.delta != null) {
+        adj += Math.min(20, (Math.abs(r.delta) / prem) * 7);
+      }
+      if (r.gamma != null) {
+        adj += Math.min(12, Math.sqrt(Math.abs(r.gamma) / prem) * 5);
+      }
+      if (r.theta != null) {
+        adj -= Math.min(10, (Math.abs(r.theta) / prem) * 1.5);
+      }
+      if (r.ivPct != null && r.ivPct > 120) {
+        adj -= Math.min(8, (r.ivPct - 120) * 0.06);
+      }
+      const oi = r.openInterest ?? 0;
+      const vol = r.totalVolume ?? 0;
+      if (oi >= 2000) adj += 1.5;
+      else if (oi >= 500) adj += 0.75;
+      if (vol >= 500) adj += 1;
+      else if (vol >= 100) adj += 0.5;
+      return adj;
+    };
 
     const score = (r: RankedResult) => {
-      if (rollMode) {
-        const netAnn = r.netRollAnnualizedPct ?? -9999;
-        const netPerC = r.netRollPerContract ?? -9999;
-        if (rollObjective === "cashflow") return netPerC;
-        if (rollObjective === "yield") return netAnn;
-        return netAnn * 0.8 + netPerC * 0.2;
-      }
-
       const isSell = r.trade.optionSide.includes("SELL");
       const isPut = r.trade.optionSide.startsWith("PUT");
 
@@ -765,6 +738,10 @@ export async function handler(req: any, res: any): Promise<void> {
 
       // Base: 50% yield (primary) + 50% directional momentum (secondary context)
       const base = r.annYield * 0.5 + (cappedUpside + 50) * 0.5;
+
+      if (!isSell) {
+        return base + longPremiumScoreAdjust(r);
+      }
 
       // Risk adjustment for short options — rewards high PoP, penalises near/in-the-money.
       if (isSell && r.delta != null) {

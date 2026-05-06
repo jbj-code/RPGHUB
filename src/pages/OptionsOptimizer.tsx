@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Theme } from "../theme";
 import {
@@ -11,7 +11,6 @@ import {
   getDropdownPanelStyle,
   getDropdownOptionStyle,
   THEME_DROPDOWN_OPTION_CLASS,
-  getTooltipIconStyle,
   getTooltipBubbleStyle,
 } from "../theme";
 import { SIDEBAR_WIDTH } from "../components/NavBar";
@@ -85,11 +84,13 @@ export type RankedResult = {
   limitPrice: number;
   annYield: number;
   premiumPerContract: number;
-  btcAsk?: number | null;
-  netRollPerContract?: number | null;
-  netRollAnnualizedPct?: number | null;
-  netRollTotal?: number | null;
-  rollContractsUsed?: number | null;
+  delta?: number | null;
+  gamma?: number | null;
+  theta?: number | null;
+  vega?: number | null;
+  ivPct?: number | null;
+  openInterest?: number | null;
+  totalVolume?: number | null;
   trade: OptionsTrade;
 };
 
@@ -233,7 +234,7 @@ function getMaturitySortValue(r: RankedResult): number {
   return Number.isFinite(t) ? t : 0;
 }
 
-export function formatRankedRowForCopy(r: RankedResult, rollMode: boolean): string {
+export function formatRankedRowForCopy(r: RankedResult): string {
   const values: string[] = [
     String(r.rank),
     r.ticker,
@@ -243,14 +244,6 @@ export function formatRankedRowForCopy(r: RankedResult, rollMode: boolean): stri
     r.strike.toFixed(2),
     r.limitPrice.toFixed(2),
   ];
-
-  if (rollMode) {
-    values.push(
-      r.btcAsk != null ? r.btcAsk.toFixed(2) : "",
-      r.netRollPerContract != null ? r.netRollPerContract.toFixed(2) : "",
-      r.netRollTotal != null ? r.netRollTotal.toFixed(2) : ""
-    );
-  }
 
   values.push(
     r.annYield.toFixed(2),
@@ -304,9 +297,14 @@ const defaultPortfolioRow = (): PortfolioRow => {
   };
 };
 
-type HelpTooltipProps = { theme: Theme; text: string; children: React.ReactNode };
+type HelpTooltipProps = {
+  theme: Theme;
+  text: ReactNode;
+  children: React.ReactNode;
+  maxWidth?: number;
+};
 
-function HelpTooltip({ theme: t, text, children }: HelpTooltipProps) {
+function HelpTooltip({ theme: t, text, children, maxWidth: tooltipWidth = 280 }: HelpTooltipProps) {
   const [open, setOpen] = useState(false);
   const [mouse, setMouse] = useState<{ x: number; y: number } | null>(null);
 
@@ -318,8 +316,6 @@ function HelpTooltip({ theme: t, text, children }: HelpTooltipProps) {
   function handleMouseMove(e: React.MouseEvent) {
     setMouse({ x: e.clientX, y: e.clientY });
   }
-
-  const tooltipWidth = 280;
   const offsetY = 22; // gap below cursor — enough to clear the pointer tip
 
   const left = mouse
@@ -346,7 +342,7 @@ function HelpTooltip({ theme: t, text, children }: HelpTooltipProps) {
             left,
             marginTop: 0,
             maxWidth: tooltipWidth,
-            minWidth: 180,
+            minWidth: Math.min(180, tooltipWidth),
             whiteSpace: "normal",
             zIndex: 9999,
             pointerEvents: "none",
@@ -362,6 +358,22 @@ function HelpTooltip({ theme: t, text, children }: HelpTooltipProps) {
   );
 }
 
+/** Static copy for Options Optimizer “Ann. Yield” header (hover label to open). */
+const annYieldHeaderHelp: ReactNode = (
+  <div style={{ display: "flex", flexDirection: "column", gap: 8, lineHeight: 1.45 }}>
+    <div>
+      <strong>Ann. yield</strong> is return on strike notional (premium ÷ capital at risk for this leg), then{" "}
+      <strong>annualized</strong> by × (365 ÷ DTE). Rough period return on that notional (not annualized) ≈ ann. × (DTE ÷
+      365).
+    </div>
+    <div>
+      <strong>Why writes look positive and buys look negative:</strong> Sell-to-open credits premium, so the figure is
+      positive. Buy-to-open debits premium, so the same math is <strong>negative</strong> — it is the cost of the option
+      vs. notional, not whether the trade might still profit from the stock.
+    </div>
+  </div>
+);
+
 type SortableOptimizerThProps = {
   theme: Theme;
   sortKey: OptimizerTableSortKey;
@@ -369,7 +381,9 @@ type SortableOptimizerThProps = {
   onCycle: (key: OptimizerTableSortKey) => void;
   label: string;
   textAlign: "left" | "right" | "center";
-  helpText?: string;
+  /** If set, the label text is wrapped in a help tooltip (no separate info icon). */
+  labelHelp?: ReactNode;
+  labelHelpMaxWidth?: number;
 };
 
 function SortableOptimizerTh({
@@ -379,7 +393,8 @@ function SortableOptimizerTh({
   onCycle,
   label,
   textAlign,
-  helpText,
+  labelHelp,
+  labelHelpMaxWidth,
 }: SortableOptimizerThProps) {
   const active = tableSort.phase !== "none" && tableSort.key === sortKey;
   const ariaSort =
@@ -410,7 +425,13 @@ function SortableOptimizerTh({
         borderRadius: 4,
       }}
     >
-      <span>{label}</span>
+      {labelHelp ? (
+        <HelpTooltip theme={t} text={labelHelp} maxWidth={labelHelpMaxWidth ?? 280}>
+          <span style={{ cursor: "help" }}>{label}</span>
+        </HelpTooltip>
+      ) : (
+        <span>{label}</span>
+      )}
       {active && (
         <span
           className="material-symbols-outlined"
@@ -444,21 +465,6 @@ function SortableOptimizerTh({
         }}
       >
         {btn}
-        {helpText ? (
-          <HelpTooltip theme={t} text={helpText}>
-            <span
-              style={{ ...getTooltipIconStyle(t), cursor: "help", flexShrink: 0 }}
-              className="material-symbols-outlined"
-              tabIndex={0}
-              onClick={(e) => e.stopPropagation()}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") e.stopPropagation();
-              }}
-            >
-              info
-            </span>
-          </HelpTooltip>
-        ) : null}
       </div>
     </th>
   );
@@ -799,7 +805,6 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
         body: JSON.stringify({
           action: "optimize",
           portfolioRows,
-          assignmentAwareRanking: true,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -1027,20 +1032,21 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
 
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>How ranking works</p>
               <p style={{ marginBottom: t.spacing(2) }}>
-                Each candidate is scored on three factors and sorted highest to lowest:
+                Each candidate gets a score from the factors below (higher sorts to the top):
               </p>
               <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
-                <li><strong>Annualized Yield (50%)</strong> — premium ÷ strike notional × (365 ÷ DTE). This is the return on actual capital at risk (cash to cover a short put, or shares for a short call), annualized. Higher is better.</li>
+                <li><strong>Annualized Yield (50% of base)</strong> — premium ÷ strike notional × (365 ÷ DTE). For short premium this is income on capital at risk; for long premium it is negative (cost vs notional). Same formula, opposite sign.</li>
                 <li><strong>Directional Momentum (50% of base)</strong> — the underlying's trailing ~1-month return (start: daily close from Schwab history; end: same live equity quote snapshot as spot), adjusted for trade direction. Upside helps short puts &amp; long calls; downside helps short calls &amp; long puts. Capped at ±50% so extreme single-month moves don't dominate.</li>
-                <li><strong>Risk adjustment</strong> — for short options, we use <strong>Probability of Profit (PoP)</strong> from the Schwab-quoted delta: <em>PoP = (1 − |delta|) × 100</em>. Options above 70% PoP get a score boost; below 50% (near/in-the-money) get a penalty. When Schwab doesn't return a delta, we fall back to tiered OTM-distance penalties.</li>
+                <li><strong>Short-option risk adjustment</strong> — for sell-to-open legs we use <strong>Probability of Profit (PoP)</strong> from Schwab delta: <em>PoP = (1 − |delta|) × 100</em>. Above ~70% PoP gets a boost; below ~50% (near/in-the-money) is penalized. If delta is missing, we use tiered OTM-distance penalties.</li>
+                <li><strong>Long premium add-on</strong> — for buy-to-open (and other non-short legs in the score), we blend in quote quality from Schwab: tighter bid/ask, delta &amp; gamma per premium dollar (exposure efficiency), theta bleed vs premium, a mild penalty for very high IV, and small lifts for open interest and volume.</li>
               </ul>
 
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Understanding the columns</p>
               <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
-                <li><strong>1M Performance</strong> — ~1-month total return: baseline close from daily history vs current price from the equity quote at request time (directional context for ranking).</li>
+                <li><strong>1M Return</strong> — ~1-month total return: baseline close from daily history vs current price from the equity quote at request time (directional context for ranking).</li>
                 <li><strong>Moneyness</strong> — strike ÷ current spot × 100 (same quote snapshot as the run). Below 100% is typically OTM for puts; above 100% is typically OTM for calls. At-the-money is near 100%.</li>
                 <li><strong>Limit Px</strong> — midpoint of the Schwab bid/ask. This is your target fill price; real fills may differ.</li>
-                <li><strong>Ann. Yield</strong> — annualized yield based on strike notional (see above).</li>
+                <li><strong>Ann. Yield</strong> — annualized yield based on strike notional (see ranking explainer). Hover the column header for period vs annualized and why long premium shows negative yield.</li>
                 <li><strong>PoP</strong> — probability the option expires worthless (you keep the full premium). Derived from delta: higher is better for short options.</li>
                 <li><strong>Premium</strong> — limit price × 100 × contracts. Positive = cash you receive (sell to open); negative = cash you pay (buy to open).</li>
               </ul>
@@ -1049,7 +1055,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
               <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
                 <li><strong>Sell to Open</strong> — generates premium income. You take on the obligation to buy (put) or sell (call) shares if assigned. The optimizer scores these most often.</li>
                 <li><strong>Buy to Open</strong> — pays premium upfront. Requires directional conviction. The momentum signal is automatically flipped to match your intended direction.</li>
-                <li><strong>Sell/Buy to Close</strong> — exits an existing position. Useful for rolling analysis.</li>
+                <li><strong>Sell/Buy to Close</strong> — exits an existing position.</li>
               </ul>
 
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Assignment-aware ranking</p>
@@ -1570,9 +1576,9 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                   <th style={{ textAlign: "center", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
                     <HelpTooltip
                       theme={t}
-                      text="1M Performance is ~1-month total return: start from Schwab daily history (close on/after ~1 month ago), end from the live equity quote at request time (same snapshot as spot). Used in ranking."
+                      text="1M Return is ~1-month total return: start from Schwab daily history (close on/after ~1 month ago), end from the live equity quote at request time (same snapshot as spot). Used in ranking."
                     >
-                      <span style={{ cursor: "help" }}>1M Performance</span>
+                      <span style={{ cursor: "help" }}>1M Return</span>
                     </HelpTooltip>
                   </th>
                   <SortableOptimizerTh
@@ -1606,6 +1612,8 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                     onCycle={cycleOptimizerTableSort}
                     label="Ann. Yield"
                     textAlign="center"
+                    labelHelp={annYieldHeaderHelp}
+                    labelHelpMaxWidth={340}
                   />
                   <th style={{ textAlign: "center", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
                     <HelpTooltip
@@ -1685,7 +1693,14 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                         : "—"}
                     </td>
                     <td style={{ padding: t.spacing(2), textAlign: "center" }}>${r.limitPrice.toFixed(2)}</td>
-                    <td style={{ padding: t.spacing(2), textAlign: "center", color: t.colors.success, fontWeight: 600 }}>
+                    <td
+                      style={{
+                        padding: t.spacing(2),
+                        textAlign: "center",
+                        fontWeight: 600,
+                        color: r.annYield >= 0 ? t.colors.success : t.colors.danger,
+                      }}
+                    >
                       {r.annYield}%
                     </td>
                     <td style={{ padding: t.spacing(2), textAlign: "center", fontWeight: 600, color: t.colors.textMuted }}>
@@ -1756,7 +1771,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                         <button
                           type="button"
                           onClick={() => {
-                            const text = formatRankedRowForCopy(r, false);
+                            const text = formatRankedRowForCopy(r);
                             void navigator.clipboard.writeText(text);
                             setLastCopiedTradeId(r.trade.id);
                             window.setTimeout(

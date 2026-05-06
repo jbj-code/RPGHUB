@@ -182,6 +182,19 @@ These templates are open-source cookbooks. The workflow is:
 
 **Practical suggestion:** Start with Market Researcher as a morning briefing mode. You open the Agent page, click "Morning Brief," and it fetches the latest news/filings for your current holdings, synthesizes what matters, and flags anything that affects your options positions. All public data, no PII, immediately useful.
 
+### Architecture patterns (reference: [`anthropics/financial-services`](https://github.com/anthropics/financial-services))
+
+The repo is file-based (markdown + YAML, no build). Useful patterns to steal when hardening our hub agent:
+
+- **Two runtimes, one source.** The same system prompts and skills ship as **Claude Cowork / Claude Code plugins** and as **Claude Managed Agents** (`POST /v1/agents`). Cookbooks live under `managed-agent-cookbooks/` with `agent.yaml` manifests that mirror the plugin agent.
+- **Layered packaging.** **Agents** (`plugins/agent-plugins/`) bundle an end-to-end workflow. **Vertical plugins** (`plugins/vertical-plugins/`) hold shared **skills**, **slash commands**, and **MCP** config. Agents sync copies of the skills they need.
+- **Fine-grained tool sets.** Manifests use typed toolsets (e.g. `agent_toolset_20260401`) with **per-tool enablement** — e.g. read/grep/glob on, bash/write off — instead of an all-or-nothing tool dump.
+- **MCP per integration.** Separate `mcp_toolset` blocks per server (env-based URLs), read-only vs read-write by policy, aligned with a central `.mcp.json` in the core plugin.
+- **`callable_agents` (leaf workers).** Subagents get **minimal tools** (e.g. read-only document extraction with no MCP). **Output schemas** validate worker JSON before the orchestrator sees it — reduces prompt injection from untrusted inputs and keeps parent context clean.
+- **Handoffs.** `scripts/orchestrate.py` is a reference loop: stream the parent session, parse structured `handoff_request` payloads, **allowlist** target agent slugs, **JSON Schema**–validate payloads, then `steer` the target session. Comments warn against trusting handoff blobs echoed from document text; production should prefer typed tool events.
+
+**Applying this to RPG HUB:** separate “interpret user ask / read context” from “call Schwab or mutate hub state”; document hub rules in **skills**; expose **narrow** tool surfaces per step; if we add multi-agent flows, use **allowlists + schema-validated** worker outputs and avoid security-sensitive routing driven by unparsed model prose.
+
 ---
 
 ## Next Steps (ordered)
