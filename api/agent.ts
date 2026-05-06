@@ -22,9 +22,9 @@ DATA — get_options_chain:
 snap: {atm_iv_pct, best_write_yield_pct, top_oi, expected_move} — use all in opening sentence.
   expected_move = 1σ dollar move to expiry (underlying × IV × √(DTE/365)); cite as "±$X expected move".
   iv_rv_ratio = IV/20-day realized vol. >1.2 = rich premium (good to sell), <0.8 = cheap (good to buy).
-top_for_writing: rank:1 = highest yield_ann. For CSP/covered call.
-top_for_buying: rank:1 = most liquid (OI). For directional puts/calls.
-Fields: rank, k=strike, exp, mark=(bid+ask)/2, iv=IV%, theta=$/day, oi, dte, yield_ann=ann.yield%, otm_pct=OTM%+(positive=OTM), breakeven=strike∓mark
+top_for_writing: rank:1 = highest yield_ann. For CSP/covered call. OI≥50 filter applied.
+top_for_buying: rank:1 = closest to ATM. Sorted OTM% asc = spectrum from near-ATM → speculative. Low OI is normal and fine for a new OTM position — OI builds as the stock moves. Capped at 70% OTM.
+Fields: rank, k=strike, exp, mark=(bid+ask)/2, iv=IV%, delta=Δ(sensitivity/$1 move), theta=$/day, oi, dte, yield_ann=ann.yield%, otm_pct=OTM%+(positive=OTM), breakeven=strike∓mark
 
 DATA — find_best_options:
 ranked[]: rank:1 = best. Fields: rank, ticker, current_price, k, mark, breakeven, yield_ann, iv, otm_pct, dte, oi.
@@ -35,7 +35,8 @@ market_cap_b, pe, eps_ttm, rev_growth_yoy, gross/net_margin_pct, beta, short_flo
 OUTPUT:
 "[TICKER] at $[price]." + 1 sentence directional context.
 [chart spec here if price history available — BEFORE tables]
-Table: Strike | Exp | Mark | OTM% | IV% | Yield/yr | Breakeven | OI | Notes
+Writing table: Strike | Exp | Mark | OTM% | IV% | Yield/yr | Breakeven | OI | Notes
+Buying table: Strike | Exp | Mark | OTM% | Delta | IV% | Breakeven | OI | Notes
 1 sentence: best pick + why.
 
 Chart: \`\`\`chart\n{"type":"line","title":"TICKER — 3M","xKey":"date","series":[{"key":"close","label":"Close"}],"data":[...]}\`\`\`
@@ -129,6 +130,7 @@ function compressOptionsChain(raw: any): any {
           side: side === "put" ? "P" : "C",
           mark,
           iv: c?.volatility != null ? r2(c.volatility) : null,
+          delta: c?.delta != null ? r2(c.delta) : null,
           theta: c?.theta != null ? r2(c.theta) : null,
           oi,
           dte,
@@ -157,12 +159,21 @@ function compressOptionsChain(raw: any): any {
 
   const top_for_writing = writingCandidates.slice(0, 12).map((c, i) => ({ rank: i + 1, ...c }));
 
-  // Buying (directional): sorted by OI desc (liquidity first for buyers)
+  // Buying (directional): OTM 0–70%, real premium, sorted by OTM% asc.
+  // OI is intentionally NOT used for ranking — low OI on OTM options is expected when initiating
+  // a new directional position. If the thesis plays out, OI will build as the stock moves.
+  // Sorting by OTM% gives Claude a natural risk/reward spectrum: ATM (rank 1) → speculative (last).
+  // Cap at 70% OTM to exclude deep-OTM contracts with legacy OI from prior price levels.
   const buyingCandidates = all
-    .filter((c) => (c.oi ?? 0) > 0)
-    .sort((a, b) => (b.oi ?? 0) - (a.oi ?? 0));
+    .filter(
+      (c) =>
+        (c.otm_pct ?? -1) >= 0 &&        // OTM only (negative otm_pct = ITM, different thesis)
+        (c.otm_pct ?? 999) <= 70 &&       // exclude dead deep-OTM contracts (e.g. DOCN $155 calls)
+        c.mark > 0.01                     // must have non-trivial premium
+    )
+    .sort((a, b) => (a.otm_pct ?? 999) - (b.otm_pct ?? 999)); // closest-to-money first
 
-  const top_for_buying = buyingCandidates.slice(0, 10).map((c, i) => ({ rank: i + 1, ...c }));
+  const top_for_buying = buyingCandidates.slice(0, 15).map((c, i) => ({ rank: i + 1, ...c }));
 
   const snap: Record<string, any> = {};
   if (atm_iv_pct != null) snap.atm_iv_pct = atm_iv_pct;

@@ -152,14 +152,16 @@ export function NavBar({
   };
 
   const links: { page: Page; label: string; icon: string; externalUrl?: string }[] = [
+    { page: "agent", label: "Agent", icon: "smart_toy" },
     { page: "stock-comparison", label: "Stock Comparison", icon: "compare_arrows" },
     { page: "put-optimizer", label: "Options Optimizer", icon: "tune" },
-    { page: "options-pricing", label: "Options Pricing", icon: "paid" },
     {
       page: "options-opportunities",
       label: "Options Opportunities",
       icon: "search",
     },
+    { page: "options-pricing", label: "Options Pricing", icon: "paid" },
+    { page: "sourcing", label: "Sourcing", icon: "person_search" },
     {
       page: "assignment-check",
       label: "Assignment Check",
@@ -180,7 +182,6 @@ export function NavBar({
       externalUrl: "https://lookerstudio.google.com/s/vnU0N-aINPg",
     },
     { page: "schwab", label: "Schwab Explorer", icon: "api" },
-    { page: "agent", label: "Agent", icon: "smart_toy" },
     { page: "website", label: "Website", icon: "language" },
   ];
 

@@ -16,6 +16,7 @@ import {
   Extractor,
   Agent,
   Schwab,
+  Sourcing,
 } from "./pages";
 import { OptionsPricing } from "./pages/OptionsPricing";
 
@@ -32,7 +33,8 @@ export type Page =
   | "website"
   | "extractor"
   | "agent"
-  | "schwab";
+  | "schwab"
+  | "sourcing";
 
 function App() {
   const [unlocked, setUnlocked] = useState(false);
@@ -116,6 +118,8 @@ function App() {
           <OptionsOpportunities theme={t} sidebarWidth={sidebarWidth} />
         ) : page === "agent" ? (
           <Agent theme={t} />
+        ) : page === "sourcing" ? (
+          <Sourcing theme={t} />
         ) : page === "schwab" ? (
           <Schwab theme={t} sidebarWidth={sidebarWidth} />
         ) : page === "website" ? (
