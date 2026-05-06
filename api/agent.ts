@@ -23,8 +23,8 @@ snap: {atm_iv_pct, best_write_yield_pct, top_oi, expected_move} — use all in o
   expected_move = 1σ dollar move to expiry (underlying × IV × √(DTE/365)); cite as "±$X expected move".
   iv_rv_ratio = IV/20-day realized vol. >1.2 = rich premium (good to sell), <0.8 = cheap (good to buy).
 top_for_writing: rank:1 = highest yield_ann. For CSP/covered call. OI≥50 filter applied.
-top_for_buying: rank:1 = closest to ATM. Sorted OTM% asc = spectrum from near-ATM → speculative. Low OI is normal and fine for a new OTM position — OI builds as the stock moves. Capped at 70% OTM.
-Fields: rank, k=strike, exp, mark=(bid+ask)/2, iv=IV%, delta=Δ(sensitivity/$1 move), theta=$/day, oi, dte, yield_ann=ann.yield%, otm_pct=OTM%+(positive=OTM), breakeven=strike∓mark
+top_for_buying: rank:1 = closest to ATM. Sorted OTM% asc = spectrum from near-ATM → speculative. Low OI normal for new chains — OI builds as traders enter. Capped at 70% OTM.
+Fields: rank, k=strike, exp, mark=(bid+ask)/2, iv=IV%, delta=Δ(sensitivity/$1 move), theta=$/day decay per contract (negative=cost to holder), oi, vol=today's volume, dte, yield_ann=ann.yield%, otm_pct=OTM%+(positive=OTM), breakeven=strike∓mark
 
 DATA — find_best_options:
 ranked[]: rank:1 = best. Fields: rank, ticker, current_price, k, mark, breakeven, yield_ann, iv, otm_pct, dte, oi.
@@ -36,7 +36,8 @@ OUTPUT:
 "[TICKER] at $[price]." + 1 sentence directional context.
 [chart spec here if price history available — BEFORE tables]
 Writing table: Strike | Exp | Mark | OTM% | IV% | Yield/yr | Breakeven | OI | Notes
-Buying table: Strike | Exp | Mark | OTM% | Delta | IV% | Breakeven | OI | Notes
+Buying table: Strike | Exp | Mark | OTM% | Delta | IV% | Theta/day | Volume | Notes
+(Theta/day = theta×100 per contract, shown as negative $ cost to holder. Volume = today's contracts traded.)
 1 sentence: best pick + why.
 
 Chart: \`\`\`chart\n{"type":"line","title":"TICKER — 3M","xKey":"date","series":[{"key":"close","label":"Close"}],"data":[...]}\`\`\`
@@ -102,6 +103,7 @@ function compressOptionsChain(raw: any): any {
         const mark = r2(c?.mark ?? c?.theoreticalOptionValue ?? (bid + ask) / 2);
         const dte: number | null = c?.daysToExpiration ?? null;
         const oi: number | null = c?.openInterest ?? null;
+        const vol: number | null = c?.totalVolume ?? c?.volume ?? null;
         const itm: boolean = c?.inTheMoney ?? false;
 
         // ── Pre-computed metrics (deterministic TypeScript, not LLM) ──────────
@@ -133,6 +135,7 @@ function compressOptionsChain(raw: any): any {
           delta: c?.delta != null ? r2(c.delta) : null,
           theta: c?.theta != null ? r2(c.theta) : null,
           oi,
+          vol,
           dte,
           itm,
           yield_ann,
