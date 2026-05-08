@@ -161,8 +161,11 @@ function annualizedRV(closes: number[]): number {
 
 async function fetchIV(symbol: string, targetDte: number, token: string): Promise<number | null> {
   const today = new Date();
-  const fromDate = offsetDate(today, targetDte - 10);
-  const toDate = offsetDate(today, targetDte + 10);
+  // Use a ±21 day window (roughly one full option cycle) so we always
+  // capture at least one standard monthly expiration even at 90 DTE.
+  const windowDays = 21;
+  const fromDate = offsetDate(today, targetDte - windowDays);
+  const toDate = offsetDate(today, targetDte + windowDays);
   const fmt = (d: Date) => d.toISOString().split("T")[0];
 
   const resp = await fetch(
