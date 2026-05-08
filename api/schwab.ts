@@ -13,6 +13,7 @@ import { handler as handleBuild } from "./_handlers/build.js";
 import { handler as handleScreener } from "./_handlers/screener.js";
 import { handler as handleExplorer } from "./_handlers/explorer.js";
 import { handler as handleSheetQuote } from "./_handlers/sheetQuote.js";
+import { handler as handleSheetStock } from "./_handlers/sheetStock.js";
 
 export default async function handler(req: any, res: any) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -35,9 +36,10 @@ export default async function handler(req: any, res: any) {
     case "screener": return handleScreener(req, res);
     case "explorer":    return handleExplorer(req, res);
     case "sheetQuote":  return handleSheetQuote(req, res);
+    case "sheetStock":  return handleSheetStock(req, res);
     default:
       res.status(400).json({
-        error: `Unknown or missing action: "${action}". Valid: auth, status, quotes, returns, figi, prices, optimize, build, screener, explorer, sheetQuote`,
+        error: `Unknown or missing action: "${action}". Valid: auth, status, quotes, returns, figi, prices, optimize, build, screener, explorer, sheetQuote, sheetStock`,
       });
   }
 }
