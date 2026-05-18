@@ -16,6 +16,9 @@ type PortfolioRow = {
   days: number;
   targetExpiry?: string;
   targetMonth?: string; // YYYY-MM — used when targetMode === "month"
+  strikeFilterMode?: "percent" | "strike";
+  strikeMin?: number;
+  strikeMax?: number;
   moneyness?: "OTM" | "ITM";
   otmPct?: number;       // legacy single-value (used by Roll tool)
   otmPctMin?: number;    // band lower bound (Optimizer)
@@ -245,6 +248,19 @@ export async function handler(req: any, res: any): Promise<void> {
     return;
   }
 
+  for (const row of portfolioRows) {
+    if ((row.strikeFilterMode ?? "percent") !== "strike") continue;
+    const lo = Number(row.strikeMin);
+    const hi = Number(row.strikeMax);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo <= 0 || hi <= 0 || lo > hi) {
+      res.status(200).json({
+        results: [],
+        message: `Invalid strike range for "${row.ticker.trim() || "ticker"}". Use positive min and max with min ≤ max.`,
+      });
+      return;
+    }
+  }
+
   try {
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -429,19 +445,28 @@ export async function handler(req: any, res: any): Promise<void> {
         const expMap = type === "C" ? chainBody?.callExpDateMap : chainBody?.putExpDateMap;
         if (!expMap || typeof expMap !== "object") return collected;
 
+        const useStrikeBand = (row.strikeFilterMode ?? "percent") === "strike";
         // Band-based OTM/ITM filter: new rows send otmPctMin/otmPctMax directly;
         // legacy rows (Roll tool) send otmPct + body-level otmVariancePct.
-        let pctMin: number;
-        let pctMax: number;
-        if (row.otmPctMin != null && row.otmPctMax != null) {
-          pctMin = Math.max(0, row.otmPctMin / 100);
-          pctMax = row.otmPctMax / 100;
+        let pctMin = 0;
+        let pctMax = 0;
+        let isOTM = true;
+        let strikeLo = 0;
+        let strikeHi = 0;
+        if (useStrikeBand) {
+          strikeLo = Number(row.strikeMin);
+          strikeHi = Number(row.strikeMax);
         } else {
-          const center = row.otmPct ?? 10;
-          pctMin = Math.max(0, (center - otmVariancePct) / 100);
-          pctMax = (center + otmVariancePct) / 100;
+          if (row.otmPctMin != null && row.otmPctMax != null) {
+            pctMin = Math.max(0, row.otmPctMin / 100);
+            pctMax = row.otmPctMax / 100;
+          } else {
+            const center = row.otmPct ?? 10;
+            pctMin = Math.max(0, (center - otmVariancePct) / 100);
+            pctMax = (center + otmVariancePct) / 100;
+          }
+          isOTM = (row.moneyness ?? "OTM") === "OTM";
         }
-        const isOTM = (row.moneyness ?? "OTM") === "OTM";
 
         // For expiry mode: snap to the single expiry closest to the target date within ±7 days.
         let closestExpiry: string | null = null;
@@ -473,20 +498,24 @@ export async function handler(req: any, res: any): Promise<void> {
           for (const [strikeStr, contracts] of strikeEntries) {
             const strike = Number(strikeStr);
             if (!Number.isFinite(strike) || strike <= 0) continue;
-            const pctBelow = (currentPrice - strike) / currentPrice;
-            const pctAbove = (strike - currentPrice) / currentPrice;
-            // OTM: Put = strike below spot, Call = strike above spot. ITM: Put = strike above spot, Call = strike below spot.
-            if (type === "P") {
-              if (isOTM) {
-                if (pctBelow < pctMin || pctBelow > pctMax) continue; // put OTM: strike < spot
-              } else {
-                if (pctAbove < pctMin || pctAbove > pctMax) continue; // put ITM: strike > spot
-              }
+            if (useStrikeBand) {
+              if (strike < strikeLo || strike > strikeHi) continue;
             } else {
-              if (isOTM) {
-                if (pctAbove < pctMin || pctAbove > pctMax) continue; // call OTM: strike > spot
+              const pctBelow = (currentPrice - strike) / currentPrice;
+              const pctAbove = (strike - currentPrice) / currentPrice;
+              // OTM: Put = strike below spot, Call = strike above spot. ITM: Put = strike above spot, Call = strike below spot.
+              if (type === "P") {
+                if (isOTM) {
+                  if (pctBelow < pctMin || pctBelow > pctMax) continue; // put OTM: strike < spot
+                } else {
+                  if (pctAbove < pctMin || pctAbove > pctMax) continue; // put ITM: strike > spot
+                }
               } else {
-                if (pctBelow < pctMin || pctBelow > pctMax) continue; // call ITM: strike < spot
+                if (isOTM) {
+                  if (pctAbove < pctMin || pctAbove > pctMax) continue; // call OTM: strike > spot
+                } else {
+                  if (pctBelow < pctMin || pctBelow > pctMax) continue; // call ITM: strike < spot
+                }
               }
             }
             if (Array.isArray(contracts) && contracts.length > 0) {
@@ -516,7 +545,7 @@ export async function handler(req: any, res: any): Promise<void> {
       res.status(200).json({
         results: [],
         message:
-          "No options found for the given tickers and DTE/OTM range. Try widening OTM % or days.",
+          "No options found for the given tickers, dates, or strike filter. Try widening OTM %, strike range, or days.",
       });
       return;
     }

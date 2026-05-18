@@ -65,6 +65,10 @@ export type PortfolioRow = {
   days: number;
   targetExpiry?: string; // YYYY-MM-DD
   targetMonth?: string;  // YYYY-MM
+  /** How to narrow strikes: percent band vs absolute strike range. */
+  strikeFilterMode?: "percent" | "strike";
+  strikeMin?: number;
+  strikeMax?: number;
   moneyness: "OTM" | "ITM";
   otmPctMin: number;
   otmPctMax: number;
@@ -287,6 +291,9 @@ const defaultPortfolioRow = (): PortfolioRow => {
     days: 30,
     targetExpiry: "",
     targetMonth,
+    strikeFilterMode: "percent",
+    strikeMin: 0,
+    strikeMax: 0,
     moneyness: "OTM",
     otmPctMin: 5,
     otmPctMax: 15,
@@ -790,6 +797,23 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
         if (!yearOk || !monthOk) {
           setOptimizeMessage(
             `Please select a month and enter a valid 4-digit year for "${row.ticker || "your ticker"}".`
+          );
+          setRankedResults(null);
+          return;
+        }
+      }
+      if ((row.strikeFilterMode ?? "percent") === "strike") {
+        const lo = row.strikeMin ?? 0;
+        const hi = row.strikeMax ?? 0;
+        if (
+          !Number.isFinite(lo) ||
+          !Number.isFinite(hi) ||
+          lo <= 0 ||
+          hi <= 0 ||
+          lo > hi
+        ) {
+          setOptimizeMessage(
+            `Enter a valid strike range (positive min and max, min ≤ max) for "${row.ticker.trim() || "your ticker"}".`
           );
           setRankedResults(null);
           return;
@@ -1397,69 +1421,147 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                   </div>
                 )}
               </div>
-              {/* OTM/ITM · Min % · Max % — band-based strike filter */}
-              <div style={{ display: "flex", gap: t.spacing(2), alignItems: "flex-end", flexWrap: "wrap" }}>
+              {/* Strike filter: OTM/ITM % band vs absolute strike range */}
+              <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(1.5) }}>
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
                   <HelpTooltip
                     theme={t}
-                    text="Whether you want strikes out of the money (OTM) or in the money (ITM) relative to current price."
+                    text="Filter listed strikes by moneyness vs spot (%) or by an explicit min/max strike price."
                   >
-                    <label style={labelStyle}>OTM / ITM</label>
+                    <label style={labelStyle}>Strike filter by</label>
                   </HelpTooltip>
                   <OptimizerThemeSelect
                     theme={t}
-                    value={row.moneyness ?? "OTM"}
+                    value={row.strikeFilterMode ?? "percent"}
                     options={[
-                      { value: "OTM", label: "OTM" },
-                      { value: "ITM", label: "ITM" },
+                      { value: "percent", label: "OTM / ITM %" },
+                      { value: "strike", label: "Strike price" },
                     ]}
-                    onChange={(v) => updatePortfolioRow(row.id, "moneyness", v as "OTM" | "ITM")}
-                    dropdownKey={`${row.id}-moneyness`}
+                    onChange={(v) =>
+                      updatePortfolioRow(row.id, "strikeFilterMode", v as "percent" | "strike")
+                    }
+                    dropdownKey={`${row.id}-strikeFilterMode`}
                     openId={portfolioDropdownId}
                     setOpenId={setPortfolioDropdownId}
-                    minWidth={72}
+                    minWidth={132}
                   />
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
-                  <HelpTooltip
-                    theme={t}
-                    text={`Minimum ${row.moneyness ?? "OTM"} distance as a percent of current price. Only strikes at or beyond this level are included.`}
-                  >
-                    <label style={labelStyle}>Min %</label>
-                  </HelpTooltip>
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    style={{ ...inputStyle, maxWidth: 62, minWidth: 52 }}
-                    value={row.otmPctMin > 0 ? `${row.otmPctMin}%` : ""}
-                    onChange={(e) => {
-                      const raw = e.target.value.replace(/%/g, "");
-                      updatePortfolioRow(row.id, "otmPctMin", Number(raw) || 0);
-                    }}
-                    placeholder="0%"
-                    aria-label={`Minimum ${row.moneyness ?? "OTM"} percent`}
-                  />
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
-                  <HelpTooltip
-                    theme={t}
-                    text={`Maximum ${row.moneyness ?? "OTM"} distance as a percent of current price. Only strikes at or within this level are included.`}
-                  >
-                    <label style={labelStyle}>Max %</label>
-                  </HelpTooltip>
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    style={{ ...inputStyle, maxWidth: 62, minWidth: 52 }}
-                    value={row.otmPctMax > 0 ? `${row.otmPctMax}%` : ""}
-                    onChange={(e) => {
-                      const raw = e.target.value.replace(/%/g, "");
-                      updatePortfolioRow(row.id, "otmPctMax", Number(raw) || 0);
-                    }}
-                    placeholder="0%"
-                    aria-label={`Maximum ${row.moneyness ?? "OTM"} percent`}
-                  />
-                </div>
+                {(row.strikeFilterMode ?? "percent") === "percent" ? (
+                  <div style={{ display: "flex", gap: t.spacing(2), alignItems: "flex-end", flexWrap: "wrap" }}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
+                      <HelpTooltip
+                        theme={t}
+                        text="Whether you want strikes out of the money (OTM) or in the money (ITM) relative to current price."
+                      >
+                        <label style={labelStyle}>OTM / ITM</label>
+                      </HelpTooltip>
+                      <OptimizerThemeSelect
+                        theme={t}
+                        value={row.moneyness ?? "OTM"}
+                        options={[
+                          { value: "OTM", label: "OTM" },
+                          { value: "ITM", label: "ITM" },
+                        ]}
+                        onChange={(v) => updatePortfolioRow(row.id, "moneyness", v as "OTM" | "ITM")}
+                        dropdownKey={`${row.id}-moneyness`}
+                        openId={portfolioDropdownId}
+                        setOpenId={setPortfolioDropdownId}
+                        minWidth={72}
+                      />
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
+                      <HelpTooltip
+                        theme={t}
+                        text={`Minimum ${row.moneyness ?? "OTM"} distance as a percent of current price. Only strikes at or beyond this level are included.`}
+                      >
+                        <label style={labelStyle}>Min %</label>
+                      </HelpTooltip>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        style={{ ...inputStyle, maxWidth: 62, minWidth: 52 }}
+                        value={row.otmPctMin > 0 ? `${row.otmPctMin}%` : ""}
+                        onChange={(e) => {
+                          const raw = e.target.value.replace(/%/g, "");
+                          updatePortfolioRow(row.id, "otmPctMin", Number(raw) || 0);
+                        }}
+                        placeholder="0%"
+                        aria-label={`Minimum ${row.moneyness ?? "OTM"} percent`}
+                      />
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
+                      <HelpTooltip
+                        theme={t}
+                        text={`Maximum ${row.moneyness ?? "OTM"} distance as a percent of current price. Only strikes at or within this level are included.`}
+                      >
+                        <label style={labelStyle}>Max %</label>
+                      </HelpTooltip>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        style={{ ...inputStyle, maxWidth: 62, minWidth: 52 }}
+                        value={row.otmPctMax > 0 ? `${row.otmPctMax}%` : ""}
+                        onChange={(e) => {
+                          const raw = e.target.value.replace(/%/g, "");
+                          updatePortfolioRow(row.id, "otmPctMax", Number(raw) || 0);
+                        }}
+                        placeholder="0%"
+                        aria-label={`Maximum ${row.moneyness ?? "OTM"} percent`}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", gap: t.spacing(2), alignItems: "flex-end", flexWrap: "wrap" }}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
+                      <HelpTooltip
+                        theme={t}
+                        text="Only strikes greater than or equal to this price are included."
+                      >
+                        <label style={labelStyle}>Min strike</label>
+                      </HelpTooltip>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        style={{ ...inputStyle, maxWidth: 88, minWidth: 72 }}
+                        value={
+                          row.strikeMin != null && row.strikeMin > 0
+                            ? String(row.strikeMin)
+                            : ""
+                        }
+                        onChange={(e) => {
+                          const raw = e.target.value.replace(/,/g, "").trim();
+                          updatePortfolioRow(row.id, "strikeMin", raw === "" ? 0 : Number(raw) || 0);
+                        }}
+                        placeholder="e.g. 75"
+                        aria-label="Minimum strike price"
+                      />
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
+                      <HelpTooltip
+                        theme={t}
+                        text="Only strikes less than or equal to this price are included."
+                      >
+                        <label style={labelStyle}>Max strike</label>
+                      </HelpTooltip>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        style={{ ...inputStyle, maxWidth: 88, minWidth: 72 }}
+                        value={
+                          row.strikeMax != null && row.strikeMax > 0
+                            ? String(row.strikeMax)
+                            : ""
+                        }
+                        onChange={(e) => {
+                          const raw = e.target.value.replace(/,/g, "").trim();
+                          updatePortfolioRow(row.id, "strikeMax", raw === "" ? 0 : Number(raw) || 0);
+                        }}
+                        placeholder="e.g. 85"
+                        aria-label="Maximum strike price"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
             );
