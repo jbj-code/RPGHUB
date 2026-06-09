@@ -10,6 +10,7 @@ import {
   getPageCardStyle,
   PAGE_LAYOUT,
   shadows,
+  zIndex,
 } from "../theme";
 import { SCHWAB_API_BASE } from "../constants";
 
@@ -27,30 +28,36 @@ type Form4Lead = {
   filedDate: string;
   transactionCode: string;
   filingUrl: string;
+  filingAltUrl?: string;
   accessionNo: string;
 };
 
 type Form4ScanMeta = {
   days: number;
   minValueUsd: number;
-  titleKeywordsOnly: boolean;
   filingsSearched: number;
   filingsParsed: number;
   parseErrors: number;
   leadCount: number;
 };
 
+const SCAN_DEPTHS = [
+  { id: "quick", label: "Quick", filings: 50, description: "Most recent ~50 Form 4s in range" },
+  { id: "standard", label: "Standard", filings: 100, description: "Most recent ~100 Form 4s (default)" },
+  { id: "deep", label: "Deep", filings: 200, description: "Up to ~200 — slowest, widest coverage" },
+] as const;
+
+type ScanDepthId = (typeof SCAN_DEPTHS)[number]["id"];
+
 // --- Helpers ---
 
 function formatUsd(n: number): string {
-  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}K`;
   return `$${n.toLocaleString("en-US")}`;
 }
 
 function downloadForm4Csv(leads: Form4Lead[]) {
   const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
-  const header = ["Name", "Company", "Ticker", "Role", "Amount USD", "Shares", "Price", "Transaction Date", "Filed", "SEC URL"];
+  const header = ["Name", "Company", "Ticker", "Role", "Amount USD", "Shares", "Price", "Transaction Date", "Filed", "Form 4 URL", "SEC viewer URL"];
   const rows = leads.map((r) => [
     r.filerName,
     r.companyName,
@@ -62,6 +69,7 @@ function downloadForm4Csv(leads: Form4Lead[]) {
     r.transactionDate,
     r.filedDate,
     r.filingUrl,
+    r.filingAltUrl ?? "",
   ].map(esc).join(","));
   const csv = [header.join(","), ...rows].join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
@@ -83,9 +91,9 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
     headerHeight: 104,
   });
 
-  const [days, setDays] = useState(7);
+  const [days, setDays] = useState(1);
   const [minValueM, setMinValueM] = useState(1);
-  const [titleFilter, setTitleFilter] = useState(true);
+  const [scanDepth, setScanDepth] = useState<ScanDepthId>("standard");
   const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
   const scanWasRunning = useRef(false);
@@ -123,6 +131,8 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
     }, 250);
     return () => clearInterval(id);
   }, [scanning]);
+
+  // --- Local styles (match Optimizer / Screener table patterns) ---
 
   const titleStyle: CSSProperties = {
     fontWeight: t.typography.headingWeight,
@@ -228,8 +238,8 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
           action: "form4_scan",
           days,
           minValueUsd: minValueM * 1_000_000,
-          maxFilingsToParse: 40,
-          titleKeywordsOnly: titleFilter,
+          maxFilingsToParse: SCAN_DEPTHS.find((d) => d.id === scanDepth)?.filings ?? 100,
+          titleKeywordsOnly: false,
         }),
       });
       const data = (await res.json()) as {
@@ -256,7 +266,7 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
     } finally {
       setScanning(false);
     }
-  }, [days, minValueM, titleFilter]);
+  }, [days, minValueM, scanDepth]);
 
   const hasResults = leads.length > 0;
 
@@ -297,7 +307,7 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
           </button>
         </div>
         <p style={{ ...descStyle, marginTop: t.spacing(1) }}>
-          Scan SEC Form 4 insider <strong>sales</strong> for HNW prospecting. Configure filters in the left panel, review results in the table, then export CSV to your shared Google Sheet.
+          Daily SEC Form 4 insider <strong>sale</strong> scan for HNW prospecting. Default lookback is 1 day — widen for catch-up. Export CSV to your Google Sheet.
         </p>
       </div>
 
@@ -305,7 +315,7 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
         <>
           <div
             role="presentation"
-            style={{ position: "fixed", inset: 0, backgroundColor: t.colors.overlay, zIndex: 1000 }}
+            style={{ position: "fixed", inset: 0, backgroundColor: t.colors.overlay, zIndex: zIndex.modalBackdrop }}
             onClick={() => setShowInfoModal(false)}
           />
           <div
@@ -317,7 +327,7 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
               left: "50%",
               top: "50%",
               transform: "translate(-50%, -50%)",
-              zIndex: 1001,
+              zIndex: zIndex.modal,
               backgroundColor: t.colors.surface,
               borderRadius: t.radius.lg,
               padding: t.spacing(5),
@@ -344,7 +354,7 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
             <div style={{ color: t.colors.text, fontSize: "0.88rem", lineHeight: 1.75 }}>
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Form 4 scan</p>
               <p style={{ marginTop: 0, marginBottom: t.spacing(2) }}>
-                Uses the free SEC EDGAR API (no API key). We search recent Form 4 filings, parse XML for open-market sales, and filter by your minimum dollar amount and optional senior-title list.
+                Uses the free SEC EDGAR API (no API key). We search recent Form 4 filings, parse XML for open-market sales, and filter by your minimum dollar amount. Large sales from any insider role qualify — officers, directors, and 10% owners.
               </p>
               <p style={{ marginBottom: t.spacing(2) }}>
                 Export CSV and import into your team Google Sheet — that sheet is your prospect list, not a database in this app.
@@ -394,15 +404,24 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
               />
             </div>
 
-            <label style={{ display: "flex", alignItems: "center", gap: t.spacing(1.5), fontSize: "0.85rem", color: t.colors.text, cursor: scanning ? "not-allowed" : "pointer" }}>
-              <input
-                type="checkbox"
-                checked={titleFilter}
-                onChange={(e) => setTitleFilter(e.target.checked)}
+            <div>
+              <label style={labelStyle} htmlFor="sourcing-scan-depth">Scan depth</label>
+              <select
+                id="sourcing-scan-depth"
+                value={scanDepth}
+                onChange={(e) => setScanDepth(e.target.value as ScanDepthId)}
+                style={inputStyle}
                 disabled={scanning}
-              />
-              Senior titles only (CEO, Founder, CTO, VP, etc.)
-            </label>
+              >
+                {SCAN_DEPTHS.map((d) => (
+                  <option key={d.id} value={d.id}>{d.label} — {d.filings} filings</option>
+                ))}
+              </select>
+              <p style={{ margin: `${t.spacing(1)} 0 0`, fontSize: "0.72rem", color: t.colors.textMuted, lineHeight: 1.45 }}>
+                {SCAN_DEPTHS.find((d) => d.id === scanDepth)?.description}
+                {" "}Thousands of Form 4s file nationally each week — we scan the most recent in your lookback window.
+              </p>
+            </div>
 
             {scanning && (
               <p style={{ margin: 0, color: t.colors.textMuted, fontSize: "0.8rem", lineHeight: 1.5 }}>
@@ -418,9 +437,9 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
 
             {meta && !scanning && !error && (
               <p style={{ margin: 0, color: t.colors.textMuted, fontSize: "0.78rem", lineHeight: 1.5 }}>
-                Parsed {meta.filingsParsed} of {meta.filingsSearched} filings
-                {meta.parseErrors > 0 ? ` · ${meta.parseErrors} errors` : ""}
-                {" · "}{meta.leadCount} match{meta.leadCount !== 1 ? "es" : ""}
+                Opened {meta.filingsParsed} Form 4{meta.filingsParsed !== 1 ? "s" : ""} (from {meta.filingsSearched} in date range)
+                {meta.parseErrors > 0 ? ` · ${meta.parseErrors} skipped` : ""}
+                {" · "}{meta.leadCount} sale line{meta.leadCount !== 1 ? "s" : ""} matched filters
               </p>
             )}
           </div>
@@ -484,7 +503,7 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
             <span className="material-symbols-outlined" style={{ fontSize: 40, opacity: 0.4 }} aria-hidden>gavel</span>
             <p style={{ margin: 0, fontWeight: 600, color: t.colors.text }}>Configure parameters and run a scan</p>
             <p style={{ margin: 0, fontSize: "0.85rem" }}>
-              Insider sales above ${minValueM}M from the last {days} days will appear here.
+              Insider sales above ${minValueM}M from {days === 1 ? "the last day" : `the last ${days} days`} will appear here.
             </p>
           </div>
         )}
@@ -492,7 +511,7 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
         {!hasResults && hasScanned && !scanning && !error && (
           <div className="page-card" style={{ ...cardStyle, textAlign: "center", color: t.colors.textMuted }}>
             <p style={{ margin: 0, fontSize: "0.9rem", lineHeight: 1.55 }}>
-              No qualifying sales matched your filters. Widen lookback, lower the minimum, or turn off senior titles only.
+              No qualifying sales matched your filters. Widen lookback, lower the minimum, or use a deeper scan.
             </p>
           </div>
         )}
@@ -502,8 +521,8 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
             <div className="page-card" style={cardStyle}>
               <h3 style={{ ...sectionTitleStyle, marginBottom: t.spacing(2) }}>Form 4 scan results</h3>
               <p style={{ fontSize: "0.875rem", color: t.colors.textMuted, marginBottom: t.spacing(2), lineHeight: 1.55, marginTop: 0 }}>
-                Insider open-market sales matching your filters, ranked by transaction size. Use{" "}
-                <strong>Filing</strong> to open the SEC document and verify the person and company before outreach.
+                Insider open-market sales matching your filters, ranked by transaction size.{" "}
+                <strong>Form 4</strong> opens the transaction table; <strong>SEC viewer</strong> shows issuer and reporting-owner details for identity checks.
               </p>
               <p style={{ fontSize: "0.85rem", color: t.colors.text, marginBottom: t.spacing(3), marginTop: 0 }}>
                 <strong>Matches:</strong> {leads.length}
@@ -511,7 +530,6 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
                 <strong>Lookback:</strong> {days} days
                 {" · "}
                 <strong>Min sale:</strong> ${minValueM}M+
-                {titleFilter ? " · Senior titles only" : ""}
               </p>
               <div style={tableWrapStyle}>
                 <table style={tableStyle}>
@@ -549,9 +567,29 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
                         <td style={tdStyle}>{row.transactionDate}</td>
                         <td style={tdStyle}>{row.filedDate}</td>
                         <td style={tdStyle}>
-                          <a href={row.filingUrl} target="_blank" rel="noopener noreferrer" style={{ color: t.colors.primary, fontWeight: 600 }}>
-                            View SEC
+                          <a
+                            href={row.filingUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ color: t.colors.primary, fontWeight: 600 }}
+                          >
+                            Form 4
                           </a>
+                          {row.filingAltUrl ? (
+                            <>
+                              <span style={{ color: t.colors.textMuted, margin: `0 ${t.spacing(0.5)}` }}>·</span>
+                              <a
+                                href={row.filingAltUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{ color: t.colors.primary, fontWeight: 600 }}
+                              >
+                                SEC viewer
+                              </a>
+                            </>
+                          ) : (
+                            <span style={{ color: t.colors.textMuted, fontSize: "0.78rem" }}> · run a new scan for SEC viewer link</span>
+                          )}
                         </td>
                       </tr>
                     ))}

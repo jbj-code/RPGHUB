@@ -16,6 +16,8 @@ export type Form4SaleLead = {
   filedDate: string;
   transactionCode: string;
   filingUrl: string;
+  /** SEC viewer — issuer/owner metadata (may show XBRL notice; still useful for identity check). */
+  filingAltUrl: string;
   accessionNo: string;
 };
 
@@ -121,9 +123,51 @@ function roleMatchesFilter(role: string): boolean {
   return TITLE_PATTERNS.some((re) => re.test(role));
 }
 
-/** Human-readable filing page — Form 4 is XML/HTML, not XBRL (never use xbrl_type=v). */
 function filingIndexUrl(cik: string, adshNoDashes: string): string {
   return `${SEC_ARCHIVES}/${cikForUrl(cik)}/${adshNoDashes}/index.htm`;
+}
+
+/** Legacy SEC viewer — shows reporting owner / issuer even when XBRL notice appears. */
+function filingLegacyViewerUrl(cik: string, accessionDashes: string): string {
+  return (
+    "https://www.sec.gov/cgi-bin/viewer?action=view" +
+    `&cik=${encodeURIComponent(cikForUrl(cik))}` +
+    `&accession_number=${encodeURIComponent(accessionDashes)}` +
+    "&xbrl_type=v"
+  );
+}
+
+/** Styled Form 4 HTML (shares, price, dates) — often paired with wk-form4_*.xml but omitted from index.json. */
+function pickForm4HtmlUrl(
+  base: string,
+  xmlFile: string,
+  names: string[],
+  cik: string,
+  adsh: string
+): string {
+  const paired = xmlFile.replace(/\.xml$/i, ".html");
+  const namesLower = new Set(names.map((n) => n.toLowerCase()));
+
+  if (namesLower.has(paired.toLowerCase())) {
+    return `${base}/${paired}`;
+  }
+
+  const wkHtml = names.find((n) => /^wk-form4_.*\.html?$/i.test(n));
+  if (wkHtml) return `${base}/${wkHtml}`;
+
+  const form4Html = names.find(
+    (n) => /form\s*4|form4/i.test(n) && /\.html?$/i.test(n) && !/^index\.html?$/i.test(n)
+  );
+  if (form4Html) return `${base}/${form4Html}`;
+
+  const otherHtml = names.find((n) => /\.html?$/i.test(n) && !/^index\.html?$/i.test(n));
+  if (otherHtml) return `${base}/${otherHtml}`;
+
+  if (/^wk-form4_.*\.xml$/i.test(xmlFile)) {
+    return `${base}/${paired}`;
+  }
+
+  return filingIndexUrl(cik, adsh);
 }
 
 async function secFetch(url: string): Promise<Response> {
@@ -197,11 +241,17 @@ export async function searchRecentForm4Filings(
 
 type Form4FilingAssets = {
   xmlUrl: string;
-  /** Best SEC page for humans — prefer rendered .htm over XBRL viewer. */
+  /** Styled Form 4 document (transaction table). */
   filingUrl: string;
+  /** SEC viewer — owner/issuer identity check. */
+  filingAltUrl: string;
 };
 
-async function resolveForm4FilingAssets(cik: string, adsh: string): Promise<Form4FilingAssets | null> {
+async function resolveForm4FilingAssets(
+  cik: string,
+  adsh: string,
+  accessionDashes: string
+): Promise<Form4FilingAssets | null> {
   const base = `${SEC_ARCHIVES}/${cikForUrl(cik)}/${adsh}`;
   const resp = await secFetch(`${base}/index.json`);
   if (!resp.ok) return null;
@@ -221,22 +271,23 @@ async function resolveForm4FilingAssets(cik: string, adsh: string): Promise<Form
 
   if (!xmlFile) return null;
 
-  // Form 4 often ships a styled .htm alongside the XML; prefer that over the XBRL viewer.
-  const htmlFile =
-    names.find((n) => /\.html?$/i.test(n) && !/^index\.html?$/i.test(n)) ??
-    names.find((n) => /\.html?$/i.test(n));
-
-  const filingUrl = htmlFile ? `${base}/${htmlFile}` : filingIndexUrl(cik, adsh);
-
   return {
     xmlUrl: `${base}/${xmlFile}`,
-    filingUrl,
+    filingUrl: pickForm4HtmlUrl(base, xmlFile, names, cik, adsh),
+    filingAltUrl: filingLegacyViewerUrl(cik, accessionDashes),
   };
 }
 
 export function parseForm4Sales(
   xmlRaw: string,
-  meta: { companyName: string; companyTicker: string | null; filedDate: string; filingUrl: string; accessionNo: string },
+  meta: {
+    companyName: string;
+    companyTicker: string | null;
+    filedDate: string;
+    filingUrl: string;
+    filingAltUrl: string;
+    accessionNo: string;
+  },
   minValueUsd: number,
   titleKeywordsOnly: boolean
 ): Form4SaleLead[] {
@@ -284,6 +335,7 @@ export function parseForm4Sales(
       filedDate: meta.filedDate,
       transactionCode: code || disposed,
       filingUrl: meta.filingUrl,
+      filingAltUrl: meta.filingAltUrl,
       accessionNo: meta.accessionNo,
     });
   }
@@ -307,7 +359,7 @@ export async function scanForm4Sales(options: Form4ScanOptions): Promise<{
   const filings = await searchRecentForm4Filings(
     startDate,
     endDate,
-    options.maxFilingsToParse * 3
+    options.maxFilingsToParse
   );
 
   const leads: Form4SaleLead[] = [];
@@ -318,7 +370,11 @@ export async function scanForm4Sales(options: Form4ScanOptions): Promise<{
     if (filingsParsed >= options.maxFilingsToParse) break;
 
     try {
-      const assets = await resolveForm4FilingAssets(filing.cik, filing.accessionAdsh);
+      const assets = await resolveForm4FilingAssets(
+        filing.cik,
+        filing.accessionAdsh,
+        filing.accessionNoDashes
+      );
       if (!assets) {
         parseErrors += 1;
         continue;
@@ -338,6 +394,7 @@ export async function scanForm4Sales(options: Form4ScanOptions): Promise<{
           companyTicker: null,
           filedDate: filing.filedDate,
           filingUrl: assets.filingUrl,
+          filingAltUrl: assets.filingAltUrl,
           accessionNo: filing.accessionNoDashes,
         },
         options.minValueUsd,
@@ -350,7 +407,7 @@ export async function scanForm4Sales(options: Form4ScanOptions): Promise<{
       parseErrors += 1;
     }
 
-    await sleep(150);
+    await sleep(120);
   }
 
   leads.sort((a, b) => b.transactionValue - a.transactionValue);

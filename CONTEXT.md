@@ -1,6 +1,6 @@
 # RPG H.U.B — Project Context
 
-> **Read this first** in every session. Universal coding rules live in `GUIDELINES.md`; domain notes for sourcing live in `SOURCING.md`; agent design in `AGENT_TOOLS.md`.
+> **Read this first** in every session. Universal coding rules live in `GUIDELINES.md`; agent design in `AGENT_TOOLS.md`.
 
 ## What this is
 
@@ -35,6 +35,8 @@ api/                    Vercel serverless entrypoints
   _handlers/sheetStock.ts   Google Sheets SCHWAB_STOCK() backend
   _schwab-utils.ts      Token refresh, rate limits, shared Schwab helpers
   _universe-sp500.ts    Static S&P 500 + ETF symbol list for screener
+  _edgar-utils.ts       SEC EDGAR Form 4 search, XML parse, filing URLs
+  sourcing.ts           POST form4_scan (maxDuration 120 via export config)
   agent.ts              Anthropic streaming agent
   site-password.ts      Site gate password check
   app-settings.ts       Supabase key/value settings (e.g. home todos URL)
@@ -78,7 +80,7 @@ src/
 | Schwab Explorer | `schwab` | `Schwab.tsx` | Raw Schwab API explorer / debugger |
 | Website | `website` | `Website.tsx` | Marketing site preview (hero page) |
 
-**Layout patterns:** Optimizer, Screener, Schwab, Stock Comparison, Todos use **fixed rails** (`getFixedRailsLayoutStyles`) — left control panel, center table, optional right rail. Width accounts for `SIDEBAR_WIDTH` from `NavBar`.
+**Layout patterns:** Optimizer, Screener, **Sourcing**, Schwab, Stock Comparison, Todos use **fixed rails** (`getFixedRailsLayoutStyles`) — left control panel, center table, optional right rail. Width accounts for `SIDEBAR_WIDTH` from `NavBar`.
 
 ---
 
@@ -100,7 +102,35 @@ src/
 | `sheetQuote` | `_handlers/sheetQuote.ts` | Google Sheets `SCHWAB_OPT()` |
 | `sheetStock` | `_handlers/sheetStock.ts` | Google Sheets `SCHWAB_STOCK()` |
 
-**Other routes:** `api/agent.ts`, `api/sourcing.ts` (`form4_scan` — SEC EDGAR), `api/site-password.ts`, `api/app-settings.ts`, `api/schwab-auth-callback.ts`, `api/addepar-assignment-check.ts`.
+**Other routes:** `api/agent.ts`, `api/sourcing.ts`, `api/site-password.ts`, `api/app-settings.ts`, `api/schwab-auth-callback.ts`, `api/addepar-assignment-check.ts`.
+
+**Sourcing API** (`POST /api/sourcing`, body `{ action: "form4_scan", days, minValueUsd, maxFilingsToParse }`):
+- Handler: `api/sourcing.ts` → `api/_edgar-utils.ts` (`scanForm4Sales`)
+- **No API key** — SEC requires `SEC_EDGAR_USER_AGENT` on Vercel (`"Resolute Partners Group email@domain.com"`); code fallback if unset
+- **Not filterable by $ at search time** — free EDGAR/EFTS returns filing metadata only; dollar amounts come from parsing each Form 4 XML
+- `export const config = { maxDuration: 120 }` in `sourcing.ts` (do not add `api/sourcing.ts` to `vercel.json` `functions` — pattern mismatch breaks deploy)
+
+---
+
+## Sourcing (Form 4 — live)
+
+**Purpose:** HNW prospecting from large insider **open-market sales** (liquidity events). Prospects live in a **shared Google Sheet** (CSV export) — not Supabase.
+
+**UI:** `src/pages/Sourcing.tsx` — fixed rails like Optimizer/Screener. Left: lookback, min $M, scan depth. Center: results table + SEC citations footer. Right: match stats + Export CSV.
+
+**Defaults (2026-06):** **1-day lookback** (daily workflow), **$1M+** per sale line, **no senior-title filter** (any insider role), scan depth **Standard = 100 filings**.
+
+**Scan depth:** Quick 50 / Standard 100 / Deep 200 — parses the most recent N Form 4s in the lookback window (national volume is huge; not every filing in range).
+
+**Parsing:** One table row per **qualifying sale line** (not per filing). Value = shares × price from XML. Same filing can yield multiple rows.
+
+**Filing links (per row):**
+- **Form 4** → `wk-form4_*.html` (transaction table humans read)
+- **SEC viewer** → legacy `cgi-bin/viewer` (owner/issuer identity; may show XBRL notice)
+
+**Strategy (business context):** Multi-family office HNW prospecting ($15M+ liquid). **Form 4 large insider sales** are the live signal; future triggers include acquisitions, IPO lockups, funding rounds (likely **Exa AI** + **SEC EDGAR**). Prospects = **Google Sheet** (CSV export), not an in-app CRM. Outreach is **manual send** from a principal’s email after review — not automated LinkedIn/Facebook bots. Compliance: **public data only** (filings, press); no scraped PII databases.
+
+**Planned:** Vercel Cron daily Form 4 scan + email digest (Resend); Apollo/Hunter for email enrichment; modest parallel SEC fetches. DIY in hub vs paid Clay/Smartlead stacks.
 
 ---
 
@@ -161,7 +191,7 @@ Team spreadsheets use **Apps Script** bound to the sheet (not in this repo). Fun
 **Client** (`.env`, `VITE_` prefix, exposed to browser):
 - `VITE_SCHWAB_API_BASE` — optional; defaults to `https://therpghub.vercel.app`
 
-**Server** (Vercel env only): `SUPABASE_SERVICE_ROLE_KEY`, `SCHWAB_CLIENT_*`, `ANTHROPIC_API_KEY`, `OPENFIGI_API_KEY`, `SHEET_KEY` (optional — locks sheet endpoints), Addepar keys, etc. See `.env.example`.
+**Server** (Vercel env only): `SUPABASE_SERVICE_ROLE_KEY`, `SCHWAB_CLIENT_*`, `ANTHROPIC_API_KEY`, `OPENFIGI_API_KEY`, `SEC_EDGAR_USER_AGENT`, `SHEET_KEY` (optional — locks sheet endpoints), Addepar keys, etc. See `.env.example`.
 
 **Deploy:** Push to `main` → Vercel builds frontend + API together. Local `npm run dev` only serves the UI; API changes require deploy (or `vercel dev`) to take effect.
 
@@ -193,7 +223,8 @@ npx tsc --noEmit # Typecheck (requires vite-env.d.ts)
 
 - **Local dev hits production API** unless `VITE_SCHWAB_API_BASE` points elsewhere.
 - **All Supabase access is server-side** — site password, app settings, Schwab tokens. No browser Supabase client.
-- **SEC EDGAR** expects a declared `User-Agent` on automated requests (`"Resolute Partners Group email@domain.com"`). Optional env `SEC_EDGAR_USER_AGENT` on Vercel; code has a firm-name fallback if unset.
+- **SEC EDGAR / Sourcing:** `SEC_EDGAR_USER_AGENT` on Vercel; User-Agent required for automated requests. Sourcing scans hit production API from `npm run dev` by default. Cannot pre-filter Form 4 by dollar amount via free SEC search — parse-then-filter only.
+- **vercel.json:** Only `api/**/*.ts` maxDuration 60 — per-route overrides for single files can fail deploy; use `export const config` in the route file instead (`sourcing.ts` uses 120s).
 - **Windows/PowerShell:** `$env:VAR`; chain with `;` not `&&` (see `GUIDELINES.md` §15).
 - **Large pages** (`OptionsOptimizer`, `Schwab`, `OptionsScreener`) are 2k–100k lines — use section headers when editing.
 - **Nav auto-collapse** after 10s; user toggle disables auto-collapse permanently for the session.

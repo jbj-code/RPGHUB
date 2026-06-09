@@ -30,10 +30,10 @@ export default async function handler(req: any, res: any) {
     return;
   }
 
-  const days = clampInt(body.days, 7, 1, 30);
+  const days = clampInt(body.days, 1, 1, 30);
   const minValueUsd = clampInt(body.minValueUsd, 1_000_000, 100_000, 100_000_000);
-  const maxFilingsToParse = clampInt(body.maxFilingsToParse, 40, 5, 60);
-  const titleKeywordsOnly = body.titleKeywordsOnly !== false;
+  const maxFilingsToParse = clampInt(body.maxFilingsToParse, 100, 20, 200);
+  const titleKeywordsOnly = body.titleKeywordsOnly === true;
 
   try {
     const result = await scanForm4Sales({
@@ -49,7 +49,6 @@ export default async function handler(req: any, res: any) {
       meta: {
         days,
         minValueUsd,
-        titleKeywordsOnly,
         filingsSearched: result.filingsSearched,
         filingsParsed: result.filingsParsed,
         parseErrors: result.parseErrors,
