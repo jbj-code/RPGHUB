@@ -2,9 +2,6 @@
   "functions": {
     "api/**/*.ts": {
       "maxDuration": 60
-    },
-    "api/sourcing.ts": {
-      "maxDuration": 120
     }
   }
 }

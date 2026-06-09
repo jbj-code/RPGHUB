@@ -3,6 +3,9 @@
 
 import { scanForm4Sales } from "./_edgar-utils.js";
 
+/** Form 4 scans can run 30–90s; override the 60s default from vercel.json. */
+export const config = { maxDuration: 120 };
+
 export default async function handler(req: any, res: any) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
