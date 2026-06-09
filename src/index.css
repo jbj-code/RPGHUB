@@ -119,15 +119,15 @@ body {
   background: rgba(68, 193, 193, 0.2) !important;
 }
 
-/* Options Opportunities: copy icon same hover/active as Optimizer */
-.options-opportunities-page .options-optimizer-copy-symbol {
+/* Options Screener: copy icon same hover/active as Optimizer */
+.options-screener-page .options-optimizer-copy-symbol {
   transition: color 0.15s ease, background 0.15s ease, transform 0.1s ease;
 }
-.options-opportunities-page .options-optimizer-copy-symbol:hover {
+.options-screener-page .options-optimizer-copy-symbol:hover {
   color: var(--checkbox-primary, #44c1c1) !important;
   background: rgba(68, 193, 193, 0.1) !important;
 }
-.options-opportunities-page .options-optimizer-copy-symbol:active {
+.options-screener-page .options-optimizer-copy-symbol:active {
   transform: scale(0.92);
   background: rgba(68, 193, 193, 0.2) !important;
 }
@@ -416,17 +416,17 @@ body {
   box-shadow: 0 0 0 2px rgba(68, 193, 193, 0.25);
 }
 
-/* ---- Options Opportunities: premium feel ---- */
-.options-opportunities-page .options-opportunities-card {
+/* ---- Options Screener: premium feel ---- */
+.options-screener-page .options-screener-card {
   position: relative;
   z-index: 1;
   transition: box-shadow 0.25s ease, border-color 0.25s ease, opacity 0.3s ease, transform 0.3s ease;
   animation: page-card-in 0.45s ease-out both;
 }
-.options-opportunities-page .options-opportunities-scan-card {
+.options-screener-page .options-screener-scan-card {
   z-index: 5;
 }
-.options-opportunities-page .options-opportunities-card:hover {
+.options-screener-page .options-screener-card:hover {
   box-shadow: 0 4px 16px rgba(15, 42, 54, 0.08);
 }
 

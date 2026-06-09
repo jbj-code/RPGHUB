@@ -1,114 +1,42 @@
-// Options Opportunity Screener
-// Uses a hardcoded broad US equity universe (no external CSV) plus Schwab's live
-// movers endpoint to capture high-volatility candidates. Fetches price history to
-// compute 20-day realized vol, then focuses chain fetches on the top 100 most-volatile
-// names. Ranks by a volatility-weighted composite score: annualised yield × ivBonus
-// (sqrt of IV/30) × IV/RV ratio × put-call skew multiplier × gamma penalty.
+// screener.ts
+// Options Screener: S&P 500 universe, vol-weighted ranking across OTM buckets.
 
 import { createClient } from "@supabase/supabase-js";
 import { toOCCSymbol, getValidAccessToken } from "../_schwab-utils.js";
+import { SP500_UNIVERSE_SYMBOLS } from "../_universe-sp500.js";
 
 const RATE_LIMIT_ERR = "SCHWAB_RATE_LIMIT";
+
+type ScanDepth = "quick" | "standard" | "deep";
+type LiquidityMode = "strict" | "relaxed" | "all";
+
+const SCAN_DEPTH_CONFIG: Record<
+  ScanDepth,
+  { historyCap: number; chainCap: number; historyConcurrency: number }
+> = {
+  quick: { historyCap: 280, chainCap: 120, historyConcurrency: 20 },
+  standard: { historyCap: 500, chainCap: 180, historyConcurrency: 25 },
+  deep: { historyCap: 528, chainCap: 250, historyConcurrency: 25 },
+};
+
+function parseScanDepth(raw: unknown): ScanDepth {
+  const v = String(raw ?? "standard").toLowerCase();
+  if (v === "quick" || v === "deep") return v;
+  return "standard";
+}
+
+function parseLiquidityMode(raw: unknown): LiquidityMode {
+  const v = String(raw ?? "strict").toLowerCase();
+  if (v === "relaxed" || v === "all") return v;
+  return "strict";
+}
+
+// Default scan universe: S&P 500 (~503) + liquid sector ETFs.
+const UNIVERSE_SYMBOLS: string[] = SP500_UNIVERSE_SYMBOLS;
 
 function throwIfRateLimited(resp: Response, _context: string): void {
   if (resp.status === 429) throw new Error(RATE_LIMIT_ERR);
 }
-
-// ─── Broad US equity universe ──────────────────────────────────────────────
-// Hardcoded so the screener never depends on an external CSV.
-// Covers S&P 500 components + popular NASDAQ/growth + major liquid ETFs.
-// Company names are fetched from Schwab quote `description` fields at scan time.
-const UNIVERSE_SYMBOLS: string[] = [
-  // Mega / large cap tech
-  "AAPL","MSFT","NVDA","AMZN","META","GOOGL","GOOG","TSLA","AVGO","ORCL",
-  "CRM","ADBE","AMD","INTC","QCOM","TXN","MU","AMAT","LRCX","KLAC",
-  "MRVL","ADI","CDNS","SNPS","CSCO","IBM","ACN","NOW","INTU","WDAY",
-  "HUBS","VEEV","ANSS","HPE","HPQ","DELL","NTAP","WDC","STX","JNPR",
-  "FFIV","CTSH","EPAM",
-  // SaaS / cloud / fintech
-  "DDOG","ZS","NET","CRWD","PANW","FTNT","OKTA","SNOW","PLTR","TEAM",
-  "SQ","SHOP","ZM","DOCU","ABNB","UBER","LYFT","DASH","COIN",
-  "HOOD","SOFI","UPST","AFRM","BILL","MDB","GTLB","PCTY","PAYC","APP",
-  "HIMS","DOCS","APPN","CSGP","ASAN","SMAR",
-  "TWLO","PINS","PATH","DOCN","DUOL","MNDY","ZI","BRZE","OPEN","IOT",
-  // Semiconductors (additional)
-  "ON","SWKS","QRVO","MPWR","MCHP","AMKR","ENTG","ONTO","ACLS","UCTT",
-  "MKSI","NVMI","COHU","FORM",
-  // Media / streaming
-  "NFLX","DIS","CMCSA","CHTR","T","VZ","TMUS","PARA","SPOT","WBD","ROKU",
-  // Healthcare – pharma / biotech
-  "UNH","LLY","JNJ","ABBV","MRK","ABT","TMO","DHR","BMY",
-  "AMGN","GILD","VRTX","REGN","BIIB","ISRG","MDT","EW","SYK","BSX","BDX",
-  "ZBH","HOLX","MTD","A","IDXX","IQV","MRNA","BNTX","ALNY","IONS",
-  "EXEL","INCY","BMRN","DXCM","ALGN","PODD","NVCR","ACAD","BEAM","FATE",
-  // Healthcare services
-  "CVS","CI","HCA","HUM","CNC","ELV","MCK","ABC","CAH","TDOC",
-  // Financials
-  "V","MA","PYPL","SPGI","MCO","ICE","CME","CB","AON","MMC","TRV","ALL",
-  "PGR","AIG","PRU","MET","AFL","BK","STT","NTRS","SCHW","FIS","FISV",
-  "GPN","JPM","BAC","WFC","GS","MS","AXP","C","USB","PNC","TFC","COF",
-  "DFS","ALLY","SYF","WEX","MKTX","RJF","SF","LPLA",
-  // Consumer discretionary
-  "COST","WMT","HD","LOW","TGT","MCD","SBUX","CMG","YUM","DPZ","NKE",
-  "TJX","ROST","BURL","LULU","EL","W","CHWY","ETSY","EBAY","BBY","DKS",
-  "ULTA","RH","ONON","CROX",
-  // Consumer staples
-  "PG","KO","PEP","PM","MO","MDLZ","HRL","HSY","K","KHC","GIS","CPB",
-  "MKC","SJM","CLX","STZ","CHD","COTY","ELF",
-  // Energy
-  "XOM","CVX","COP","EOG","SLB","OXY","PSX","VLO","MPC","KMI","WMB",
-  "DVN","FANG","HES","APA","MRO","PXD","HAL","BKR","RIG","HP",
-  // Industrials
-  "CAT","DE","HON","RTX","GE","LMT","BA","NOC","GD","LHX","TDG","ITW",
-  "ETN","EMR","ROK","IR","GWW","MMM","UPS","FDX","NSC","CSX","UNP","WAB",
-  "GNRC","TT","JCI","AME","FAST","GGG",
-  // Materials
-  "LIN","APD","SHW","FCX","NEM","GOLD","ALB","EMN","CF","MOS","NUE",
-  "STLD","PKG","SEE","CCK","ATI",
-  // Utilities
-  "NEE","DUK","SO","D","AEP","EXC","SRE","PCG","ED","WEC","XEL","AWK",
-  "ES","DTE","CEG","VST",
-  // REITs
-  "AMT","PLD","CCI","EQIX","SPG","O","WELL","PSA","EXR","AVB","EQR",
-  "ARE","DLR","NNN","VICI","BXP","VNO","IRM","CBRE",
-  // Auto / EV
-  "F","GM","RIVN","LCID","NIO","LI","XPEV","RACE",
-  // China ADRs (liquid options)
-  "BABA","JD","PDD","BIDU","BILI","NTES","TME",
-  // Gaming / entertainment
-  "EA","TTWO","RBLX","U","CAVA",
-  // Semiconductors (additional high-IV / AI-adjacent)
-  "ARM","AXON",
-  // Travel / hospitality / airlines
-  "MAR","HLT","H","LVS","MGM","WYNN","RCL","CCL","NCLH",
-  "AAL","DAL","UAL","LUV","JBLU","CZR",
-  // High-vol narrative / crypto-adjacent
-  "MARA","RIOT","DKNG","CELH","SNAP","SMCI",
-  // S&P 500 additions — fills coverage gaps toward full index
-  // Financials (regional banks + insurance + exchanges)
-  "FITB","RF","CFG","HBAN","KEY","MTB","ZION",
-  "HIG","WTW","CINF","AIZ","L","CBOE","MSCI","VRSK","FDS","AJG",
-  // Technology / professional services
-  "ADP","PAYX","CDW","GDDY","CTSH",
-  // Consumer / retail / homebuilders
-  "ORLY","AZO","LEN","DHI","PHM","NVR","TOL","TSCO","DECK","RL","PVH","TPR","VFC",
-  // Industrials / transport / waste
-  "CARR","OTIS","WM","RSG","CTAS","EXPD","CHRW","JBHT","XPO","SAIA","PWR","PCAR",
-  // Materials / chemicals
-  "PPG","IFF","LYB","BALL","OLN","FMC","RPM",
-  // Healthcare / med-tech additions
-  "STE","WAT","CRL","ZTS","RVTY","PODD",
-  // Renewables / clean energy (high IV)
-  "FSLR","ENPH","PLUG","BE",
-  // Utilities additions
-  "PEG","AES","CMS","PPL","LNT","AEE","ETR","FE","EIX",
-  // REITs additions
-  "HST","KIM","MAA","FRT","CPT","UDR","CUBE",
-  // Liquid ETFs (broad options market)
-  "SPY","QQQ","IWM","GLD","SLV","TLT","HYG","EFA","EEM","GDX",
-  "XLF","XLK","XLE","XLV","XLI","XLY","XLP","XLU","XLB","XLRE",
-  "ARKK","SMH","SOXX","VNQ","KWEB",
-];
 
 // ─── Schwab movers (live volatile stocks) ─────────────────────────────────
 type UniverseRow = { symbol: string; company: string };
@@ -214,6 +142,8 @@ type RankedOption = {
   thetaPerDay: number | null;
   /** Internal composite score used for ranking (higher is better). */
   score: number;
+  /** Present when liquidityMode is relaxed/all: wide_spread, low_oi */
+  liquidityFlags?: string[];
   schwabSymbol: string;
   occSymbol: string;
 };
@@ -508,6 +438,7 @@ function computePutCallSkew(
   return round2(putSum / putCnt - callSum / callCnt);
 }
 
+// ─── Handler entry ─────────────────────────────────────────────────────────
 export async function handler(req: any, res: any): Promise<void> {
   const body = req.body ?? {};
 
@@ -542,12 +473,12 @@ export async function handler(req: any, res: any): Promise<void> {
 
   const topN = Math.min(Math.max(1, Number(body.topN) || 5), 20);
   const minMarketCap = body.minMarketCap != null ? Number(body.minMarketCap) : null;
-  // Two-tier cap: survey a wide universe through price history, then focus chain
-  // fetches on the most volatile names (highest realized vol = richest options).
-  // Price-history concurrency raised to 20 (vs 10) to keep the history step under ~8 s
-  // even at 280 underlyings. Chain concurrency stays at 10 — each chain call is heavier.
-  const MAX_HISTORY_UNDERLYINGS = 280;
-  const MAX_CHAIN_UNDERLYINGS = 120;
+  const scanDepth = parseScanDepth(body.scanDepth);
+  const liquidityMode = parseLiquidityMode(body.liquidityMode);
+  const depthConfig = SCAN_DEPTH_CONFIG[scanDepth];
+  const MAX_HISTORY_UNDERLYINGS = depthConfig.historyCap;
+  const MAX_CHAIN_UNDERLYINGS = depthConfig.chainCap;
+  const HISTORY_CONCURRENCY = depthConfig.historyConcurrency;
 
   try {
     const supabaseUrl = process.env.SUPABASE_URL;
@@ -589,8 +520,16 @@ export async function handler(req: any, res: any): Promise<void> {
     }
 
     const warnings: string[] = [];
+    warnings.push(
+      `Scan depth: ${scanDepth} (vol history on up to ${MAX_HISTORY_UNDERLYINGS} names, option chains on top ${MAX_CHAIN_UNDERLYINGS}).`
+    );
+    if (liquidityMode !== "strict") {
+      warnings.push(
+        `Liquidity mode: ${liquidityMode} — illiquid contracts are ranked lower instead of excluded when possible.`
+      );
+    }
 
-    // 1) Build universe: custom ticker list OR hardcoded base + live Schwab movers
+    // 1) Build universe: custom ticker list OR S&P 500 base + live Schwab movers
     let allRows: UniverseRow[];
     const companyBySymbol: Record<string, string> = {};
 
@@ -713,7 +652,6 @@ export async function handler(req: any, res: any): Promise<void> {
     // 4) 1-month price performance + ~20d realized vol, parallel batches of 10
     const upsideByTicker: Record<string, number | null> = {};
     const realizedVol20dPctByTicker: Record<string, number | null> = {};
-    const HISTORY_CONCURRENCY = 20;
     for (let hi = 0; hi < effectiveTickers.length; hi += HISTORY_CONCURRENCY) {
       await Promise.allSettled(
         effectiveTickers.slice(hi, hi + HISTORY_CONCURRENCY).map(async (symbol) => {
@@ -782,7 +720,8 @@ export async function handler(req: any, res: any): Promise<void> {
       })
       .slice(0, MAX_CHAIN_UNDERLYINGS);
 
-    // 5) Option chains per ticker, parallel batches of 10
+    // ─── Chain fetch ─────────────────────────────────────────────────────────
+    // Option chains per ticker, parallel batches of 10.
     type OptionSpec = {
       ticker: string;
       expiry: string;
@@ -971,7 +910,8 @@ export async function handler(req: any, res: any): Promise<void> {
       }
     }
 
-    // 7) Build and rank results by OTM level
+    // ─── Liquidity filter ────────────────────────────────────────────────────
+    // Build and score candidates; drop wide spreads and low open interest.
     const resultsByOtmPct: Record<number, RankedOption[]> = {};
     const liquidityFiltered = { spread: 0, oi: 0 };
     let rankedRowsWithIv = 0;
@@ -990,31 +930,35 @@ export async function handler(req: any, res: any): Promise<void> {
           ? bid
           : ask;
       if (optionPrice <= 0) continue;
-      // For a write (sell to open), zero bid = no buyer exists → untradeable.
-      // For a buy (buy to open), zero ask should never reach here (caught above).
+      // Sell legs need a bid; buy legs need an ask — always required.
       if (!isBuyToOpen && bid <= 0) { liquidityFiltered.spread++; continue; }
       if (isBuyToOpen && ask <= 0) { liquidityFiltered.spread++; continue; }
 
-      // Use true bid/ask for spread (no fallback substitution — that masks wide markets).
       const spread = ask > 0 && bid > 0 ? ask - bid : Math.max(ask, bid);
       const mid = ask > 0 && bid > 0 ? (ask + bid) / 2 : optionPrice;
       const spreadPct = mid > 0 ? spread / mid : 1;
 
-      // Adaptive thresholds: farther-OTM options have low absolute prices where even a $0.10
-      // spread on a $0.25 option is 40%. Apply tiered (not linear) allowances so 15-20% OTM
-      // tables aren't starved of candidates.
-      // More forgiving spread thresholds: far-OTM options legitimately have wide markets.
       const otmTierAdj = spec.otmPct <= 5 ? 0 : spec.otmPct <= 10 ? 0.12 : spec.otmPct <= 15 ? 0.25 : 0.45;
-      const maxSpreadPct = (isBuyToOpen ? 0.42 : 0.35) + otmTierAdj;
-      if (spreadPct > maxSpreadPct) {
-        liquidityFiltered.spread++;
-        continue;
-      }
+      let maxSpreadPct = (isBuyToOpen ? 0.42 : 0.35) + otmTierAdj;
+      if (liquidityMode === "relaxed") maxSpreadPct += 0.12;
       const minOI = spec.otmPct <= 5 ? 25 : spec.otmPct <= 10 ? 12 : spec.otmPct <= 15 ? 6 : 3;
       const oi = quote?.openInterest ?? null;
+
+      const liquidityFlags: string[] = [];
+      let spreadPenalty = 1;
+      let oiPenalty = 1;
+
+      if (spreadPct > maxSpreadPct) {
+        liquidityFiltered.spread++;
+        if (liquidityMode === "strict") continue;
+        liquidityFlags.push("wide_spread");
+        spreadPenalty = liquidityMode === "all" ? 0.35 : 0.55;
+      }
       if (oi != null && oi < minOI) {
         liquidityFiltered.oi++;
-        continue;
+        if (liquidityMode === "strict") continue;
+        liquidityFlags.push("low_oi");
+        oiPenalty = liquidityMode === "all" ? 0.4 : 0.65;
       }
 
       const premiumPerContract = (isBuyToOpen ? -1 : 1) * optionPrice * 100;
@@ -1031,10 +975,12 @@ export async function handler(req: any, res: any): Promise<void> {
       // option activity (smart money flow, hedging demand). Boosts liquidity score for active contracts.
       const volOiRatio = (oi != null && oi > 0 && volume > 0) ? volume / oi : 0;
       const liqScore = clamp(
-        (1 - clamp(spreadPct / Math.max(maxSpreadPct, 0.0001), 0, 1)) * 0.50 +
+        ((1 - clamp(spreadPct / Math.max(maxSpreadPct, 0.0001), 0, 1)) * 0.50 +
           clamp((oi ?? 100) / 600, 0, 1) * 0.25 +
           clamp(volume / 300, 0, 1) * 0.15 +
-          clamp(volOiRatio / 0.5, 0, 1) * 0.10,
+          clamp(volOiRatio / 0.5, 0, 1) * 0.10) *
+          spreadPenalty *
+          oiPenalty,
         0.05,
         1
       );
@@ -1154,6 +1100,7 @@ export async function handler(req: any, res: any): Promise<void> {
           return round2(isBuyToOpen ? perContract : -perContract);
         })(),
         score: round2(score),
+        ...(liquidityFlags.length > 0 ? { liquidityFlags } : {}),
         schwabSymbol,
         occSymbol,
       });
@@ -1165,17 +1112,26 @@ export async function handler(req: any, res: any): Promise<void> {
       );
     }
 
-    if (liquidityFiltered.spread > 0) {
+    if (liquidityFiltered.spread > 0 && liquidityMode === "strict") {
       warnings.push(
         `Excluded ${liquidityFiltered.spread} illiquid contracts with wide bid/ask spread.`
       );
+    } else if (liquidityFiltered.spread > 0 && liquidityMode !== "strict") {
+      warnings.push(
+        `${liquidityFiltered.spread} contracts flagged wide spread (included with lower rank).`
+      );
     }
-    if (liquidityFiltered.oi > 0) {
+    if (liquidityFiltered.oi > 0 && liquidityMode === "strict") {
       warnings.push(
         `Excluded ${liquidityFiltered.oi} contracts with very low open interest.`
       );
+    } else if (liquidityFiltered.oi > 0 && liquidityMode !== "strict") {
+      warnings.push(
+        `${liquidityFiltered.oi} contracts flagged low open interest (included with lower rank).`
+      );
     }
 
+    // ─── Ranking / dedup ─────────────────────────────────────────────────────
     // Cross-OTM deduplication: each ticker appears in at most one bucket.
     // Collect all candidates across all levels, sort by score descending, then
     // greedily assign each ticker to the first (highest-scoring) level it appears in.

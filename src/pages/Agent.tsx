@@ -1,5 +1,5 @@
-// Agent page — premium chat interface powered by Anthropic with live Schwab tool calls.
-// Streams tokens in real-time; parses ```chart blocks and renders them via Recharts.
+// Agent.tsx
+// Premium chat interface with live Schwab tool calls and Recharts chart rendering.
 
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
@@ -550,7 +550,7 @@ export function Agent({ theme: t }: AgentProps) {
                   borderRadius: isUser ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
                   padding: `${t.spacing(2.5)} ${t.spacing(3)}`,
                   backgroundColor: isUser ? t.colors.primary : t.colors.surface,
-                  color: isUser ? "#ffffff" : t.colors.text,
+                  color: isUser ? t.colors.onPrimary : t.colors.text,
                   border: isUser ? "none" : `1px solid ${t.colors.border}`,
                   boxShadow: isUser ? `0 2px 8px ${t.colors.primary}30` : "0 1px 3px rgba(0,0,0,0.05)",
                   fontSize: "0.93rem",
@@ -626,7 +626,7 @@ export function Agent({ theme: t }: AgentProps) {
               width: 36, height: 36, borderRadius: "50%", border: "none",
               display: "inline-flex", alignItems: "center", justifyContent: "center",
               backgroundColor: canSend ? t.colors.primary : t.colors.border,
-              color: canSend ? "#ffffff" : t.colors.textMuted,
+              color: canSend ? t.colors.onPrimary : t.colors.textMuted,
               cursor: canSend ? "pointer" : "not-allowed",
               flexShrink: 0, marginBottom: 1,
               transition: "background-color 0.15s",

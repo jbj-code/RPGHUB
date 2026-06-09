@@ -1,7 +1,9 @@
-// Vercel serverless: OAuth callback. Exchanges code for tokens and stores in Supabase.
+// schwab-auth-callback.ts
+// OAuth callback: exchanges Schwab authorization code for tokens and stores in Supabase.
 
 import { createClient } from "@supabase/supabase-js";
 
+// --- OAuth callback handler ---
 export default async function handler(req: any, res: any) {
   try {
     const code = req.query.code as string | undefined;

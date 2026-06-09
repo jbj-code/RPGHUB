@@ -1,6 +1,7 @@
-// Shared Schwab utilities: OCC symbol builder + token refresh helper.
-// The leading underscore prevents Vercel from treating this file as a serverless endpoint.
+// _schwab-utils.ts
+// Shared Schwab utilities: OCC symbol builder and OAuth token refresh (not a Vercel route).
 
+// --- OCC symbol builder ---
 /** Build an OCC option symbol: 6-char root + YYMMDD + C|P + 8-digit strike (strike × 1000). */
 export function toOCCSymbol(
   underlying: string,
@@ -16,6 +17,7 @@ export function toOCCSymbol(
   return `${root}${yymmdd}${type}${strikeStr}`;
 }
 
+// --- Token refresh ---
 /**
  * Returns a valid (non-expired) Schwab access token, automatically refreshing via
  * the OAuth token endpoint if the stored token is within the 5-minute expiry buffer.

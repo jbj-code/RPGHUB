@@ -1,4 +1,7 @@
-/** Predefined ticker sets for Options Opportunities (scan within a subset of the market). */
+// opportunityBuckets.ts
+// Predefined ticker sets for Options Screener scans.
+
+// --- Types & bucket definitions ---
 
 export type OpportunityBucket = {
   id: string;

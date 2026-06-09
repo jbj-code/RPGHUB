@@ -1,5 +1,8 @@
+// Rankinator.tsx
+// Placeholder page for the Rankinator NotebookLM research tool.
+
 import type { Theme } from "../theme";
-import { PAGE_LAYOUT } from "../theme";
+import { PAGE_LAYOUT, getPageCardStyle } from "../theme";
 
 type RankinatorProps = { theme: Theme };
 
@@ -27,13 +30,7 @@ export function Rankinator({ theme: t }: RankinatorProps) {
     marginBottom: t.spacing(PAGE_LAYOUT.descMarginBottom),
   };
 
-  const cardStyle: React.CSSProperties = {
-    backgroundColor: t.colors.surface,
-    borderRadius: t.radius.lg,
-    padding: t.spacing(5),
-    boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-    border: `1px solid ${t.colors.border}`,
-  };
+  const cardStyle = getPageCardStyle(t);
 
   return (
     <section className="rankinator-page" style={pageStyle}>

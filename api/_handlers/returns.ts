@@ -1,6 +1,10 @@
+// returns.ts
+// Computes multi-horizon price returns (1D–YTD) from Schwab price history + live quotes.
+
 import { createClient } from "@supabase/supabase-js";
 import { getValidAccessToken } from "../_schwab-utils.js";
 
+// --- Types ---
 type Returns = {
   "1D": number;
   "1W": number;
@@ -12,6 +16,7 @@ type Returns = {
   price?: number;
 };
 
+// --- Returns computation handler ---
 export async function handler(req: any, res: any): Promise<void> {
   try {
     const symbolsParam = req.query.symbols as string | undefined;

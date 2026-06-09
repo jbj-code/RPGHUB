@@ -1,12 +1,8 @@
-/**
- * Builds a 21-character OCC option symbol.
- * Format: TTTTTT YYMMDD C/P SSSSSSSS
- *   TTTTTT  — ticker left-justified, space-padded to 6 chars
- *   YYMMDD  — expiry (expiry arg must be YYYY-MM-DD)
- *   C or P  — call/put
- *   SSSSSSSS — strike * 1000, zero-padded to 8 digits
- * Example: SPY $674 Call 2025-11-06 → "SPY   251106C00674000"
- */
+// figi.ts
+// Resolves OpenFIGI identifiers from an OCC option symbol.
+
+// --- OCC symbol builder ---
+/** Format: TTTTTT YYMMDD C/P SSSSSSSS (e.g. SPY $674 Call 2025-11-06 → "SPY   251106C00674000"). */
 function buildOccSymbol(ticker: string, expiry: string, strike: number, cp: "C" | "P"): string {
   const tickerPadded = ticker.slice(0, 6).padEnd(6, " ");
   const [yyyy, mm, dd] = expiry.split("-");
@@ -15,6 +11,7 @@ function buildOccSymbol(ticker: string, expiry: string, strike: number, cp: "C" 
   return `${tickerPadded}${yy}${mm}${dd}${cp}${strikeStr}`;
 }
 
+// --- OpenFIGI lookup handler ---
 export async function handler(req: any, res: any): Promise<void> {
   const { ticker, expiry, strike, putCall } = req.body ?? {};
   if (!ticker || !expiry || strike == null || !putCall) {

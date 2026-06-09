@@ -1,11 +1,13 @@
+// PasswordGate.tsx
+// Session password gate and Schwab OAuth connection prompt.
+
 import { useState, useCallback, useEffect } from "react";
 import { lightTheme, assets } from "../theme";
+import { SCHWAB_API_BASE } from "../constants";
 
 const SESSION_KEY = "rpg-hub-unlocked";
 
-const SCHWAB_API_BASE =
-  (import.meta.env.VITE_SCHWAB_API_BASE as string) ||
-  "https://therpghub.vercel.app";
+// --- Session helpers ---
 
 type SchwabStatus = { connected: boolean; expired?: boolean; hasRefresh?: boolean } | null;
 
@@ -28,6 +30,8 @@ export function setUnlocked(): void {
 type PasswordGateProps = {
   onUnlock: () => void;
 };
+
+// --- Main component ---
 
 export function PasswordGate({ onUnlock }: PasswordGateProps) {
   const [step, setStep] = useState<"password" | "schwab">("password");
@@ -212,7 +216,7 @@ export function PasswordGate({ onUnlock }: PasswordGateProps) {
     padding: `${t.spacing(2)} ${t.spacing(4)}`,
     fontSize: "0.9rem",
     fontWeight: 600,
-    color: "#ffffff",
+    color: t.colors.onPrimary,
     backgroundColor: t.colors.secondary,
     border: "none",
     borderRadius: `0 ${t.radius.md} ${t.radius.md} 0`,

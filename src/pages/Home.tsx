@@ -1,9 +1,10 @@
+// Home.tsx
+// Dashboard landing page with quick links, market snapshot, and todos URL editor.
+
 import { useEffect, useState } from "react";
 import type { Theme } from "../theme";
-import { assets, PAGE_LAYOUT, INTERACTIVE_CARD_CLASS, getPrimaryActionButtonStyle } from "../theme";
-
-const API_BASE =
-  (import.meta.env.VITE_SCHWAB_API_BASE as string) || "https://therpghub.vercel.app";
+import { assets, brandAccents, PAGE_LAYOUT, INTERACTIVE_CARD_CLASS, getPrimaryActionButtonStyle } from "../theme";
+import { SCHWAB_API_BASE } from "../constants";
 
 const GOOGLE_DRIVE_FOLDER =
   "https://drive.google.com/drive/folders/1tlymeBDbGkdWzXDs0D_QHcB2nE0kC83Y?usp=drive_link";
@@ -23,11 +24,15 @@ function faviconUrl(domain: string, size = 64): string {
   return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=${size}`;
 }
 
+// --- Types ---
+
 type HomeProps = { theme: Theme };
 
 type QuickLinkItem =
   | { title: string; href: string; faviconDomain: string }
   | { title: "To-Dos"; href: string; icon: "document-blue" };
+
+// --- Main page component ---
 
 export function Home({ theme: t }: HomeProps) {
   /** URL from Supabase via server API (`app_settings.home_todos_url`) — same pattern as site password. */
@@ -43,7 +48,7 @@ export function Home({ theme: t }: HomeProps) {
     async function loadTodosUrl() {
       try {
         const res = await fetch(
-          `${API_BASE}/api/app-settings?key=${encodeURIComponent("home_todos_url")}`
+          `${SCHWAB_API_BASE}/api/app-settings?key=${encodeURIComponent("home_todos_url")}`
         );
         if (cancelled || !res.ok) return;
         const data = (await res.json()) as { value?: string | null };
@@ -75,7 +80,7 @@ export function Home({ theme: t }: HomeProps) {
     setTodosEditError(null);
     setTodosSaving(true);
     try {
-      const res = await fetch(`${API_BASE}/api/app-settings`, {
+      const res = await fetch(`${SCHWAB_API_BASE}/api/app-settings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -175,7 +180,7 @@ export function Home({ theme: t }: HomeProps) {
 
   const todosLink: QuickLinkItem = { title: "To-Dos", href: todosUrl, icon: "document-blue" };
 
-  const quickLinksAfterTodos: Extract<QuickLinkItem, { title: string }>[] = [
+  const quickLinksAfterTodos: Extract<QuickLinkItem, { faviconDomain: string }>[] = [
     {
       title: "Drive",
       href: GOOGLE_DRIVE_FOLDER,
@@ -292,7 +297,7 @@ export function Home({ theme: t }: HomeProps) {
                   width: iconSize,
                   height: iconSize,
                   lineHeight: 1,
-                  color: "#1a73e8",
+                  color: brandAccents.googleBlue,
                   flexShrink: 0,
                   fontVariationSettings: '"FILL" 0, "wght" 400, "GRAD" 0, "opsz" 40',
                 }}

@@ -1,4 +1,7 @@
-/** Parse schedule-of-investments style tables from plain text (PDF text layer or OCR). */
+// fundScheduleExtract.ts
+// Parse fund schedule-of-investments tables from PDF text layers or OCR.
+
+// --- Types & exports ---
 
 export type FundScheduleRow = {
   id: string;
@@ -14,6 +17,8 @@ export const FUND_SCHEDULE_COLUMNS: (keyof Omit<FundScheduleRow, "id">)[] = [
   "amountInvested",
   "companyValuation",
 ];
+
+// --- Helpers ---
 
 function makeRowId(): string {
   return crypto.randomUUID?.() ?? `row-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -199,6 +204,8 @@ function junkLineRatio(text: string): number {
   return bad / lines.length;
 }
 
+// --- Text parsing ---
+
 /**
  * Parse tabular schedule text into rows. Works best when PDFs expose a text layer
  * with line breaks or tabs; scanned PDFs should be OCR'd first.
@@ -251,6 +258,8 @@ export function parseFundScheduleText(raw: string): FundScheduleRow[] {
 
   return out;
 }
+
+// --- PDF extraction ---
 
 type PdfPiece = { str: string; y: number; x0: number; x1: number };
 
@@ -403,6 +412,8 @@ function scoreTabLineQuality(text: string): number {
   }
   return multi / lines.length;
 }
+
+// --- OCR ---
 
 type OcrWordPiece = { str: string; x0: number; x1: number };
 

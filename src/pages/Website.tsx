@@ -1,6 +1,11 @@
+// Website.tsx
+// Full-screen marketing site preview with hero navigation and section routing.
+
 import { useState, useEffect, useRef } from "react";
 import type { Theme } from "../theme";
-import { assets } from "../theme";
+import { assets, websiteHeroTokens } from "../theme";
+
+// --- Types ---
 
 type WebsiteProps = { theme: Theme };
 type WebsiteSection = "home" | "mission" | "contact" | "viewpoints" | "compliance";
@@ -12,6 +17,8 @@ const NAV_ITEMS: { key: WebsiteSection; label: string }[] = [
   { key: "viewpoints",  label: "Viewpoints" },
   { key: "compliance",  label: "Compliance" },
 ];
+
+// --- Main page component ---
 
 export function Website({ theme: t }: WebsiteProps) {
   const [section, setSection] = useState<WebsiteSection>("home");
@@ -44,7 +51,7 @@ export function Website({ theme: t }: WebsiteProps) {
     overflow: "hidden",
     width: "100%",
     height: "100vh",
-    backgroundColor: "#041518",
+    backgroundColor: websiteHeroTokens.shellBg,
     display: "flex",
     flexDirection: "column",
   };
@@ -64,7 +71,7 @@ export function Website({ theme: t }: WebsiteProps) {
     height: 30,
     width: "auto",
     objectFit: "contain",
-    filter: "drop-shadow(0 3px 10px rgba(0,0,0,0.35))",
+    filter: websiteHeroTokens.logoDropShadow,
   };
 
   const heroMenuBtnStyle: React.CSSProperties = {
@@ -72,9 +79,9 @@ export function Website({ theme: t }: WebsiteProps) {
     alignItems: "center",
     gap: t.spacing(1.5),
     borderRadius: 999,
-    border: "1px solid rgba(255,255,255,0.28)",
-    backgroundColor: "rgba(4, 20, 26, 0.60)",
-    color: "#e8fcff",
+    border: `1px solid ${websiteHeroTokens.menuBtnBorder}`,
+    backgroundColor: websiteHeroTokens.menuBtnBg,
+    color: websiteHeroTokens.menuText,
     fontSize: "0.82rem",
     fontWeight: 600,
     padding: `${t.spacing(1.25)} ${t.spacing(2.5)}`,
@@ -90,13 +97,13 @@ export function Website({ theme: t }: WebsiteProps) {
     top: "calc(100% + 8px)",
     right: 0,
     minWidth: 200,
-    backgroundColor: "rgba(4, 18, 26, 0.92)",
+    backgroundColor: websiteHeroTokens.dropdownBg,
     backdropFilter: "blur(16px)",
     WebkitBackdropFilter: "blur(16px)",
-    border: "1px solid rgba(68, 193, 193, 0.22)",
+    border: `1px solid ${websiteHeroTokens.dropdownBorder}`,
     borderRadius: 14,
     padding: `${t.spacing(1.5)} ${t.spacing(1.5)}`,
-    boxShadow: "0 16px 40px rgba(0,0,0,0.45)",
+    boxShadow: websiteHeroTokens.dropdownShadow,
     zIndex: 20,
   };
 
@@ -106,8 +113,8 @@ export function Website({ theme: t }: WebsiteProps) {
     padding: `${t.spacing(1.75)} ${t.spacing(2.5)}`,
     borderRadius: 10,
     border: "none",
-    backgroundColor: active ? "rgba(68, 193, 193, 0.14)" : "transparent",
-    color: active ? "#7de8e8" : "rgba(220, 247, 250, 0.80)",
+    backgroundColor: active ? websiteHeroTokens.menuItemActiveBg : "transparent",
+    color: active ? websiteHeroTokens.menuItemActiveText : websiteHeroTokens.menuItemText,
     fontSize: "0.88rem",
     fontWeight: active ? 700 : 500,
     textAlign: "left",
@@ -135,20 +142,20 @@ export function Website({ theme: t }: WebsiteProps) {
     lineHeight: 1.08,
     margin: 0,
     marginBottom: t.spacing(5),
-    color: "#ecfeff",
+    color: websiteHeroTokens.titleText,
     maxWidth: 820,
     textAlign: "center",
     fontWeight: 800,
-    textShadow: "0 8px 32px rgba(0,0,0,0.5)",
+    textShadow: websiteHeroTokens.titleShadow,
     letterSpacing: "-0.01em",
   };
 
   const ctaStyle: React.CSSProperties = {
     borderRadius: 999,
-    border: "1px solid rgba(255, 255, 255, 0.28)",
-    backgroundColor: "rgba(240, 253, 255, 0.94)",
-    color: "#0f2a36",
-    boxShadow: "0 10px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(68,193,193,0.2)",
+    border: `1px solid ${websiteHeroTokens.ctaBorder}`,
+    backgroundColor: websiteHeroTokens.ctaBg,
+    color: websiteHeroTokens.ctaText,
+    boxShadow: websiteHeroTokens.ctaShadow,
     padding: `${t.spacing(2.25)} ${t.spacing(6)}`,
     fontSize: "0.92rem",
     fontWeight: 700,
@@ -276,13 +283,13 @@ export function Website({ theme: t }: WebsiteProps) {
         >
           Explore Resolute
         </button>
-        <p style={{ marginTop: t.spacing(3), fontSize: "0.75rem", color: "rgba(180, 230, 230, 0.50)", position: "relative", zIndex: 2 }}>
+        <p style={{ marginTop: t.spacing(3), fontSize: "0.75rem", color: websiteHeroTokens.footerMuted, position: "relative", zIndex: 2 }}>
           Inspiration:{" "}
           <a
             href="https://bluefyn.ai"
             target="_blank"
             rel="noopener noreferrer"
-            style={{ color: "rgba(68, 193, 193, 0.70)", textDecoration: "none", fontWeight: 600 }}
+            style={{ color: websiteHeroTokens.linkAccent, textDecoration: "none", fontWeight: 600 }}
           >
             bluefyn.ai
           </a>

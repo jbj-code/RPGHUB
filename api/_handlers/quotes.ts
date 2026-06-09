@@ -1,6 +1,10 @@
+// quotes.ts
+// Proxies Schwab `/quotes` for one or more symbols (equity or OCC option).
+
 import { createClient } from "@supabase/supabase-js";
 import { getValidAccessToken } from "../_schwab-utils.js";
 
+// --- Quotes proxy handler ---
 export async function handler(req: any, res: any): Promise<void> {
   try {
     const symbols = req.query.symbols as string | undefined;

@@ -1,17 +1,25 @@
+// Todos.tsx
+// Client-scoped task board with subtasks, assignees, and local persistence.
+
 import React, { useState, useEffect } from "react";
 import type { Theme } from "../theme";
 import {
   getPrimaryButtonStyle,
+  getElevatedCardStyle,
   PAGE_LAYOUT,
   getDropdownTriggerStyle,
   getDropdownPanelStyle,
   getDropdownOptionStyle,
   THEME_DROPDOWN_OPTION_CLASS,
+  todoPalette,
+  shadows,
 } from "../theme";
 import { SIDEBAR_WIDTH } from "../components/NavBar";
 
 const CLIENT_LIST_WIDTH = 200;
 const ADD_BAR_HEIGHT = 64;
+
+// --- Types ---
 
 type TodosProps = { theme: Theme; sidebarWidth?: number };
 
@@ -43,26 +51,26 @@ type TodoItem = {
 const STORAGE_KEY = "rpg-hub-todos";
 
 const CLIENTS: { id: ClientId; label: string; color: string }[] = [
-  { id: "", label: "Unassigned", color: "#9ca3af" },
-  { id: "client-1", label: "Client 1", color: "#3b82f6" },
-  { id: "client-2", label: "Client 2", color: "#22c55e" },
-  { id: "client-3", label: "Client 3", color: "#f97316" },
-  { id: "client-4", label: "Client 4", color: "#ec4899" },
+  { id: "", label: "Unassigned", color: todoPalette.neutral },
+  { id: "client-1", label: "Client 1", color: todoPalette.blue },
+  { id: "client-2", label: "Client 2", color: todoPalette.green },
+  { id: "client-3", label: "Client 3", color: todoPalette.orange },
+  { id: "client-4", label: "Client 4", color: todoPalette.pink },
 ];
 
 const EMPLOYEES: { id: EmployeeId; label: string; initials: string; color: string }[] = [
-  { id: "", label: "Unassigned", initials: "—", color: "#9ca3af" },
-  { id: "employee-1", label: "Employee 1", initials: "E1", color: "#3b82f6" },
-  { id: "employee-2", label: "Employee 2", initials: "E2", color: "#22c55e" },
-  { id: "employee-3", label: "Employee 3", initials: "E3", color: "#f97316" },
-  { id: "employee-4", label: "Employee 4", initials: "E4", color: "#ec4899" },
+  { id: "", label: "Unassigned", initials: "—", color: todoPalette.neutral },
+  { id: "employee-1", label: "Employee 1", initials: "E1", color: todoPalette.blue },
+  { id: "employee-2", label: "Employee 2", initials: "E2", color: todoPalette.green },
+  { id: "employee-3", label: "Employee 3", initials: "E3", color: todoPalette.orange },
+  { id: "employee-4", label: "Employee 4", initials: "E4", color: todoPalette.pink },
 ];
 
 const STATUS_OPTIONS: { id: TodoStatus; label: string; color: string }[] = [
-  { id: "not-started", label: "Not started", color: "#6b7280" },
-  { id: "in-progress", label: "In progress", color: "#2563eb" },
-  { id: "waiting", label: "Waiting", color: "#eab308" },
-  { id: "done", label: "Done", color: "#16a34a" },
+  { id: "not-started", label: "Not started", color: todoPalette.status.notStarted },
+  { id: "in-progress", label: "In progress", color: todoPalette.status.inProgress },
+  { id: "waiting", label: "Waiting", color: todoPalette.status.waiting },
+  { id: "done", label: "Done", color: todoPalette.status.done },
 ];
 
 /** Pills for "normal to dos" Google Docs — replace # with your doc URLs. */
@@ -79,6 +87,8 @@ const GOOGLE_FAVICONS: Record<string, string> = {
   presentation: "https://www.gstatic.com/images/branding/product/1x/slides_2020q4_48dp.png",
   drive: "https://www.gstatic.com/images/branding/product/1x/drive_2020q4_48dp.png",
 };
+
+// --- Helpers ---
 
 function loadTodos(): TodoItem[] {
   try {
@@ -166,6 +176,8 @@ function saveTodos(items: TodoItem[]) {
   }
 }
 
+// --- Main page component ---
+
 export function Todos({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: TodosProps) {
   const [items, setItems] = useState<TodoItem[]>(loadTodos);
   const [headerInput, setHeaderInput] = useState("");
@@ -211,21 +223,7 @@ export function Todos({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: TodosProps) {
     marginBottom: t.spacing(PAGE_LAYOUT.titleMarginBottom),
   };
 
-  const descStyle: React.CSSProperties = {
-    color: t.colors.textMuted,
-    fontSize: t.typography.baseFontSize,
-    lineHeight: 1.5,
-    marginBottom: t.spacing(PAGE_LAYOUT.descMarginBottom),
-  };
-
-  const cardStyle: React.CSSProperties = {
-    backgroundColor: t.mode === "light" ? "#ffffff" : t.colors.surface,
-    borderRadius: t.radius.lg,
-    padding: t.spacing(4),
-    marginBottom: t.spacing(4),
-    boxShadow: t.mode === "light" ? "0 2px 8px rgba(0,0,0,0.06)" : "0 2px 8px rgba(0,0,0,0.2)",
-    border: `1px solid ${t.colors.border}`,
-  };
+  const cardStyle: React.CSSProperties = getElevatedCardStyle(t);
 
   const cardTitleStyle: React.CSSProperties = {
     fontSize: "0.75rem",
@@ -268,7 +266,7 @@ export function Todos({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: TodosProps) {
     padding: `${t.spacing(2)} ${t.spacing(3)}`,
     backgroundColor: t.colors.secondary,
     borderBottom: `1px solid ${t.colors.border}`,
-    color: "#FFFFFF",
+    color: t.colors.secondaryText,
     fontSize: "0.8rem",
   };
 
@@ -757,7 +755,7 @@ export function Todos({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: TodosProps) {
           No items match this filter. Use the bar at the bottom to add a task.
         </p>
       ) : (
-        <div className="todos-spreadsheet-wrap" style={{ overflowX: "auto", borderRadius: t.radius.md, border: `1px solid ${t.colors.border}`, backgroundColor: t.mode === "light" ? "#ffffff" : t.colors.surface }}>
+        <div className="todos-spreadsheet-wrap" style={{ overflowX: "auto", borderRadius: t.radius.md, border: `1px solid ${t.colors.border}`, backgroundColor: t.colors.surface }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem", fontFamily: t.typography.fontFamily }}>
             <thead>
               <tr>
@@ -780,7 +778,7 @@ export function Todos({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: TodosProps) {
                     <tr
                       className="todos-task-row"
                       style={{
-                        backgroundColor: t.mode === "light" ? "#ffffff" : t.colors.surface,
+                        backgroundColor: t.colors.surface,
                         borderBottom: `1px solid ${t.colors.border}`,
                       }}
                     >
@@ -844,7 +842,7 @@ export function Todos({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: TodosProps) {
                             height: 28,
                             borderRadius: "999px",
                             backgroundColor: employeeMeta.color,
-                            color: "#fff",
+                            color: t.colors.onPrimary,
                             fontSize: "0.7rem",
                             fontWeight: 600,
                           }}
@@ -896,7 +894,7 @@ export function Todos({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: TodosProps) {
                       </td>
                     </tr>
                     {isExpanded && (
-                      <tr style={{ backgroundColor: t.mode === "light" ? "#f8fafb" : t.colors.background, borderBottom: `1px solid ${t.colors.border}` }}>
+                      <tr style={{ backgroundColor: t.colors.background, borderBottom: `1px solid ${t.colors.border}` }}>
                         <td colSpan={5} style={{ padding: t.spacing(3), verticalAlign: "top" }}>
                           <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(3), maxWidth: 560 }}>
                             {item.description ? (
@@ -982,9 +980,9 @@ export function Todos({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: TodosProps) {
           alignItems: "center",
           gap: t.spacing(3),
           padding: `0 ${t.spacing(4)}`,
-          backgroundColor: t.mode === "light" ? "#ffffff" : t.colors.surface,
+          backgroundColor: t.colors.surface,
           borderTop: `1px solid ${t.colors.border}`,
-          boxShadow: "0 -2px 8px rgba(0,0,0,0.06)",
+          boxShadow: shadows.stickyFooterLight,
           zIndex: 100,
         }}
       >

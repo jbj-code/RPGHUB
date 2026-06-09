@@ -1,3 +1,6 @@
+// OptionsScreener.tsx
+// Market-wide options screener: scan US equities for top OTM put/call ideas by yield band.
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Theme } from "../theme";
 import {
@@ -7,16 +10,19 @@ import {
   getDropdownTriggerStyle,
   getDropdownPanelStyle,
   getDropdownOptionStyle,
-  getTooltipIconStyle,
   getTooltipBubbleStyle,
+  zIndex,
   THEME_DROPDOWN_OPTION_CLASS,
   PAGE_LAYOUT,
+  getPageCardStyle,
+  rankingColors,
 } from "../theme";
 import { createPortal } from "react-dom";
 import { OPPORTUNITY_BUCKETS, type OpportunityBucket } from "../lib/opportunityBuckets";
 
-const SCHWAB_API_BASE =
-  (import.meta.env.VITE_SCHWAB_API_BASE as string) || "https://therpghub.vercel.app";
+import { SCHWAB_API_BASE } from "../constants";
+
+// --- Types ---
 
 type OptionType = "puts" | "calls";
 type PositionSide = "write" | "buy";
@@ -46,7 +52,23 @@ type RankedOption = {
   thetaPerDay?: number | null;
   schwabSymbol: string;
   occSymbol: string;
+  liquidityFlags?: string[];
 };
+
+type ScanDepth = "quick" | "standard" | "deep";
+type LiquidityMode = "strict" | "relaxed" | "all";
+
+const SCAN_DEPTH_OPTIONS: { value: ScanDepth; label: string; hint: string }[] = [
+  { value: "quick", label: "Quick", hint: "~280 names · 120 chains" },
+  { value: "standard", label: "Standard", hint: "~500 names · 180 chains" },
+  { value: "deep", label: "Deep", hint: "Full S&P · 250 chains" },
+];
+
+const LIQUIDITY_MODE_OPTIONS: { value: LiquidityMode; label: string }[] = [
+  { value: "strict", label: "Strict" },
+  { value: "relaxed", label: "Relaxed" },
+  { value: "all", label: "Show all" },
+];
 
 type ScreenerResponse = {
   resultsByOtmPct: Record<number, RankedOption[]>;
@@ -75,13 +97,7 @@ const MONTH_OPTIONS: DropdownOption[] = [
   { value: "12", label: "December" },
 ];
 
-function formatMoney(n: number): string {
-  const abs = Math.abs(n);
-  const sign = n < 0 ? "−" : "";
-  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(1)}M`;
-  if (abs >= 1_000) return `${sign}$${(abs / 1_000).toFixed(1)}K`;
-  return `${sign}$${abs.toFixed(2)}`;
-}
+// --- Helpers ---
 
 /** Premium per contract: dollar sign, plain integer, no K abbreviation. e.g. $2,275 or $340 */
 function formatPremium(n: number): string {
@@ -180,6 +196,8 @@ function getMonthlyThirdFridayExpirations(maxMonthsAhead: number): { value: stri
 
 type DropdownOption = { value: string; label: string };
 
+// --- Dropdowns ---
+
 function ExpirationDropdown(props: {
   theme: Theme;
   value: string;
@@ -214,12 +232,12 @@ function ExpirationDropdown(props: {
         <>
           <div
             role="presentation"
-            style={{ position: "fixed", inset: 0, zIndex: 4998 }}
+            style={{ position: "fixed", inset: 0, zIndex: zIndex.dropdownPortalBackdrop }}
             onClick={() => setOpenId(null)}
           />
           <div style={{
             ...getDropdownPanelStyle(t, "down"),
-            zIndex: 20000,
+            zIndex: zIndex.dropdownPortal,
             ...(dropdownMaxHeight != null ? { maxHeight: dropdownMaxHeight, overflowY: "auto" } : {}),
           }}>
             {options.map((o) => (
@@ -285,7 +303,6 @@ function HelpTooltip({ theme: t, text, children }: HelpTooltipProps) {
             maxWidth: tooltipWidth,
             minWidth: 180,
             whiteSpace: "normal",
-            zIndex: 9999,
             pointerEvents: "none",
             fontFamily: t.typography.fontFamily,
           }}
@@ -299,7 +316,7 @@ function HelpTooltip({ theme: t, text, children }: HelpTooltipProps) {
   );
 }
 
-export type OptionsOpportunitiesProps = { theme: Theme; sidebarWidth: number };
+export type OptionsScreenerProps = { theme: Theme; sidebarWidth: number };
 
 const otmLabels: Record<number, { headline: string; detail: string }> = {
   5:  { headline: "5–9% OTM",   detail: "Higher risk, higher yield" },
@@ -308,7 +325,9 @@ const otmLabels: Record<number, { headline: string; detail: string }> = {
   20: { headline: "20–30% OTM", detail: "Conservative, lower yield" },
 };
 
-export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportunitiesProps) {
+// --- Main page component ---
+
+export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps) {
   const fixedRails = getFixedRailsLayoutStyles(t, {
     sidebarWidth,
     leftRailWidth: 286,
@@ -380,7 +399,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
     padding: `${t.spacing(2)} ${t.spacing(3)}`,
     backgroundColor: t.colors.secondary,
     borderBottom: `1px solid ${t.colors.border}`,
-    color: "#FFFFFF",
+    color: t.colors.secondaryText,
     fontSize: "0.8rem",
     whiteSpace: "nowrap",
   };
@@ -400,14 +419,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
     fontWeight: 600,
   };
 
-  const cardStyle: React.CSSProperties = {
-    backgroundColor: t.colors.surface,
-    borderRadius: t.radius.lg,
-    padding: t.spacing(4),
-    marginBottom: t.spacing(4),
-    border: `1px solid ${t.colors.border}`,
-    boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-  };
+  const cardStyle = getPageCardStyle(t, { padding: t.spacing(4), marginBottom: t.spacing(4) });
 
   const primaryBtn = getPrimaryActionButtonStyle(t);
 
@@ -433,6 +445,8 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
   const [outcomePositionSide, setOutcomePositionSide] = useState<PositionSide>("write");
   const [showInfoModal, setShowInfoModal] = useState(false);
   const [bucketId, setBucketId] = useState<string>(OPPORTUNITY_BUCKETS[0]!.id);
+  const [scanDepth, setScanDepth] = useState<ScanDepth>("standard");
+  const [liquidityMode, setLiquidityMode] = useState<LiquidityMode>("strict");
   // Year input state for the Month/Year expiration picker (non-monthly mode)
   const [expYearInput, setExpYearInput] = useState<string>(
     () => expirations[0]?.value?.slice(0, 4) ?? String(new Date().getFullYear())
@@ -465,13 +479,13 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
     scanWasRunning.current = true;
     setScanProgress(0);
     const start = Date.now();
-    const estimated = 28_000; // rough estimate of scan duration (ms)
+    const estimated = scanDepth === "quick" ? 28_000 : scanDepth === "deep" ? 52_000 : 38_000;
     const id = setInterval(() => {
       const ratio = (Date.now() - start) / estimated;
       setScanProgress(88 * (1 - Math.exp(-2.5 * ratio)));
     }, 250);
     return () => clearInterval(id);
-  }, [scanning]);
+  }, [scanning, scanDepth]);
 
   const hasResults = OTM_LEVELS.some((l) => (resultsByOtmPct[l] ?? []).length > 0);
 
@@ -493,8 +507,8 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
         expiration,
         otmLevels: Array.from(OTM_LEVELS),
         topN: 10,
-        // % points: listed strike OTM distance must be within this of target (wider grid / $ strikes).
-
+        scanDepth,
+        liquidityMode,
         monthlyOnly,
       };
       if (isFullUniverse) payload.minMarketCap = minMarketCap;
@@ -535,7 +549,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
   }
 
   return (
-    <section className="options-opportunities-page" style={fixedRails.page}>
+    <section className="options-screener-page" style={fixedRails.page}>
 
       {/* ── Fixed header ── */}
       <div style={fixedRails.topHeader}>
@@ -549,7 +563,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
               >
                 search
               </span>
-              Options Opportunities
+              Options Screener
             </span>
           </h2>
           <button
@@ -575,7 +589,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
           </button>
         </div>
         <p style={{ ...descStyle, marginTop: t.spacing(1), marginBottom: 0 }}>
-          Scan US equities and ETFs for risk-adjusted options opportunities across 5–9%, 10–14%, 15–19%, and 20–30% OTM bands using live Schwab data (liquidity + probability + annualized return/debit).
+          Scan the S&P 500 (+ liquid ETFs) and live Schwab movers across 5–9%, 10–14%, 15–19%, and 20–30% OTM bands. Pick scan depth and liquidity mode in the left panel.
           {activeBucket.symbols.length > 0 ? (
             <>
               {" "}
@@ -594,7 +608,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
           />
           <div
             role="dialog"
-            aria-labelledby="opportunities-info-title"
+            aria-labelledby="screener-info-title"
             aria-modal="true"
             style={{
               position: "fixed",
@@ -613,7 +627,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: t.spacing(3) }}>
-              <h3 id="opportunities-info-title" style={{ ...sectionTitleStyle, marginBottom: 0, color: t.colors.secondary }}>How Options Opportunities works</h3>
+              <h3 id="screener-info-title" style={{ ...sectionTitleStyle, marginBottom: 0, color: t.colors.secondary }}>How Options Screener works</h3>
               <button
                 type="button"
                 onClick={() => setShowInfoModal(false)}
@@ -627,8 +641,22 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
 
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>What this does</p>
               <p style={{ marginBottom: t.spacing(3) }}>
-                Scans ~200 US equities, ETFs, and live Schwab movers across <strong>5–9%, 10–14%, 15–19%, and 20–30% OTM bands</strong> to surface the best risk-adjusted options opportunities. Every listed strike within each band is evaluated and the top contract per ticker is surfaced — no single "closest" strike is forced. Each ticker appears in exactly one OTM bucket — the level where it scores best. Results are ready to trade: click the copy icon to grab the Schwab-formatted order symbol.
+                Scans the <strong>S&amp;P 500</strong> (~528 symbols + ETFs) and live Schwab movers across <strong>5–9%, 10–14%, 15–19%, and 20–30% OTM bands</strong>. Every strike in each band is scored; the top contract per ticker is surfaced. Each ticker appears in exactly one OTM bucket — the level where it scores best.
               </p>
+
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Scan depth</p>
+              <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
+                <li><strong>Quick</strong> — vol history on ~280 names, option chains on top 120 (fastest).</li>
+                <li><strong>Standard</strong> — ~500 names surveyed, chains on top 180 (default).</li>
+                <li><strong>Deep</strong> — full universe, chains on top 250 (slowest, widest coverage).</li>
+              </ul>
+
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Liquidity mode</p>
+              <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
+                <li><strong>Strict</strong> — excludes wide spreads and very low open interest (tradeable-only).</li>
+                <li><strong>Relaxed</strong> — includes flagged names but ranks them lower (badges: wide spread / low OI).</li>
+                <li><strong>Show all</strong> — only excludes untradeable quotes (no bid for writes, no ask for buys).</li>
+              </ul>
 
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Write (sell to open) — "free lunch" signal</p>
               <p style={{ marginBottom: t.spacing(3) }}>
@@ -671,7 +699,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
       {/* ── Left rail: Scan Parameters ── */}
       <aside style={fixedRails.leftRail}>
         <div
-          className="options-opportunities-scan-card"
+          className="options-screener-scan-card"
           style={{
             ...fixedRails.railPanel,
             minHeight: 0,
@@ -702,7 +730,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
             <strong style={{ color: t.colors.text }}>Universe</strong>
             <div>{activeBucket.label}</div>
             {activeBucket.symbols.length === 0 ? (
-              <div style={{ marginTop: t.spacing(1) }}>Full list + Schwab movers. Change buckets in the right panel.</div>
+              <div style={{ marginTop: t.spacing(1) }}>S&amp;P 500 + ETFs + movers. Change buckets in the right panel.</div>
             ) : (
               <div style={{ marginTop: t.spacing(1) }}>{activeBucket.symbols.length} tickers — movers excluded.</div>
             )}
@@ -865,6 +893,69 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
             </label>
           </div>
 
+          {isFullUniverse ? (
+          <div>
+            <span style={labelStyle}>Scan depth</span>
+            <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(1) }}>
+              {SCAN_DEPTH_OPTIONS.map(({ value, label, hint }) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setScanDepth(value)}
+                  aria-pressed={scanDepth === value}
+                  style={{
+                    padding: `${t.spacing(2)} ${t.spacing(2)}`,
+                    borderRadius: t.radius.md,
+                    border: `1px solid ${scanDepth === value ? t.colors.primary : t.colors.border}`,
+                    backgroundColor: scanDepth === value ? `${t.colors.primary}18` : t.colors.background,
+                    color: scanDepth === value ? t.colors.primary : t.colors.text,
+                    cursor: "pointer",
+                    textAlign: "left",
+                    fontSize: "0.82rem",
+                  }}
+                >
+                  <div style={{ fontWeight: 700 }}>{label}</div>
+                  <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, marginTop: 2 }}>{hint}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+          ) : null}
+
+          <div>
+            <span style={labelStyle}>
+              <HelpTooltip
+                theme={t}
+                text="Strict hides wide spreads and low OI. Relaxed and Show all keep more names but rank illiquid contracts lower — look for wide spread / low OI badges."
+              >
+                <span style={{ cursor: "help" }}>Liquidity</span>
+              </HelpTooltip>
+            </span>
+            <div style={{ display: "flex", gap: t.spacing(1) }}>
+              {LIQUIDITY_MODE_OPTIONS.map(({ value, label }) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setLiquidityMode(value)}
+                  aria-pressed={liquidityMode === value}
+                  style={{
+                    flex: 1,
+                    padding: `${t.spacing(2)} ${t.spacing(1)}`,
+                    borderRadius: t.radius.md,
+                    border: `1px solid ${liquidityMode === value ? t.colors.primary : t.colors.border}`,
+                    backgroundColor: liquidityMode === value ? `${t.colors.primary}18` : t.colors.background,
+                    color: liquidityMode === value ? t.colors.primary : t.colors.text,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    fontSize: "0.72rem",
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Min Market Cap (full universe only) */}
           {isFullUniverse ? (
           <div>
@@ -961,7 +1052,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
         </div>
       </aside>
 
-      {/* ── Content area: OTM tables ── */}
+      {/* --- Results tables --- */}
       <div style={fixedRails.contentWrap}>
         {!hasResults && !scanning && !scanError && (
           <div
@@ -1026,7 +1117,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                         flex: "1 1 170px",
                         minWidth: 160,
                         borderRadius: t.radius.md,
-                        border: `1.5px solid ${isFreeLunch ? "#D4AF37" : t.colors.border}`,
+                        border: `1.5px solid ${isFreeLunch ? rankingColors.gold : t.colors.border}`,
                         backgroundColor: isFreeLunch ? "rgba(212,175,55,0.06)" : t.colors.background,
                         padding: t.spacing(3),
                         display: "flex",
@@ -1049,7 +1140,7 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                           <span style={{
                             fontSize: "0.62rem",
                             fontWeight: 700,
-                            color: "#D4AF37",
+                            color: rankingColors.gold,
                             textTransform: "uppercase",
                             letterSpacing: "0.04em",
                           }}>
@@ -1279,15 +1370,24 @@ export function OptionsOpportunities({ theme: t, sidebarWidth }: OptionsOpportun
                                   ...tdStyle,
                                   fontWeight: 600,
                                   color:
-                                    r.rank === 1 ? "#D4AF37" :
-                                    r.rank === 2 ? "#C0C0C0" :
-                                    r.rank === 3 ? "#CD7F32" :
+                                    r.rank === 1 ? rankingColors.gold :
+                                    r.rank === 2 ? rankingColors.silver :
+                                    r.rank === 3 ? rankingColors.bronze :
                                     t.colors.text,
                                 }}
                               >
                                 #{r.rank}
                               </td>
-                              <td style={{ ...tdStyle, fontWeight: 600 }}>{r.ticker}</td>
+                              <td style={{ ...tdStyle, fontWeight: 600 }}>
+                                {r.ticker}
+                                {r.liquidityFlags && r.liquidityFlags.length > 0 && (
+                                  <span style={{ display: "block", fontSize: "0.65rem", color: t.colors.textMuted, fontWeight: 500, marginTop: 2 }}>
+                                    {r.liquidityFlags.includes("wide_spread") ? "Wide spread" : ""}
+                                    {r.liquidityFlags.includes("wide_spread") && r.liquidityFlags.includes("low_oi") ? " · " : ""}
+                                    {r.liquidityFlags.includes("low_oi") ? "Low OI" : ""}
+                                  </span>
+                                )}
+                              </td>
                               <td style={{ ...tdStyle, maxWidth: 180 }}>
                                 <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                   {r.company}

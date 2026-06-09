@@ -1,10 +1,12 @@
+// Schwab.tsx
+// Interactive Schwab API explorer with endpoint catalog and schema reference.
+
 import { useState } from "react";
 import type { CSSProperties } from "react";
 import type { Theme } from "../theme";
 import { getPrimaryButtonStyle } from "../theme";
 
-const SCHWAB_API_BASE =
-  (import.meta.env.VITE_SCHWAB_API_BASE as string | undefined) ?? "https://therpghub.vercel.app";
+import { SCHWAB_API_BASE } from "../constants";
 
 // ---------------------------------------------------------------------------
 // Types

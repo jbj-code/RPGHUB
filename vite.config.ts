@@ -1,3 +1,6 @@
+// vite.config.ts
+// Vite build config and dev-server proxy for local API routes.
+
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 

@@ -1,6 +1,8 @@
+// App.tsx
+// Root shell: password gate, theme mode, sidebar nav, and client-side page routing.
+
 import { useState, useEffect, useRef } from "react";
-import { lightTheme, darkTheme, type ThemeMode, type Theme } from "./theme";
-import { PAGE_LAYOUT } from "./theme";
+import { lightTheme, darkTheme, PAGE_LAYOUT, type ThemeMode, type Theme } from "./theme";
 import { NavBar, SIDEBAR_WIDTH, SIDEBAR_WIDTH_COMPACT } from "./components/NavBar";
 import { PasswordGate, getIsUnlocked } from "./components/PasswordGate";
 import {
@@ -8,7 +10,7 @@ import {
   OptionsOptimizer,
   StockComparison,
   Todos,
-  OptionsOpportunities,
+  OptionsScreener,
   Rankinator,
   RaiseAi,
   AssignmentCheck,
@@ -26,7 +28,7 @@ export type Page =
   | "stock-comparison"
   | "options-pricing"
   | "todos"
-  | "options-opportunities"
+  | "options-screener"
   | "rankinator"
   | "raise-ai"
   | "assignment-check"
@@ -114,8 +116,8 @@ function App() {
           <StockComparison theme={t} sidebarWidth={sidebarWidth} />
         ) : page === "put-optimizer" ? (
           <OptionsOptimizer theme={t} sidebarWidth={sidebarWidth} />
-        ) : page === "options-opportunities" ? (
-          <OptionsOpportunities theme={t} sidebarWidth={sidebarWidth} />
+        ) : page === "options-screener" ? (
+          <OptionsScreener theme={t} sidebarWidth={sidebarWidth} />
         ) : page === "agent" ? (
           <Agent theme={t} />
         ) : page === "sourcing" ? (

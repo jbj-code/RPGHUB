@@ -1,13 +1,11 @@
+// explorer.ts
+// Generic Schwab Market Data proxy for the Explorer page (path + params in request body).
+
 import { createClient } from "@supabase/supabase-js";
 import { getValidAccessToken } from "../_schwab-utils.js";
 
-/**
- * Generic Schwab Market Data API proxy for the Explorer page.
- * Accepts any Schwab API path + query params, forwards with a valid Bearer token,
- * and returns the raw response. Useful for ad-hoc testing of any endpoint.
- *
- * Body: { action: "explorer", explorePath: string, explorerParams?: Record<string, string> }
- */
+// --- API explorer handler ---
+/** Body: { action: "explorer", explorePath: string, explorerParams?: Record<string, string> } */
 export async function handler(req: any, res: any): Promise<void> {
   try {
     const { explorePath, explorerParams } = req.body as {

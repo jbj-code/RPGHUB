@@ -1,12 +1,17 @@
+// Extractor.tsx
+// Extract fund schedule-of-investments tables from PDFs and images.
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Theme } from "../theme";
-import { getPrimaryActionButtonStyle, INTERACTIVE_CARD_CLASS, PAGE_LAYOUT } from "../theme";
+import { getPageCardStyle, getPrimaryActionButtonStyle, INTERACTIVE_CARD_CLASS, PAGE_LAYOUT } from "../theme";
 import {
   parseFundScheduleText,
   extractTextFromPdfBuffer,
   ocrImageFile,
   type FundScheduleRow,
 } from "../lib/fundScheduleExtract";
+
+// --- Types & constants ---
 
 type ExtractorProps = { theme: Theme };
 
@@ -18,6 +23,8 @@ const DISPLAY_HEADERS: { key: keyof Omit<FundScheduleRow, "id">; label: string }
   { key: "amountInvested", label: "Cost" },
   { key: "companyValuation", label: "Fair value (FMV)" },
 ];
+
+// --- Helpers ---
 
 function rowsToTsv(rows: FundScheduleRow[]): string {
   const header = DISPLAY_HEADERS.map((h) => h.label).join("\t");
@@ -48,6 +55,8 @@ function fileFromClipboardEvent(e: ClipboardEvent): File | null {
   return new File([blob], `pasted-image.${ext}`, { type: blob.type });
 }
 
+// --- Main page component ---
+
 export function Extractor({ theme: t }: ExtractorProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -76,14 +85,7 @@ export function Extractor({ theme: t }: ExtractorProps) {
     lineHeight: 1.5,
     marginBottom: t.spacing(PAGE_LAYOUT.descMarginBottom),
   };
-  const cardStyle: React.CSSProperties = {
-    backgroundColor: t.colors.surface,
-    borderRadius: t.radius.lg,
-    padding: t.spacing(4),
-    marginBottom: t.spacing(4),
-    boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-    border: `1px solid ${t.colors.border}`,
-  };
+  const cardStyle = getPageCardStyle(t, { padding: t.spacing(4), marginBottom: t.spacing(4) });
   const sectionTitleStyle: React.CSSProperties = {
     fontSize: "0.75rem",
     color: t.colors.secondary,
@@ -106,7 +108,7 @@ export function Extractor({ theme: t }: ExtractorProps) {
     padding: `${t.spacing(2)} ${t.spacing(3)}`,
     borderBottom: `2px solid ${t.colors.border}`,
     backgroundColor: t.colors.secondary,
-    color: "#FFFFFF",
+    color: t.colors.secondaryText,
     fontWeight: 600,
     whiteSpace: "nowrap",
   };

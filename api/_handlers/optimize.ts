@@ -1,10 +1,10 @@
-// Options Optimizer: uses Schwab chains (expirations + strikes), quotes (underlying + options), and price history
-// for the ~1M return *start* anchor; the *end* price is the live equity quote (same snapshot as spot/moneyness).
-// POST body: { portfolioRows: PortfolioRow[], otmVariancePct: number }
+// optimize.ts
+// Options Optimizer: chains + quotes + price history; ranks candidates by yield and momentum.
 
 import { createClient } from "@supabase/supabase-js";
 import { toOCCSymbol, getValidAccessToken } from "../_schwab-utils.js";
 
+// --- Types and helpers ---
 type PortfolioRow = {
   id: string;
   ticker: string;
@@ -145,7 +145,7 @@ function isStandardMonthlyExpiry(expiry: string): boolean {
   return false;
 }
 
-// Limit price = pure midpoint (bid + ask) / 2.
+// Limit price = pure midpoint (bid + ask) / 2 — used as target limit in results.
 function modeledLimitPrice(bid?: number, ask?: number): number | null {
   const b = typeof bid === "number" && Number.isFinite(bid) && bid > 0 ? bid : null;
   const a = typeof ask === "number" && Number.isFinite(ask) && ask > 0 ? ask : null;
@@ -194,6 +194,73 @@ function modeledPriceFromOptionQuote(src: any): number | null {
   return null;
 }
 
+/** Fill economics: sell legs use bid (what you can receive); buy legs use ask (what you pay). */
+function executablePrice(bid: number, ask: number, isBuy: boolean): number | null {
+  if (isBuy) return ask > 0 ? ask : null;
+  return bid > 0 ? bid : null;
+}
+
+function otmPercentForSpec(spec: {
+  strike: number;
+  currentPrice: number;
+  type: "C" | "P";
+  row: PortfolioRow;
+}): number {
+  const { strike, currentPrice, type, row } = spec;
+  const isOTM = (row.moneyness ?? "OTM") === "OTM";
+  if (type === "P") {
+    return isOTM
+      ? ((currentPrice - strike) / currentPrice) * 100
+      : ((strike - currentPrice) / currentPrice) * 100;
+  }
+  return isOTM
+    ? ((strike - currentPrice) / currentPrice) * 100
+    : ((currentPrice - strike) / currentPrice) * 100;
+}
+
+function bandCenterOtmPct(row: PortfolioRow, otmVariancePct: number): number {
+  if ((row.strikeFilterMode ?? "percent") === "strike") {
+    const lo = Number(row.strikeMin);
+    const hi = Number(row.strikeMax);
+    if (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo) return (lo + hi) / 2;
+    return lo;
+  }
+  if (row.otmPctMin != null && row.otmPctMax != null) {
+    return (row.otmPctMin + row.otmPctMax) / 2;
+  }
+  return row.otmPct ?? 10;
+}
+
+/** Keep all strikes in band when under cap; otherwise keep those closest to the OTM band center. */
+function trimSpecsToCap(
+  collected: Array<{
+    underlying: string;
+    expiry: string;
+    strike: number;
+    type: "C" | "P";
+    row: PortfolioRow;
+    currentPrice: number;
+    daysToMaturity: number;
+  }>,
+  row: PortfolioRow,
+  otmVariancePct: number,
+  cap: number
+): { specs: typeof collected; truncated: number } {
+  if (collected.length <= cap) return { specs: collected, truncated: 0 };
+  const center = bandCenterOtmPct(row, otmVariancePct);
+  const useStrikeBand = (row.strikeFilterMode ?? "percent") === "strike";
+  const sorted = collected.slice().sort((a, b) => {
+    if (useStrikeBand) {
+      const mid = center;
+      return Math.abs(a.strike - mid) - Math.abs(b.strike - mid);
+    }
+    return (
+      Math.abs(otmPercentForSpec(a) - center) - Math.abs(otmPercentForSpec(b) - center)
+    );
+  });
+  return { specs: sorted.slice(0, cap), truncated: collected.length - cap };
+}
+
 const numField = (x: unknown): number | undefined =>
   typeof x === "number" && Number.isFinite(x) ? x : undefined;
 
@@ -226,6 +293,7 @@ type ParsedOptionQuote = {
   totalVolume: number | null;
 };
 
+// --- Handler entry ---
 export async function handler(req: any, res: any): Promise<void> {
   const body = req.body ?? {};
   const portfolioRows: PortfolioRow[] = Array.isArray(body.portfolioRows)
@@ -297,7 +365,8 @@ export async function handler(req: any, res: any): Promise<void> {
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
 
-    // 1) Underlying quotes (current price + CUSIP per ticker).
+    // --- Equity quotes ---
+    // Underlying quotes (current price + CUSIP per ticker).
     // fields=quote,reference ensures the reference sub-object (which has cusip for equities) is returned.
     const quoteResp = await fetch(
       "https://api.schwabapi.com/marketdata/v1/quotes?" +
@@ -365,7 +434,8 @@ export async function handler(req: any, res: any): Promise<void> {
       })
     );
 
-    // 3) For each row: get expirations + strikes from chains, then build option list — parallel
+    // --- Chain fetch ---
+    // For each row: get expirations + strikes from chains, then build option list — parallel.
     type OptSpec = {
       underlying: string;
       expiry: string;
@@ -376,21 +446,22 @@ export async function handler(req: any, res: any): Promise<void> {
       daysToMaturity: number;
     };
     const optionSpecs: OptSpec[] = [];
-    const MAX_OPTIONS_PER_ROW = 24;
+    const MAX_OPTIONS_PER_ROW = 100;
+    let totalTruncated = 0;
 
     const chainResults = await Promise.allSettled(
-      portfolioRows.map(async (row): Promise<OptSpec[]> => {
+      portfolioRows.map(async (row): Promise<{ specs: OptSpec[]; truncated: number }> => {
         const collected: OptSpec[] = [];
         const ticker = row.ticker.trim().toUpperCase();
-        if (!ticker) return collected;
+        if (!ticker) return { specs: collected, truncated: 0 };
         const currentPrice = currentPriceByTicker[ticker];
-        if (!currentPrice || currentPrice <= 0) return collected;
+        if (!currentPrice || currentPrice <= 0) return { specs: collected, truncated: 0 };
 
         const type: "C" | "P" = row.putCall === "Call" ? "C" : "P";
         // If the UI sent month mode but the value is not yet a valid YYYY-MM, skip this row
         // so it does NOT silently fall back to DTE mode and return wrong-month results.
         if (row.targetMode === "month" && !(typeof row.targetMonth === "string" && /^\d{4}-\d{2}$/.test(row.targetMonth.trim()))) {
-          return collected;
+          return { specs: collected, truncated: 0 };
         }
         const usingExactExpiry =
           row.targetMode === "expiry" &&
@@ -439,11 +510,11 @@ export async function handler(req: any, res: any): Promise<void> {
           `https://api.schwabapi.com/marketdata/v1/chains?${params}`,
           { headers: { Authorization: `Bearer ${accessToken}` } }
         );
-        if (!chainResp.ok) return collected;
+        if (!chainResp.ok) return { specs: collected, truncated: 0 };
 
         const chainBody: any = await chainResp.json();
         const expMap = type === "C" ? chainBody?.callExpDateMap : chainBody?.putExpDateMap;
-        if (!expMap || typeof expMap !== "object") return collected;
+        if (!expMap || typeof expMap !== "object") return { specs: collected, truncated: 0 };
 
         const useStrikeBand = (row.strikeFilterMode ?? "percent") === "strike";
         // Band-based OTM/ITM filter: new rows send otmPctMin/otmPctMax directly;
@@ -532,13 +603,16 @@ export async function handler(req: any, res: any): Promise<void> {
           }
         }
 
-        collected.sort((a, b) => a.strike - b.strike);
-        return collected.slice(0, MAX_OPTIONS_PER_ROW);
+        const { specs, truncated } = trimSpecsToCap(collected, row, otmVariancePct, MAX_OPTIONS_PER_ROW);
+        return { specs, truncated };
       })
     );
 
     for (const result of chainResults) {
-      if (result.status === "fulfilled") optionSpecs.push(...result.value);
+      if (result.status === "fulfilled") {
+        optionSpecs.push(...result.value.specs);
+        totalTruncated += result.value.truncated;
+      }
     }
 
     if (optionSpecs.length === 0) {
@@ -550,7 +624,8 @@ export async function handler(req: any, res: any): Promise<void> {
       return;
     }
 
-    // 4) Option quotes (OCC batch — 50 per request)
+    // --- Option quotes ---
+    // OCC batch — 50 per request.
     const BATCH = 50;
     const optionQuoteSrc = (q: any): any => {
       if (!q || typeof q !== "object") return null;
@@ -560,74 +635,87 @@ export async function handler(req: any, res: any): Promise<void> {
       return q.quote ?? q.optionContract ?? q;
     };
     const optionQuotes: Record<string, ParsedOptionQuote> = {};
+    const quoteBatches: (typeof optionSpecs)[] = [];
     for (let i = 0; i < optionSpecs.length; i += BATCH) {
-      const batch = optionSpecs.slice(i, i + BATCH);
-      const occSymbols = batch.map((o) =>
-        toOCCSymbol(o.underlying, o.expiry, o.type, o.strike)
+      quoteBatches.push(optionSpecs.slice(i, i + BATCH));
+    }
+    const PARALLEL_QUOTE_BATCHES = 3;
+    for (let wi = 0; wi < quoteBatches.length; wi += PARALLEL_QUOTE_BATCHES) {
+      const wave = quoteBatches.slice(wi, wi + PARALLEL_QUOTE_BATCHES);
+      await Promise.allSettled(
+        wave.map(async (batch) => {
+          const occSymbols = batch.map((o) =>
+            toOCCSymbol(o.underlying, o.expiry, o.type, o.strike)
+          );
+          const qUrl =
+            "https://api.schwabapi.com/marketdata/v1/quotes?" +
+            new URLSearchParams({ symbols: occSymbols.join(",") }).toString();
+          const qResp = await fetch(qUrl, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          if (!qResp.ok) return;
+          const qBody: any = await qResp.json();
+          for (let j = 0; j < batch.length; j++) {
+            const spec = batch[j];
+            const occ = occSymbols[j];
+            const q = qBody[occ] ?? qBody[occ.replace(/\s+/g, "")];
+            const src = optionQuoteSrc(q);
+            if (!src || typeof src !== "object") continue;
+            const modeled = modeledPriceFromOptionQuote(src);
+            if (modeled == null || modeled <= 0) continue;
+            const bid =
+              typeof src.bidPrice === "number" && Number.isFinite(src.bidPrice)
+                ? src.bidPrice
+                : typeof src.bid === "number" && Number.isFinite(src.bid)
+                  ? src.bid
+                  : 0;
+            const ask =
+              typeof src.askPrice === "number" && Number.isFinite(src.askPrice)
+                ? src.askPrice
+                : typeof src.ask === "number" && Number.isFinite(src.ask)
+                  ? src.ask
+                  : 0;
+            const delta =
+              typeof src.delta === "number" && Number.isFinite(src.delta)
+                ? src.delta
+                : null;
+            const gamma = numField(src.gamma) ?? null;
+            const theta = numField(src.theta) ?? null;
+            const vega = numField(src.vega) ?? null;
+            const openInterest =
+              numField(src.openInterest) ?? numField(src.open_interest) ?? null;
+            const totalVolume =
+              numField(src.totalVolume) ??
+              numField(src.volume) ??
+              numField(src.lastTradingDayVolume) ??
+              null;
+            const ivPct = impliedVolPercentFromQuote(src);
+            const key = `${spec.underlying} ${spec.expiry} ${spec.strike} ${spec.type}`;
+            optionQuotes[key] = {
+              bid,
+              ask,
+              modeled,
+              delta,
+              gamma,
+              theta,
+              vega,
+              ivPct,
+              openInterest,
+              totalVolume,
+            };
+          }
+        })
       );
-      const qUrl =
-        "https://api.schwabapi.com/marketdata/v1/quotes?" +
-        new URLSearchParams({ symbols: occSymbols.join(",") }).toString();
-      const qResp = await fetch(qUrl, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!qResp.ok) continue;
-      const qBody: any = await qResp.json();
-      for (let j = 0; j < batch.length; j++) {
-        const spec = batch[j];
-        const occ = occSymbols[j];
-        const q = qBody[occ] ?? qBody[occ.replace(/\s+/g, "")];
-        const src = optionQuoteSrc(q);
-        if (!src || typeof src !== "object") continue;
-        const modeled = modeledPriceFromOptionQuote(src);
-        if (modeled == null || modeled <= 0) continue;
-        const bid =
-          typeof src.bidPrice === "number" && Number.isFinite(src.bidPrice)
-            ? src.bidPrice
-            : typeof src.bid === "number" && Number.isFinite(src.bid)
-              ? src.bid
-              : 0;
-        const ask =
-          typeof src.askPrice === "number" && Number.isFinite(src.askPrice)
-            ? src.askPrice
-            : typeof src.ask === "number" && Number.isFinite(src.ask)
-              ? src.ask
-              : 0;
-        const delta =
-          typeof src.delta === "number" && Number.isFinite(src.delta)
-            ? src.delta
-            : null;
-        const gamma = numField(src.gamma) ?? null;
-        const theta = numField(src.theta) ?? null;
-        const vega = numField(src.vega) ?? null;
-        const openInterest =
-          numField(src.openInterest) ?? numField(src.open_interest) ?? null;
-        const totalVolume =
-          numField(src.totalVolume) ??
-          numField(src.volume) ??
-          numField(src.lastTradingDayVolume) ??
-          null;
-        const ivPct = impliedVolPercentFromQuote(src);
-        const key = `${spec.underlying} ${spec.expiry} ${spec.strike} ${spec.type}`;
-        optionQuotes[key] = {
-          bid,
-          ask,
-          modeled,
-          delta,
-          gamma,
-          theta,
-          vega,
-          ivPct,
-          openInterest,
-          totalVolume,
-        };
+      if (wi + PARALLEL_QUOTE_BATCHES < quoteBatches.length) {
+        await new Promise((r) => setTimeout(r, 80));
       }
     }
 
     // CUSIP note: Schwab's /quotes and /instruments endpoints do not return cusip for option
     // contracts. The underlying equity's cusip (fetched in step 1 via reference) is used instead.
 
-    // 5) Build RankedResult + OptionsTrade for each spec that has a quote
+    // --- Ranking ---
+    // Build RankedResult + OptionsTrade for each spec that has a quote.
     const optionSideFromRow = (r: PortfolioRow): OptionSide => {
       if (r.putCall === "Put" && r.action === "Sell to Open") return "PUT - SELL to OPEN";
       if (r.putCall === "Put" && r.action === "Buy to Open") return "PUT - BUY to OPEN";
@@ -649,9 +737,10 @@ export async function handler(req: any, res: any): Promise<void> {
 
       const row = spec.row;
       const isSell = row.action.startsWith("Sell");
-      const modeled = modeledLimitPrice(bid, ask);
-      if (modeled == null || modeled <= 0) continue;
-      const optionLimitPrice = modeled;
+      const isBuy = row.action.startsWith("Buy");
+      const execPrice = executablePrice(bid, ask, isBuy);
+      if (execPrice == null || execPrice <= 0) continue;
+      const optionLimitPrice = modeledLimitPrice(bid, ask) ?? execPrice;
       const contracts =
         row.type === "Qty"
           ? Math.max(1, Math.round(row.value))
@@ -660,7 +749,7 @@ export async function handler(req: any, res: any): Promise<void> {
       // If notional cannot fund at least 1 contract at this strike, skip candidate.
       if (row.type === "Notional" && contracts < 1) continue;
       const notional = spec.strike * contracts * 100;
-      const premiumReceived = (isSell ? 1 : -1) * optionLimitPrice * contracts * 100;
+      const premiumReceived = (isSell ? 1 : -1) * execPrice * contracts * 100;
       // Yield on strike notional = premium / (strike × contracts × 100).
       // This reflects actual capital at risk (cash needed to cover assignment for short puts,
       // or shares needed for short calls), which is the standard industry convention.
@@ -705,7 +794,7 @@ export async function handler(req: any, res: any): Promise<void> {
         limitPrice: optionLimitPrice,
         annYield: trade.annualizedYieldPct,
         // Signed per-contract premium/cost so buy actions display as negative cash flow.
-        premiumPerContract: Math.round((isSell ? 1 : -1) * optionLimitPrice * 100),
+        premiumPerContract: Math.round((isSell ? 1 : -1) * execPrice * 100),
         delta: quote?.delta ?? null,
         gamma: quote?.gamma ?? null,
         theta: quote?.theta ?? null,
@@ -719,6 +808,9 @@ export async function handler(req: any, res: any): Promise<void> {
 
     let ranked = raw;
     let message: string | null = null;
+    if (totalTruncated > 0) {
+      message = `Some rows had more than ${MAX_OPTIONS_PER_ROW} strikes in band; kept the ${MAX_OPTIONS_PER_ROW} closest to your OTM target (${totalTruncated} omitted).`;
+    }
     /**
      * Buy-to-open / long premium: annYield alone is ~linear in premium % for one name.
      * Blend in Schwab quote fields — liquidity, delta & gamma per premium dollar, theta bleed, extreme IV.

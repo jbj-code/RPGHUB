@@ -1,6 +1,11 @@
+// RaiseAi.tsx
+// Private-markets portfolio dashboard with fund holdings and MOIC rankings.
+
 import React, { useState } from "react";
 import type { Theme } from "../theme";
-import { PAGE_LAYOUT } from "../theme";
+import { PAGE_LAYOUT, getPageCardStyle } from "../theme";
+
+// --- Types & mock data ---
 
 type RaiseAiProps = { theme: Theme };
 
@@ -70,6 +75,8 @@ const MOCK_DIRECT: DirectInvestment[] = [
 type SortKey = "invested" | "moic";
 type SortDir = "asc" | "desc";
 
+// --- Helpers ---
+
 function formatInvested(millions: number): string {
   return "$" + Math.round(millions * 1e6).toLocaleString();
 }
@@ -83,6 +90,8 @@ function getTop10CompaniesByMoic(): { name: string; moic: number }[] {
     .sort((a, b) => b.moic - a.moic)
     .slice(0, 10);
 }
+
+// --- Main page component ---
 
 export function RaiseAi({ theme: t }: RaiseAiProps) {
   const [expandedFundIds, setExpandedFundIds] = useState<Set<string>>(() => new Set());
@@ -117,14 +126,10 @@ export function RaiseAi({ theme: t }: RaiseAiProps) {
     marginBottom: t.spacing(PAGE_LAYOUT.descMarginBottom),
   };
 
-  const cardStyle: React.CSSProperties = {
-    backgroundColor: t.colors.surface,
-    borderRadius: t.radius.lg,
+  const cardStyle = getPageCardStyle(t, {
     padding: `${t.spacing(3)} ${t.spacing(5)} ${t.spacing(5)}`,
     marginBottom: t.spacing(4),
-    boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-    border: `1px solid ${t.colors.border}`,
-  };
+  });
 
   const cardTitleStyle: React.CSSProperties = {
     fontWeight: t.typography.headingWeight,
@@ -184,7 +189,7 @@ export function RaiseAi({ theme: t }: RaiseAiProps) {
     padding: `${t.spacing(2)} ${t.spacing(3)}`,
     backgroundColor: t.colors.secondary,
     borderBottom: `1px solid ${t.colors.border}`,
-    color: "#FFFFFF",
+    color: t.colors.secondaryText,
     fontSize: "0.8rem",
   };
 

@@ -1,6 +1,12 @@
+// OptionsPricing.tsx
+// Batch-fetch Schwab quotes for pasted option symbols (Bloomberg or OCC format).
+
 import { useState, useEffect } from "react";
 import type { Theme } from "../theme";
-import { getPrimaryActionButtonStyle, getPrimaryButtonStyle, PAGE_LAYOUT } from "../theme";
+import { getPageCardStyle, getPrimaryActionButtonStyle, PAGE_LAYOUT } from "../theme";
+import { SCHWAB_API_BASE } from "../constants";
+
+// --- Types ---
 
 type OptionsPricingProps = { theme: Theme };
 
@@ -23,9 +29,7 @@ type OptionPrice = {
   mark?: number;
 };
 
-const SCHWAB_API_BASE =
-  (import.meta.env.VITE_SCHWAB_API_BASE as string) ||
-  "https://therpghub.vercel.app";
+// --- Helpers ---
 
 function parseLine(line: string): ParsedOption | null {
   const trimmed = line.trim();
@@ -116,6 +120,8 @@ function parseLine(line: string): ParsedOption | null {
   return null;
 }
 
+// --- Main page component ---
+
 export function OptionsPricing({ theme: t }: OptionsPricingProps) {
   const [input, setInput] = useState("");
   const [parsed, setParsed] = useState<ParsedOption[]>([]);
@@ -156,14 +162,7 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
     marginBottom: t.spacing(PAGE_LAYOUT.descMarginBottom),
   };
 
-  const cardStyle: React.CSSProperties = {
-    backgroundColor: t.colors.surface,
-    borderRadius: t.radius.lg,
-    padding: t.spacing(4),
-    marginBottom: t.spacing(4),
-    boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-    border: `1px solid ${t.colors.border}`,
-  };
+  const cardStyle = getPageCardStyle(t, { padding: t.spacing(4), marginBottom: t.spacing(4) });
 
   const sectionTitleStyle: React.CSSProperties = {
     fontSize: "0.75rem",
@@ -190,7 +189,7 @@ export function OptionsPricing({ theme: t }: OptionsPricingProps) {
     padding: `${t.spacing(2)} ${t.spacing(3)}`,
     backgroundColor: t.colors.secondary,
     borderBottom: `1px solid ${t.colors.border}`,
-    color: "#FFFFFF",
+    color: t.colors.secondaryText,
     fontSize: "0.8rem",
   };
   const thNumStyle: React.CSSProperties = { ...thStyle, textAlign: "right" };

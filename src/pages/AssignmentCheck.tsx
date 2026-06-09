@@ -1,6 +1,12 @@
+// AssignmentCheck.tsx
+// Assess assignment risk for short options from Addepar exports or manual input.
+
 import { useMemo, useState } from "react";
 import type { Theme } from "../theme";
-import { PAGE_LAYOUT, getPrimaryActionButtonStyle } from "../theme";
+import { PAGE_LAYOUT, getPageCardStyle, getPrimaryActionButtonStyle } from "../theme";
+import { SCHWAB_API_BASE } from "../constants";
+
+// --- Types ---
 
 type AssignmentCheckProps = { theme: Theme };
 
@@ -23,15 +29,14 @@ type OptionQuote = {
   underlyingPrice?: number;
 };
 
-const SCHWAB_API_BASE =
-  (import.meta.env.VITE_SCHWAB_API_BASE as string) || "https://therpghub.vercel.app";
-
 const SAMPLE_INPUT = `Client 1 family
 UBP Account
 Call DDOG @ $155.0 Exp Mar 20, 2026
 Call IBIT @ $56.0 Exp Mar 20, 2026
 Put QQQ @ $575.0 Exp Mar 20, 2026
 Put SPY @ $635.0 Exp Mar 20, 2026`;
+
+// --- Helpers ---
 
 function parseNaturalOptionLine(line: string): {
   underlying: string;
@@ -140,6 +145,8 @@ function getRiskLabel(moneynessPct: number, dte: number): "Low" | "Medium" | "El
   return "Low";
 }
 
+// --- Main page component ---
+
 export function AssignmentCheck({ theme: t }: AssignmentCheckProps) {
   const [sourceMode, setSourceMode] = useState<SourceMode>("manual");
   const [input, setInput] = useState(SAMPLE_INPUT);
@@ -169,14 +176,7 @@ export function AssignmentCheck({ theme: t }: AssignmentCheckProps) {
     lineHeight: 1.5,
     marginBottom: t.spacing(PAGE_LAYOUT.descMarginBottom),
   };
-  const cardStyle: React.CSSProperties = {
-    backgroundColor: t.colors.surface,
-    borderRadius: t.radius.lg,
-    padding: t.spacing(4),
-    marginBottom: t.spacing(4),
-    boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-    border: `1px solid ${t.colors.border}`,
-  };
+  const cardStyle = getPageCardStyle(t, { padding: t.spacing(4), marginBottom: t.spacing(4) });
   const sectionTitleStyle: React.CSSProperties = {
     fontSize: "0.75rem",
     color: t.colors.secondary,
@@ -199,7 +199,7 @@ export function AssignmentCheck({ theme: t }: AssignmentCheckProps) {
     textAlign: "left",
     padding: `${t.spacing(2)} ${t.spacing(3)}`,
     backgroundColor: t.colors.secondary,
-    color: "#fff",
+    color: t.colors.secondaryText,
     fontSize: "0.8rem",
     borderBottom: `1px solid ${t.colors.border}`,
     whiteSpace: "nowrap",
@@ -311,7 +311,7 @@ export function AssignmentCheck({ theme: t }: AssignmentCheckProps) {
             style={{
               ...primaryBtn,
               backgroundColor: sourceMode === "manual" ? t.colors.primary : t.colors.surface,
-              color: sourceMode === "manual" ? "#fff" : t.colors.text,
+              color: sourceMode === "manual" ? t.colors.onPrimary : t.colors.text,
               border: `1px solid ${sourceMode === "manual" ? t.colors.primary : t.colors.border}`,
             }}
           >
@@ -323,7 +323,7 @@ export function AssignmentCheck({ theme: t }: AssignmentCheckProps) {
             style={{
               ...primaryBtn,
               backgroundColor: sourceMode === "addepar" ? t.colors.primary : t.colors.surface,
-              color: sourceMode === "addepar" ? "#fff" : t.colors.text,
+              color: sourceMode === "addepar" ? t.colors.onPrimary : t.colors.text,
               border: `1px solid ${sourceMode === "addepar" ? t.colors.primary : t.colors.border}`,
             }}
           >

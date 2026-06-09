@@ -1,10 +1,12 @@
+// OptionsOptimizer.tsx
+// Rank and optimize options trades from portfolio criteria with Schwab quotes.
+
 import { useState, useCallback, useEffect, useMemo, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Theme } from "../theme";
 import {
   getFixedRailsLayoutStyles,
   getPrimaryActionButtonStyle,
-  getPrimaryButtonStyle,
   getRailFooterActionButtonLayout,
   PAGE_LAYOUT,
   getDropdownTriggerStyle,
@@ -12,8 +14,14 @@ import {
   getDropdownOptionStyle,
   THEME_DROPDOWN_OPTION_CLASS,
   getTooltipBubbleStyle,
+  getPageCardStyle,
+  rankingColors,
+  zIndex,
 } from "../theme";
 import { SIDEBAR_WIDTH } from "../components/NavBar";
+import { SCHWAB_API_BASE } from "../constants";
+
+// --- Types & exports ---
 
 type OptionsOptimizerProps = { theme: Theme; sidebarWidth?: number };
 
@@ -111,9 +119,7 @@ export const TICKER_TO_COMPANY: Record<string, string> = {
   GOOGL: "Alphabet Inc.",
 };
 
-const SCHWAB_API_BASE =
-  (import.meta.env.VITE_SCHWAB_API_BASE as string) ||
-  "https://therpghub.vercel.app";
+// --- Helpers ---
 
 export function makeId(): string {
   return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
@@ -304,6 +310,8 @@ const defaultPortfolioRow = (): PortfolioRow => {
   };
 };
 
+// --- UI subcomponents ---
+
 type HelpTooltipProps = {
   theme: Theme;
   text: ReactNode;
@@ -351,7 +359,6 @@ function HelpTooltip({ theme: t, text, children, maxWidth: tooltipWidth = 280 }:
             maxWidth: tooltipWidth,
             minWidth: Math.min(180, tooltipWidth),
             whiteSpace: "normal",
-            zIndex: 9999,
             pointerEvents: "none",
             fontFamily: t.typography.fontFamily,
           }}
@@ -419,7 +426,7 @@ function SortableOptimizerTh({
       style={{
         background: "none",
         border: "none",
-        color: "#FFFFFF",
+        color: t.colors.secondaryText,
         fontWeight: 600,
         cursor: "pointer",
         display: "inline-flex",
@@ -457,7 +464,7 @@ function SortableOptimizerTh({
       style={{
         textAlign,
         padding: t.spacing(2),
-        color: "#FFFFFF",
+        color: t.colors.secondaryText,
         fontWeight: 600,
         verticalAlign: "middle",
       }}
@@ -532,13 +539,13 @@ function OptimizerThemeSelect({
         <>
           <div
             role="presentation"
-            style={{ position: "fixed", inset: 0, zIndex: 3998 }}
+            style={{ position: "fixed", inset: 0, zIndex: zIndex.dropdownPortalBackdrop }}
             onClick={() => setOpenId(null)}
           />
           <div
             style={{
               ...getDropdownPanelStyle(t, "down"),
-              zIndex: 3999,
+              zIndex: zIndex.dropdownPortal,
               minWidth: "100%",
               ...(dropdownMaxHeight != null
                 ? { maxHeight: dropdownMaxHeight, overflowY: "auto" }
@@ -566,6 +573,8 @@ function OptimizerThemeSelect({
   );
 }
 
+// --- Main page component ---
+
 export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: OptionsOptimizerProps) {
   const [portfolioRows, setPortfolioRows] = useState<PortfolioRow[]>([defaultPortfolioRow()]);
   const [portfolioDropdownId, setPortfolioDropdownId] = useState<string | null>(null);
@@ -578,7 +587,6 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
   const [trades, setTrades] = useState<OptionsTrade[]>([]);
   const [showOptimizeForModal, setShowOptimizeForModal] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [lastAddedTradeId, setLastAddedTradeId] = useState<string | null>(null);
   const [lastCopiedTradeId, setLastCopiedTradeId] = useState<string | null>(null);
   const [expandedTradeId, setExpandedTradeId] = useState<string | null>(null);
   const [fetchingFigiForId, setFetchingFigiForId] = useState<string | null>(null);
@@ -856,11 +864,6 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
   const addToTradeList = useCallback((result: RankedResult) => {
     const trade = { ...result.trade, id: makeId(), sourceResultId: result.trade.id };
     setTrades((prev) => [...prev, trade]);
-    // Brief flash animation — the persistent ✓ is derived from the trades array below.
-    setLastAddedTradeId(result.trade.id);
-    window.setTimeout(() => {
-      setLastAddedTradeId((prev) => (prev === result.trade.id ? null : prev));
-    }, 800);
   }, []);
 
   const removeTrade = useCallback((id: string) => {
@@ -881,6 +884,8 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
     (optimizeMessage.includes("Schwab token expired") ||
       optimizeMessage.includes("Not authorized with Schwab"));
 
+  // --- Styles ---
+
   const titleStyle: React.CSSProperties = {
     fontWeight: t.typography.headingWeight,
     fontSize: "1.5rem",
@@ -895,14 +900,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
     marginBottom: t.spacing(PAGE_LAYOUT.descMarginBottom),
   };
 
-  const cardStyle: React.CSSProperties = {
-    backgroundColor: t.colors.surface,
-    borderRadius: t.radius.lg,
-    padding: t.spacing(4),
-    marginBottom: t.spacing(4),
-    boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-    border: `1px solid ${t.colors.border}`,
-  };
+  const cardStyle = getPageCardStyle(t, { padding: t.spacing(4), marginBottom: t.spacing(4) });
 
   const sectionTitleStyle: React.CSSProperties = {
     fontSize: "0.75rem",
@@ -918,12 +916,6 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
     textTransform: "uppercase" as const,
     letterSpacing: "0.04em",
     marginBottom: t.spacing(0.5),
-  };
-
-  const valueStyle: React.CSSProperties = {
-    fontSize: "0.95rem",
-    fontWeight: 500,
-    color: t.colors.text,
   };
 
   const primaryBtn = getPrimaryActionButtonStyle(t);
@@ -1056,6 +1048,9 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
 
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>How ranking works</p>
               <p style={{ marginBottom: t.spacing(2) }}>
+                Schwab chains are fetched for your expiry and OTM/strike band. Up to <strong>100 strikes per row</strong> are quoted and ranked (all in band when possible). If a row has more than 100 strikes in band, we keep those closest to your OTM target and show a warning above the table. Yield and premium use realistic prices: <strong>bid for sell</strong> legs, <strong>ask for buy</strong> legs. Limit Px in the table is still the bid/ask midpoint as a target limit.
+              </p>
+              <p style={{ marginBottom: t.spacing(2) }}>
                 Each candidate gets a score from the factors below (higher sorts to the top):
               </p>
               <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
@@ -1072,11 +1067,14 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                 <li><strong>Limit Px</strong> — midpoint of the Schwab bid/ask. This is your target fill price; real fills may differ.</li>
                 <li><strong>Ann. Yield</strong> — annualized yield based on strike notional (see ranking explainer). Hover the column header for period vs annualized and why long premium shows negative yield.</li>
                 <li><strong>PoP</strong> — probability the option expires worthless (you keep the full premium). Derived from delta: higher is better for short options.</li>
-                <li><strong>Premium</strong> — limit price × 100 × contracts. Positive = cash you receive (sell to open); negative = cash you pay (buy to open).</li>
+                <li><strong>Premium</strong> — executable price (bid/ask per side above) × 100 × contracts for ranking; the table shows midpoint-based limit premium. Positive = cash you receive (sell to open); negative = cash you pay (buy to open).</li>
               </ul>
 
-              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Trade types</p>
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Trade types &amp; pricing</p>
               <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
+                <li><strong>Put vs call</strong> — puts are OTM below spot; calls are OTM above spot (ITM is the opposite).</li>
+                <li><strong>Sell to open / sell to close</strong> — ranked on <strong>bid</strong> (premium you can receive).</li>
+                <li><strong>Buy to open / buy to close</strong> — ranked on <strong>ask</strong> (premium you pay).</li>
                 <li><strong>Sell to Open</strong> — generates premium income. You take on the obligation to buy (put) or sell (call) shares if assigned. The optimizer scores these most often.</li>
                 <li><strong>Buy to Open</strong> — pays premium upfront. Requires directional conviction. The momentum signal is automatically flipped to match your intended direction.</li>
                 <li><strong>Sell/Buy to Close</strong> — exits an existing position.</li>
@@ -1664,8 +1662,8 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
             >
               <thead>
                 <tr style={{ borderBottom: `2px solid ${t.colors.border}`, backgroundColor: t.colors.secondary }}>
-                  <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600, borderTopLeftRadius: t.radius.md }}>Rank</th>
-                  <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Ticker</th>
+                  <th style={{ textAlign: "left", padding: t.spacing(2), color: t.colors.secondaryText, fontWeight: 600, borderTopLeftRadius: t.radius.md }}>Rank</th>
+                  <th style={{ textAlign: "left", padding: t.spacing(2), color: t.colors.secondaryText, fontWeight: 600 }}>Ticker</th>
                   <SortableOptimizerTh
                     theme={t}
                     sortKey="maturity"
@@ -1674,8 +1672,8 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                     label="Maturity"
                     textAlign="left"
                   />
-                  <th style={{ textAlign: "left", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>Type</th>
-                  <th style={{ textAlign: "center", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
+                  <th style={{ textAlign: "left", padding: t.spacing(2), color: t.colors.secondaryText, fontWeight: 600 }}>Type</th>
+                  <th style={{ textAlign: "center", padding: t.spacing(2), color: t.colors.secondaryText, fontWeight: 600 }}>
                     <HelpTooltip
                       theme={t}
                       text="1M Return is ~1-month total return: start from Schwab daily history (close on/after ~1 month ago), end from the live equity quote at request time (same snapshot as spot). Used in ranking."
@@ -1717,7 +1715,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                     labelHelp={annYieldHeaderHelp}
                     labelHelpMaxWidth={340}
                   />
-                  <th style={{ textAlign: "center", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600 }}>
+                  <th style={{ textAlign: "center", padding: t.spacing(2), color: t.colors.secondaryText, fontWeight: 600 }}>
                     <HelpTooltip
                       theme={t}
                       text="Probability of Profit = (1 − |delta|) × 100. Delta is sourced from the Schwab option quote. For a short option, |delta| ≈ probability of expiring in-the-money (against you), so 1 − |delta| is the probability of keeping the full premium."
@@ -1733,7 +1731,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                     label="Premium"
                     textAlign="center"
                   />
-                  <th style={{ textAlign: "center", padding: t.spacing(2), color: "#FFFFFF", fontWeight: 600, borderTopRightRadius: t.radius.md }}>Action</th>
+                  <th style={{ textAlign: "center", padding: t.spacing(2), color: t.colors.secondaryText, fontWeight: 600, borderTopRightRadius: t.radius.md }}>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -1748,11 +1746,11 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                         fontWeight: 600,
                         color:
                           r.rank === 1
-                            ? "#D4AF37" // gold
+                            ? rankingColors.gold
                             : r.rank === 2
-                              ? "#C0C0C0" // silver
+                              ? rankingColors.silver
                               : r.rank === 3
-                                ? "#CD7F32" // bronze
+                                ? rankingColors.bronze
                                 : t.colors.text,
                       }}
                     >

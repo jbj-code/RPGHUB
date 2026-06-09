@@ -1,9 +1,10 @@
+// app-settings.ts
+// Read/write public `app_settings` rows (allowlisted keys; password required for writes).
+
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-/**
- * Single server entry for reading public config rows from `app_settings`.
- * Add keys to ALLOWED_KEYS as you add new rows — avoids one route per setting.
- */
+// --- Allowlist and validators ---
+/** Add keys to ALLOWED_KEYS as you add new rows — avoids one route per setting. */
 const ALLOWED_KEYS = new Set([
   "home_todos_url",
   // e.g. "home_some_other_doc_url",
@@ -44,6 +45,7 @@ async function verifySitePassword(
   return typeof data.password_plain === "string" && password === data.password_plain;
 }
 
+// --- GET / POST handler ---
 export default async function handler(req: any, res: any) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");

@@ -1,6 +1,10 @@
+// status.ts
+// Probes Schwab token validity and returns `{ connected }` for the UI status badge.
+
 import { createClient } from "@supabase/supabase-js";
 import { getValidAccessToken } from "../_schwab-utils.js";
 
+// --- Connection status handler ---
 export async function handler(req: any, res: any): Promise<void> {
   try {
     const supabaseUrl = process.env.SUPABASE_URL;

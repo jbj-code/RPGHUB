@@ -1,3 +1,7 @@
+// addepar-assignment-check.ts
+// Fetches Addepar assignment positions and normalizes option lines for the assignment checker.
+
+// --- Position parsing ---
 type NormalizedPosition = {
   id: string;
   family: string;
@@ -113,6 +117,7 @@ function collectStringsDeep(node: unknown, out: string[], depth = 0): void {
   }
 }
 
+// --- Addepar fetch handler ---
 export default async function handler(req: any, res: any) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");

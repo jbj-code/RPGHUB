@@ -1,6 +1,5 @@
-// Sourcing page — AI-assisted HNW prospect discovery for wealth management.
-// Monitors liquidity events (acquisitions, IPOs, SEC filings, funding rounds) and
-// surfaces high-net-worth individuals who may need wealth management services.
+// Sourcing.tsx
+// AI-assisted HNW prospect discovery for wealth management.
 //
 // API INTEGRATION POINTS (not yet connected):
 //   Trigger events → Exa AI (exa.ai) or NewsAPI for event monitoring

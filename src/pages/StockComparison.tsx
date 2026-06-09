@@ -1,3 +1,6 @@
+// StockComparison.tsx
+// Compare ticker returns across timeframes with presets and benchmark overlays.
+
 import { useEffect, useRef, useState } from "react";
 import type { Theme } from "../theme";
 import {
@@ -5,9 +8,13 @@ import {
   getPrimaryActionButtonStyle,
   getPrimaryButtonStyle,
   getRailFooterActionButtonLayout,
+  getPageCardStyle,
   PAGE_LAYOUT,
 } from "../theme";
 import { SIDEBAR_WIDTH } from "../components/NavBar";
+import { SCHWAB_API_BASE } from "../constants";
+
+// --- Types & constants ---
 
 type StockComparisonProps = { theme: Theme; sidebarWidth?: number };
 
@@ -16,11 +23,6 @@ const TIMEFRAMES = ["1D", "1W", "1M", "3M", "6M", "1Y", "YTD"] as const;
 type Returns = Record<(typeof TIMEFRAMES)[number], number> & {
   price?: number;
 };
-
-// API base for Schwab proxy (quotes/returns). Set VITE_SCHWAB_API_BASE in .env or Vercel to override.
-const SCHWAB_API_BASE =
-  (import.meta.env.VITE_SCHWAB_API_BASE as string) ||
-  "https://therpghub.vercel.app";
 
 type Preset = { name: string; tickers: string[] };
 
@@ -40,6 +42,8 @@ const BENCHMARKS: Benchmark[] = [
   { symbol: "EFA", label: "EFA", description: "Intl Developed (EAFE)" },
   { symbol: "IBIT", label: "IBIT", description: "iShares Bitcoin Trust" },
 ];
+
+// --- Main page component ---
 
 export function StockComparison({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: StockComparisonProps) {
   const [tickers, setTickers] = useState<string[]>([]);
@@ -92,14 +96,10 @@ export function StockComparison({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Stoc
     marginBottom: t.spacing(PAGE_LAYOUT.descMarginBottom),
   };
 
-  const cardStyle: React.CSSProperties = {
-    backgroundColor: t.colors.surface,
-    borderRadius: t.radius.lg,
+  const cardStyle = getPageCardStyle(t, {
     padding: `${t.spacing(3)} ${t.spacing(3)} ${t.spacing(4)}`,
     marginBottom: t.spacing(4),
-    boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-    border: `1px solid ${t.colors.border}`,
-  };
+  });
 
   const inputsCardStyle: React.CSSProperties = {
     ...cardStyle,
@@ -126,12 +126,6 @@ export function StockComparison({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Stoc
     padding: `${t.spacing(3)} ${t.spacing(4)}`,
     marginBottom: t.spacing(4),
     alignSelf: "stretch",
-  };
-
-  const labelStyle: React.CSSProperties = {
-    fontSize: "0.875rem",
-    color: t.colors.textMuted,
-    marginBottom: t.spacing(1),
   };
 
   const inputStyle: React.CSSProperties = {
@@ -197,7 +191,7 @@ export function StockComparison({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Stoc
     padding: `${t.spacing(2)} ${t.spacing(3)}`,
     backgroundColor: t.colors.secondary,
     borderBottom: `1px solid ${t.colors.border}`,
-    color: "#FFFFFF",
+    color: t.colors.secondaryText,
     fontSize: "0.8rem",
   };
 

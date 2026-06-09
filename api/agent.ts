@@ -1,6 +1,5 @@
-// Streaming AI agent endpoint.
-// Runs the full Anthropic tool-use loop server-side and streams newline-delimited
-// JSON events: { type: "text"|"tool_start"|"tool_done"|"error"|"done" }.
+// agent.ts
+// Streaming AI agent: Anthropic tool-use loop with compressed Schwab tool results.
 
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
@@ -8,7 +7,8 @@ import { getValidAccessToken } from "./_schwab-utils.js";
 import { handler as screenerHandler } from "./_handlers/screener.js";
 import { handler as quotesHandler } from "./_handlers/quotes.js";
 
-// System prompt: dense but minimal. Every token earns its place.
+// --- System prompt ---
+// Dense but minimal. Every token earns its place.
 // "Do not" rules waste tokens — instead the data structure enforces correct behavior:
 //   rank:1 in each list is the best pick by that metric. snap{} gives instant headline numbers.
 const SYSTEM_PROMPT = `You are RPG HUB's financial assistant. Live Schwab data via tools.
@@ -272,7 +272,8 @@ function compressFundamentals(raw: any): any {
   return Object.keys(out).length > 0 ? out : { error: "No fundamentals returned" };
 }
 
-// --- Build a compact, Cursor-style tool label from the tool's input ---
+// --- Tool labels ---
+// Build a compact, Cursor-style tool label from the tool's input.
 function toolLabel(name: string, input: Record<string, any>): string {
   switch (name) {
     case "get_quotes": {
@@ -335,7 +336,8 @@ async function getSchwabToken(): Promise<string | null> {
   return getValidAccessToken(supabase, row);
 }
 
-// Tool definitions: descriptions drive token cost every call — keep them precise and short.
+// --- Tool definitions ---
+// Descriptions drive token cost every call — keep them precise and short.
 const TOOLS: Anthropic.Messages.Tool[] = [
   {
     name: "get_quotes",

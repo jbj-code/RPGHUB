@@ -1,5 +1,9 @@
+// site-password.ts
+// Validates the site gate password against the Supabase `site_settings` row.
+
 import { createClient } from "@supabase/supabase-js";
 
+// --- Password check handler ---
 export default async function handler(req: any, res: any) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");

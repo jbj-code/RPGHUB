@@ -1,4 +1,87 @@
+// theme.ts
+// Single source of truth for branding, layout tokens, and shared UI style helpers.
+
 import type { CSSProperties } from "react";
+
+/**
+ * Stacking order for fixed/portal UI. Help tooltips must sit above the nav (`nav`).
+ * When adding overlays, extend this scale — do not sprinkle magic numbers in pages.
+ */
+export const zIndex = {
+  rails: 6,
+  railsHeader: 8,
+  railDropdown: 3000,
+  dropdown: 4000,
+  modalBackdrop: 1000,
+  modal: 1001,
+  nav: 10000,
+  /** Full-screen click-away behind portaled dropdowns in fixed rails. */
+  dropdownPortalBackdrop: 10500,
+  /** Portaled dropdown panels (expiration pickers, etc.) — above nav, below tooltips. */
+  dropdownPortal: 10501,
+  /** Secondary-colored HelpTooltip bubbles and compact nav labels — top layer. */
+  helpTooltip: 11000,
+} as const;
+
+/** Reusable box-shadow tokens (reference here — do not hardcode in pages). */
+export const shadows = {
+  card: "0 1px 3px rgba(0,0,0,0.06)",
+  modal: "0 12px 40px rgba(15, 42, 54, 0.2)",
+  dropdown: "0 4px 12px rgba(0,0,0,0.15)",
+  elevatedCardLight: "0 2px 8px rgba(0,0,0,0.06)",
+  elevatedCardDark: "0 2px 8px rgba(0,0,0,0.2)",
+  stickyFooterLight: "0 -2px 8px rgba(0,0,0,0.06)",
+} as const;
+
+/** Client / assignee / status chip colors for the Todos board. */
+export const todoPalette = {
+  neutral: "#9ca3af",
+  blue: "#3b82f6",
+  green: "#22c55e",
+  orange: "#f97316",
+  pink: "#ec4899",
+  status: {
+    notStarted: "#6b7280",
+    inProgress: "#2563eb",
+    waiting: "#eab308",
+    done: "#16a34a",
+  },
+} as const;
+
+/** Marketing hero page (Website) — dark immersive shell separate from app chrome. */
+export const websiteHeroTokens = {
+  shellBg: "#041518",
+  menuText: "#e8fcff",
+  titleText: "#ecfeff",
+  ctaText: "#0f2a36",
+  menuBtnBg: "rgba(4, 20, 26, 0.60)",
+  menuBtnBorder: "rgba(255,255,255,0.28)",
+  dropdownBg: "rgba(4, 18, 26, 0.92)",
+  dropdownBorder: "rgba(68, 193, 193, 0.22)",
+  dropdownShadow: "0 16px 40px rgba(0,0,0,0.45)",
+  menuItemActiveBg: "rgba(68, 193, 193, 0.14)",
+  menuItemActiveText: "#7de8e8",
+  menuItemText: "rgba(220, 247, 250, 0.80)",
+  titleShadow: "0 8px 32px rgba(0,0,0,0.5)",
+  ctaBg: "rgba(240, 253, 255, 0.94)",
+  ctaBorder: "rgba(255, 255, 255, 0.28)",
+  ctaShadow: "0 10px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(68,193,193,0.2)",
+  footerMuted: "rgba(180, 230, 230, 0.50)",
+  linkAccent: "rgba(68, 193, 193, 0.70)",
+  logoDropShadow: "drop-shadow(0 3px 10px rgba(0,0,0,0.35))",
+} as const;
+
+/** Third-party brand accents used on Home quick links. */
+export const brandAccents = {
+  googleBlue: "#1a73e8",
+} as const;
+
+/** Rank badge colors (gold / silver / bronze). */
+export const rankingColors = {
+  gold: "#D4AF37",
+  silver: "#C0C0C0",
+  bronze: "#CD7F32",
+} as const;
 
 /**
  * Single source of truth for branding and layout.
@@ -169,6 +252,10 @@ export type Theme = {
     border: string;
     danger: string;
     success: string;
+    /** Text on primary-colored buttons and CTAs */
+    onPrimary: string;
+    /** Modal / drawer backdrop */
+    overlay: string;
   };
   typography: {
     fontFamily: string;
@@ -181,16 +268,63 @@ export type Theme = {
     sm: string;
     md: string;
     lg: string;
+    full: string;
   };
 };
 
-/** Primary button style: white bold text on primary background. Use for Add, Compare, etc. */
+/** Standard elevated card surface used across tool pages. */
+export function getPageCardStyle(t: Theme, overrides?: CSSProperties): CSSProperties {
+  return {
+    backgroundColor: t.colors.surface,
+    borderRadius: t.radius.lg,
+    padding: t.spacing(5),
+    boxShadow: shadows.card,
+    border: `1px solid ${t.colors.border}`,
+    ...overrides,
+  };
+}
+
+/** Elevated card with stronger shadow — Todos panels and similar dense layouts. */
+export function getElevatedCardStyle(t: Theme, overrides?: CSSProperties): CSSProperties {
+  return {
+    backgroundColor: t.colors.surface,
+    borderRadius: t.radius.lg,
+    padding: t.spacing(4),
+    marginBottom: t.spacing(4),
+    boxShadow: t.mode === "light" ? shadows.elevatedCardLight : shadows.elevatedCardDark,
+    border: `1px solid ${t.colors.border}`,
+    ...overrides,
+  };
+}
+
+/** Fixed full-screen backdrop for modals and info panels. */
+export function getModalBackdropStyle(t: Theme, zIndex = 1000): CSSProperties {
+  return {
+    position: "fixed",
+    inset: 0,
+    backgroundColor: t.colors.overlay,
+    zIndex,
+  };
+}
+
+/** Table header cell on secondary background — use secondaryText for correct light/dark contrast. */
+export function getTableHeaderCellStyle(t: Theme, overrides?: CSSProperties): CSSProperties {
+  return {
+    textAlign: "left",
+    padding: t.spacing(2),
+    color: t.colors.secondaryText,
+    fontWeight: 600,
+    ...overrides,
+  };
+}
+
+/** Primary button style: bold text on primary background. Use for Add, Compare, etc. */
 export function getPrimaryButtonStyle(t: Theme): CSSProperties {
   return {
     padding: `${t.spacing(2)} ${t.spacing(4)}`,
     fontSize: "0.9rem",
     fontWeight: 700,
-    color: "#ffffff",
+    color: t.colors.onPrimary,
     backgroundColor: t.colors.primary,
     border: "none",
     borderRadius: t.radius.md,
@@ -253,12 +387,11 @@ export function getDropdownPanelStyle(t: Theme, placement: "up" | "down"): CSSPr
       ? { bottom: "100%", marginBottom: t.spacing(1) }
       : { top: "100%", marginTop: t.spacing(1) }),
     minWidth: "100%",
-    backgroundColor: t.mode === "light" ? "#ffffff" : t.colors.surface,
+    backgroundColor: t.colors.surface,
     border: `1px solid ${t.colors.border}`,
     borderRadius: t.radius.md,
-    boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-    // Keep dropdown panels above cards/tables across tool pages.
-    zIndex: 4000,
+    boxShadow: shadows.dropdown,
+    zIndex: zIndex.dropdown,
     overflow: "hidden",
   };
 }
@@ -279,24 +412,6 @@ export function getDropdownOptionStyle(t: Theme, isSelected: boolean): CSSProper
   };
 }
 
-/** Small tooltip icon (i) used across tools. */
-export function getTooltipIconStyle(t: Theme): CSSProperties {
-  return {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    width: 18,
-    height: 18,
-    borderRadius: "50%",
-    border: `1px solid ${t.colors.border}`,
-    fontSize: 11,
-    fontWeight: 600,
-    cursor: "default",
-    color: t.colors.textMuted,
-    backgroundColor: t.colors.surface,
-  };
-}
-
 /** Tooltip bubble surface; position handled by caller. */
 export function getTooltipBubbleStyle(t: Theme): CSSProperties {
   return {
@@ -311,8 +426,8 @@ export function getTooltipBubbleStyle(t: Theme): CSSProperties {
     color: t.colors.secondaryText,
     fontSize: "0.75rem",
     lineHeight: 1.4,
-    boxShadow: "0 8px 24px rgba(15,42,54,0.25)",
-    zIndex: 2000,
+    boxShadow: shadows.modal,
+    zIndex: zIndex.helpTooltip,
   };
 }
 
@@ -329,6 +444,7 @@ const baseTheme = {
     sm: "4px",
     md: "8px",
     lg: "12px",
+    full: "9999px",
   },
 };
 
@@ -346,6 +462,8 @@ export const lightTheme: Theme = {
     border: "#e2e8f0",
     danger: "#b91c1c",
     success: "#15803d",
+    onPrimary: "#ffffff",
+    overlay: "rgba(0,0,0,0.4)",
   },
   ...baseTheme,
 };
@@ -364,6 +482,8 @@ export const darkTheme: Theme = {
     border: "#2d2d2d",
     danger: "#fecaca",
     success: "#bbf7d0",
+    onPrimary: "#ffffff",
+    overlay: "rgba(0,0,0,0.55)",
   },
   ...baseTheme,
 };

@@ -1,7 +1,10 @@
+// NavBar.tsx
+// Fixed sidebar: logo, tool navigation, theme toggle, and compact mode.
+
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { Theme, ThemeMode } from "../theme";
-import { assets } from "../theme";
+import { assets, zIndex } from "../theme";
 import type { Page } from "../App";
 
 export const SIDEBAR_WIDTH = 260;
@@ -65,7 +68,7 @@ export function NavBar({
     overflowX: "hidden",
     overflowY: "hidden",
     transition: "width 0.25s ease, min-width 0.25s ease",
-    zIndex: 10000,
+    zIndex: zIndex.nav,
   };
 
   const headerStyle: CSSProperties = {
@@ -156,8 +159,8 @@ export function NavBar({
     { page: "stock-comparison", label: "Stock Comparison", icon: "compare_arrows" },
     { page: "put-optimizer", label: "Options Optimizer", icon: "tune" },
     {
-      page: "options-opportunities",
-      label: "Options Opportunities",
+      page: "options-screener",
+      label: "Options Screener",
       icon: "search",
     },
     { page: "options-pricing", label: "Options Pricing", icon: "paid" },
@@ -203,7 +206,7 @@ export function NavBar({
             borderRadius: 6,
             whiteSpace: "nowrap",
             pointerEvents: "none",
-            zIndex: 2147483647,
+            zIndex: zIndex.helpTooltip,
             boxShadow: "0 2px 10px rgba(0,0,0,0.18)",
           }}
         >

@@ -1,6 +1,10 @@
+// prices.ts
+// Batch-fetches bid/ask/mark for a list of option legs via OCC symbols.
+
 import { createClient } from "@supabase/supabase-js";
 import { toOCCSymbol, getValidAccessToken } from "../_schwab-utils.js";
 
+// --- Types ---
 type OptionInput = {
   underlying: string;
   expiry: string;
@@ -18,6 +22,7 @@ type OptionPrice = {
   mark?: number;
 };
 
+// --- Option prices handler ---
 export async function handler(req: any, res: any): Promise<void> {
   // Body is { action: "prices", options: OptionInput[] }
   const inputs: OptionInput[] = Array.isArray(req.body?.options) ? req.body.options : [];

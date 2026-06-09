@@ -1,3 +1,7 @@
+// auth.ts
+// Redirects the user to Schwab OAuth authorize URL to start the login flow.
+
+// --- OAuth redirect handler ---
 export async function handler(req: any, res: any): Promise<void> {
   const clientId = process.env.SCHWAB_CLIENT_ID;
   const redirectUri = process.env.SCHWAB_REDIRECT_URI;
