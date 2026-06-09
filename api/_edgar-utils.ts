@@ -121,8 +121,9 @@ function roleMatchesFilter(role: string): boolean {
   return TITLE_PATTERNS.some((re) => re.test(role));
 }
 
-function filingViewerUrl(cik: string, accessionDashes: string): string {
-  return `https://www.sec.gov/cgi-bin/viewer?action=view&cik=${encodeURIComponent(cik)}&accession_number=${encodeURIComponent(accessionDashes)}&xbrl_type=v`;
+/** Human-readable filing page — Form 4 is XML/HTML, not XBRL (never use xbrl_type=v). */
+function filingIndexUrl(cik: string, adshNoDashes: string): string {
+  return `${SEC_ARCHIVES}/${cikForUrl(cik)}/${adshNoDashes}/index.htm`;
 }
 
 async function secFetch(url: string): Promise<Response> {
@@ -194,9 +195,15 @@ export async function searchRecentForm4Filings(
   return hits;
 }
 
-async function resolveForm4XmlUrl(cik: string, adsh: string): Promise<string | null> {
-  const indexUrl = `${SEC_ARCHIVES}/${cikForUrl(cik)}/${adsh}/index.json`;
-  const resp = await secFetch(indexUrl);
+type Form4FilingAssets = {
+  xmlUrl: string;
+  /** Best SEC page for humans — prefer rendered .htm over XBRL viewer. */
+  filingUrl: string;
+};
+
+async function resolveForm4FilingAssets(cik: string, adsh: string): Promise<Form4FilingAssets | null> {
+  const base = `${SEC_ARCHIVES}/${cikForUrl(cik)}/${adsh}`;
+  const resp = await secFetch(`${base}/index.json`);
   if (!resp.ok) return null;
 
   const index = (await resp.json()) as {
@@ -206,12 +213,25 @@ async function resolveForm4XmlUrl(cik: string, adsh: string): Promise<string | n
   let items = index.directory?.item ?? [];
   if (!Array.isArray(items)) items = items ? [items] : [];
 
+  const names = items.map((f) => f.name ?? "").filter(Boolean);
+
   const xmlFile =
-    items.find((f) => f.name?.toLowerCase().endsWith(".xml") && !f.name?.toLowerCase().includes("xsl"))?.name ??
-    items.find((f) => f.name?.toLowerCase().endsWith(".xml"))?.name;
+    names.find((n) => n.toLowerCase().endsWith(".xml") && !n.toLowerCase().includes("xsl")) ??
+    names.find((n) => n.toLowerCase().endsWith(".xml"));
 
   if (!xmlFile) return null;
-  return `${SEC_ARCHIVES}/${cikForUrl(cik)}/${adsh}/${xmlFile}`;
+
+  // Form 4 often ships a styled .htm alongside the XML; prefer that over the XBRL viewer.
+  const htmlFile =
+    names.find((n) => /\.html?$/i.test(n) && !/^index\.html?$/i.test(n)) ??
+    names.find((n) => /\.html?$/i.test(n));
+
+  const filingUrl = htmlFile ? `${base}/${htmlFile}` : filingIndexUrl(cik, adsh);
+
+  return {
+    xmlUrl: `${base}/${xmlFile}`,
+    filingUrl,
+  };
 }
 
 export function parseForm4Sales(
@@ -298,27 +318,26 @@ export async function scanForm4Sales(options: Form4ScanOptions): Promise<{
     if (filingsParsed >= options.maxFilingsToParse) break;
 
     try {
-      const xmlUrl = await resolveForm4XmlUrl(filing.cik, filing.accessionAdsh);
-      if (!xmlUrl) {
+      const assets = await resolveForm4FilingAssets(filing.cik, filing.accessionAdsh);
+      if (!assets) {
         parseErrors += 1;
         continue;
       }
 
-      const xmlResp = await secFetch(xmlUrl);
+      const xmlResp = await secFetch(assets.xmlUrl);
       if (!xmlResp.ok) {
         parseErrors += 1;
         continue;
       }
 
       const xmlText = await xmlResp.text();
-      const filingUrl = filingViewerUrl(filing.cik, filing.accessionNoDashes);
       const parsed = parseForm4Sales(
         xmlText,
         {
           companyName: filing.companyName,
           companyTicker: null,
           filedDate: filing.filedDate,
-          filingUrl,
+          filingUrl: assets.filingUrl,
           accessionNo: filing.accessionNoDashes,
         },
         options.minValueUsd,

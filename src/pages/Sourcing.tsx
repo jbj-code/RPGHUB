@@ -8,7 +8,6 @@ import {
   getPrimaryActionButtonStyle,
   getRailFooterActionButtonLayout,
   getPageCardStyle,
-  getTableHeaderCellStyle,
   PAGE_LAYOUT,
   shadows,
 } from "../theme";
@@ -171,10 +170,28 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
     fontFamily: t.typography.fontFamily,
   };
 
+  const tableWrapStyle: CSSProperties = {
+    overflowX: "auto",
+    borderRadius: t.radius.md,
+    border: `1px solid ${t.colors.border}`,
+  };
+
+  const tableStyle: CSSProperties = {
+    width: "100%",
+    borderCollapse: "collapse",
+    fontSize: "0.875rem",
+    fontFamily: t.typography.fontFamily,
+  };
+
   const thStyle: CSSProperties = {
-    ...getTableHeaderCellStyle(t),
-    whiteSpace: "nowrap",
+    textAlign: "left",
+    fontWeight: 600,
+    padding: `${t.spacing(2)} ${t.spacing(3)}`,
+    backgroundColor: t.colors.secondary,
+    borderBottom: `1px solid ${t.colors.border}`,
+    color: t.colors.secondaryText,
     fontSize: "0.8rem",
+    whiteSpace: "nowrap",
   };
 
   const tdStyle: CSSProperties = {
@@ -182,6 +199,19 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
     borderBottom: `1px solid ${t.colors.border}`,
     color: t.colors.text,
     fontSize: "0.875rem",
+  };
+
+  const tableFooterStyle: CSSProperties = {
+    marginTop: t.spacing(3),
+    paddingTop: t.spacing(3),
+    paddingBottom: t.spacing(6),
+    borderTop: `1px solid ${t.colors.border}`,
+    fontSize: "0.75rem",
+    color: t.colors.textMuted,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: t.spacing(2),
   };
 
   const cardStyle = getPageCardStyle(t, { padding: t.spacing(4), marginBottom: t.spacing(4) });
@@ -468,56 +498,83 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
         )}
 
         {hasResults && (
-          <div className="page-card" style={{ ...cardStyle, padding: 0, overflow: "hidden" }}>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: t.typography.fontFamily }}>
-                <thead>
-                  <tr>
-                    {["Name", "Company", "Role", "Amount", "Txn date", "Filed", "Filing"].map((h) => (
-                      <th key={h} style={thStyle}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {leads.map((row, i) => (
-                    <tr
-                      key={`${row.accessionNo}-${row.filerName}-${i}`}
-                      style={{ backgroundColor: i % 2 === 0 ? t.colors.surface : t.colors.background }}
-                    >
-                      <td style={{ ...tdStyle, fontWeight: 600 }}>{row.filerName}</td>
-                      <td style={tdStyle}>
-                        {row.companyName}
-                        {row.companyTicker ? (
-                          <span style={{ color: t.colors.textMuted }}> ({row.companyTicker})</span>
-                        ) : null}
-                      </td>
-                      <td style={tdStyle}>{row.role}</td>
-                      <td style={{ ...tdStyle, fontWeight: 600, color: t.colors.primary }}>{formatUsd(row.transactionValue)}</td>
-                      <td style={tdStyle}>{row.transactionDate}</td>
-                      <td style={tdStyle}>{row.filedDate}</td>
-                      <td style={tdStyle}>
-                        <a href={row.filingUrl} target="_blank" rel="noopener noreferrer" style={{ color: t.colors.primary, fontWeight: 600 }}>
-                          View SEC
-                        </a>
-                      </td>
+          <>
+            <div className="page-card" style={cardStyle}>
+              <h3 style={{ ...sectionTitleStyle, marginBottom: t.spacing(2) }}>Form 4 scan results</h3>
+              <p style={{ fontSize: "0.875rem", color: t.colors.textMuted, marginBottom: t.spacing(2), lineHeight: 1.55, marginTop: 0 }}>
+                Insider open-market sales matching your filters, ranked by transaction size. Use{" "}
+                <strong>Filing</strong> to open the SEC document and verify the person and company before outreach.
+              </p>
+              <p style={{ fontSize: "0.85rem", color: t.colors.text, marginBottom: t.spacing(3), marginTop: 0 }}>
+                <strong>Matches:</strong> {leads.length}
+                {" · "}
+                <strong>Lookback:</strong> {days} days
+                {" · "}
+                <strong>Min sale:</strong> ${minValueM}M+
+                {titleFilter ? " · Senior titles only" : ""}
+              </p>
+              <div style={tableWrapStyle}>
+                <table style={tableStyle}>
+                  <thead>
+                    <tr>
+                      {["Name", "Company", "Role", "Amount", "Txn date", "Filed", "Filing"].map((h, colIdx, arr) => (
+                        <th
+                          key={h}
+                          style={{
+                            ...thStyle,
+                            ...(colIdx === 0 ? { borderTopLeftRadius: t.radius.md } : {}),
+                            ...(colIdx === arr.length - 1 ? { borderTopRightRadius: t.radius.md } : {}),
+                          }}
+                        >
+                          {h}
+                        </th>
+                      ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {leads.map((row, i) => (
+                      <tr
+                        key={`${row.accessionNo}-${row.filerName}-${i}`}
+                        style={{ backgroundColor: i % 2 === 0 ? t.colors.surface : t.colors.background }}
+                      >
+                        <td style={{ ...tdStyle, fontWeight: 600 }}>{row.filerName}</td>
+                        <td style={tdStyle}>
+                          {row.companyName}
+                          {row.companyTicker ? (
+                            <span style={{ color: t.colors.textMuted }}> ({row.companyTicker})</span>
+                          ) : null}
+                        </td>
+                        <td style={tdStyle}>{row.role}</td>
+                        <td style={{ ...tdStyle, fontWeight: 600, color: t.colors.primary }}>{formatUsd(row.transactionValue)}</td>
+                        <td style={tdStyle}>{row.transactionDate}</td>
+                        <td style={tdStyle}>{row.filedDate}</td>
+                        <td style={tdStyle}>
+                          <a href={row.filingUrl} target="_blank" rel="noopener noreferrer" style={{ color: t.colors.primary, fontWeight: 600 }}>
+                            View SEC
+                          </a>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
-            {lastScanAt && (
-              <footer style={{ padding: `${t.spacing(2)} ${t.spacing(3)}`, borderTop: `1px solid ${t.colors.border}`, fontSize: "0.78rem", color: t.colors.textMuted }}>
-                Data as of{" "}
-                {lastScanAt.toLocaleString(undefined, {
-                  year: "numeric",
-                  month: "short",
-                  day: "2-digit",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}
-              </footer>
-            )}
-          </div>
+            <footer style={tableFooterStyle}>
+              <span>Filings data provided by SEC EDGAR.</span>
+              {lastScanAt && (
+                <span>
+                  Data as of{" "}
+                  {lastScanAt.toLocaleString(undefined, {
+                    year: "numeric",
+                    month: "short",
+                    day: "2-digit",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </span>
+              )}
+            </footer>
+          </>
         )}
       </div>
 
@@ -525,9 +582,6 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
       <aside style={fixedRails.rightRail}>
         <div className="page-card" style={{ ...fixedRails.railPanel, gap: t.spacing(3) }}>
           <h3 style={{ ...sectionTitleStyle, marginBottom: 0 }}>Workflow</h3>
-          <p style={{ margin: 0, fontSize: "0.78rem", color: t.colors.textMuted, lineHeight: 1.5 }}>
-            Prospects live in your shared <strong>Google Sheet</strong>. Export CSV from here after each scan.
-          </p>
 
           <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(2) }}>
             <div style={{ padding: t.spacing(2), borderRadius: t.radius.md, backgroundColor: t.colors.background, border: `1px solid ${t.colors.border}` }}>
@@ -558,10 +612,6 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
             <span className="material-symbols-outlined" style={{ fontSize: 18 }} aria-hidden>download</span>
             Export CSV
           </button>
-
-          <p style={{ margin: 0, fontSize: "0.72rem", color: t.colors.textMuted, lineHeight: 1.45 }}>
-            Pipeline, outreach drafts, and email digest are planned — Form 4 scan is live today.
-          </p>
         </div>
       </aside>
     </section>
