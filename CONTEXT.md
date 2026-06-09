@@ -4,7 +4,7 @@
 
 ## What this is
 
-**RPG H.U.B** (Resolute Project Group Hub) is an internal web app for Resolute Project Group. It bundles financial and operations tools in one password-protected SPA: options research, stock comparison, assignment monitoring, Schwab market-data access, AI assistant, document extraction, todos, and more.
+**RPG H.U.B** (Resolute Partners Group Hub) is an internal web app for Resolute Partners Group. It bundles financial and operations tools in one password-protected SPA: options research, stock comparison, assignment monitoring, Schwab market-data access, AI assistant, document extraction, todos, and more.
 
 **Users:** firm staff (not public). **Hosting:** Vercel (`therpghub.vercel.app`).
 
@@ -31,6 +31,8 @@
 api/                    Vercel serverless entrypoints
   schwab.ts             Router: dispatches by `action` to _handlers/*
   _handlers/            Schwab + tool logic (optimize, screener, quotes, …)
+  _handlers/sheetQuote.ts   Google Sheets SCHWAB_OPT() backend
+  _handlers/sheetStock.ts   Google Sheets SCHWAB_STOCK() backend
   _schwab-utils.ts      Token refresh, rate limits, shared Schwab helpers
   _universe-sp500.ts    Static S&P 500 + ETF symbol list for screener
   agent.ts              Anthropic streaming agent
@@ -67,7 +69,7 @@ src/
 | Options Optimizer | `put-optimizer` | `OptionsOptimizer.tsx` | Define portfolio rows → rank strikes by yield, momentum, PoP |
 | Options Screener | `options-screener` | `OptionsScreener.tsx` | Scan universe for top OTM puts/calls by yield band |
 | Options Pricing | `options-pricing` | `OptionsPricing.tsx` | Price individual option legs |
-| Sourcing | `sourcing` | `Sourcing.tsx` | Deal sourcing workflow (see `SOURCING.md`) |
+| Sourcing | `sourcing` | `Sourcing.tsx` | SEC Form 4 insider sale scans; prospects tracked in **Google Sheets** (not Supabase) |
 | Assignment Check | `assignment-check` | `AssignmentCheck.tsx` | Schwab + Addepar assignment monitoring |
 | Extractor | `extractor` | `Extractor.tsx` | PDF/OCR fund schedule extraction |
 | To-Dos | `todos` | `Todos.tsx` | Client-scoped task board (localStorage) |
@@ -95,8 +97,32 @@ src/
 | `optimize` | `_handlers/optimize.ts` | Options Optimizer |
 | `screener` | `_handlers/screener.ts` | Options Screener |
 | `explorer` | `_handlers/explorer.ts` | Schwab Explorer |
+| `sheetQuote` | `_handlers/sheetQuote.ts` | Google Sheets `SCHWAB_OPT()` |
+| `sheetStock` | `_handlers/sheetStock.ts` | Google Sheets `SCHWAB_STOCK()` |
 
-**Other routes:** `api/agent.ts`, `api/site-password.ts`, `api/app-settings.ts`, `api/schwab-auth-callback.ts`, `api/addepar-assignment-check.ts`.
+**Other routes:** `api/agent.ts`, `api/sourcing.ts` (`form4_scan` — SEC EDGAR), `api/site-password.ts`, `api/app-settings.ts`, `api/schwab-auth-callback.ts`, `api/addepar-assignment-check.ts`.
+
+---
+
+## Google Sheets (Schwab custom functions)
+
+Team spreadsheets use **Apps Script** bound to the sheet (not in this repo). Functions call production:
+
+`https://therpghub.vercel.app/api/schwab`
+
+| Apps Script function | API action | Notes |
+|---------------------|------------|-------|
+| `SCHWAB_OCC(underlying, expiry, type, strike)` | *(none)* | Builds OCC symbol string locally — no HTTP |
+| `SCHWAB_OPT(symbol, field)` | `sheetQuote` | Live option quote field (bid, iv, delta, …) |
+| `SCHWAB_STOCK(symbol, field)` | `sheetStock` | Stock analytics: `rv30`, `iv30`, `beta`, `ivrv30`, … |
+| Menu → Check Connection | `status` | Same token as RPG HUB |
+| Menu → Reauthorize | `auth` | OAuth in browser |
+
+**Response contract:** `{ value }` on success; `{ error }` on failure (Sheets shows `ERR: …`). Optional `SHEET_KEY` on Vercel + matching key in Apps Script.
+
+**Auth:** Schwab OAuth token stored in Supabase — reauthorize via RPG HUB or the sheet menu when refresh token expires (~7 days).
+
+**Performance:** Each `SCHWAB_OPT` / `SCHWAB_STOCK` formula cell = one HTTP round-trip (Sheets → Vercel → Schwab). Typical sheet: one contract per row, one field (e.g. `mid`) — 20 rows = 20 sequential-ish requests when **Refresh Data** re-runs formulas. Google throttles custom-function `UrlFetchApp` calls; they do not all fire truly in parallel. Schwab’s `/quotes` endpoint accepts **multiple symbols in one call**, but per-cell formulas cannot use that today. Real speed win (future): a **batch refresh** in Apps Script that collects unique OCC symbols from the sheet, one (or few) API calls, writes values back — instead of N separate `SCHWAB_OPT` calls.
 
 ---
 
@@ -135,7 +161,7 @@ src/
 **Client** (`.env`, `VITE_` prefix, exposed to browser):
 - `VITE_SCHWAB_API_BASE` — optional; defaults to `https://therpghub.vercel.app`
 
-**Server** (Vercel env only): `SUPABASE_SERVICE_ROLE_KEY`, `SCHWAB_CLIENT_*`, `ANTHROPIC_API_KEY`, `OPENFIGI_API_KEY`, Addepar keys, etc. See `.env.example`.
+**Server** (Vercel env only): `SUPABASE_SERVICE_ROLE_KEY`, `SCHWAB_CLIENT_*`, `ANTHROPIC_API_KEY`, `OPENFIGI_API_KEY`, `SHEET_KEY` (optional — locks sheet endpoints), Addepar keys, etc. See `.env.example`.
 
 **Deploy:** Push to `main` → Vercel builds frontend + API together. Local `npm run dev` only serves the UI; API changes require deploy (or `vercel dev`) to take effect.
 
@@ -166,7 +192,8 @@ npx tsc --noEmit # Typecheck (requires vite-env.d.ts)
 ## Gotchas
 
 - **Local dev hits production API** unless `VITE_SCHWAB_API_BASE` points elsewhere.
-- **All Supabase access is server-side** — site password, app settings, Schwab tokens. No `supabaseClient` in the frontend.
+- **All Supabase access is server-side** — site password, app settings, Schwab tokens. No browser Supabase client.
+- **SEC EDGAR** expects a declared `User-Agent` on automated requests (`"Resolute Partners Group email@domain.com"`). Optional env `SEC_EDGAR_USER_AGENT` on Vercel; code has a firm-name fallback if unset.
 - **Windows/PowerShell:** `$env:VAR`; chain with `;` not `&&` (see `GUIDELINES.md` §15).
 - **Large pages** (`OptionsOptimizer`, `Schwab`, `OptionsScreener`) are 2k–100k lines — use section headers when editing.
 - **Nav auto-collapse** after 10s; user toggle disables auto-collapse permanently for the session.

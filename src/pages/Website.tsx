@@ -231,7 +231,7 @@ export function Website({ theme: t }: WebsiteProps) {
 
       {/* Top bar: logo + hamburger */}
       <div style={heroTopBarStyle}>
-        <img src={assets.logoWhite} alt="Resolute Project Group" style={heroLogoStyle} />
+        <img src={assets.logoWhite} alt="Resolute Partners Group" style={heroLogoStyle} />
 
         <div ref={menuRef} style={{ position: "relative" }}>
           <button

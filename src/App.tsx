@@ -121,7 +121,7 @@ function App() {
         ) : page === "agent" ? (
           <Agent theme={t} />
         ) : page === "sourcing" ? (
-          <Sourcing theme={t} />
+          <Sourcing theme={t} sidebarWidth={sidebarWidth} />
         ) : page === "schwab" ? (
           <Schwab theme={t} sidebarWidth={sidebarWidth} />
         ) : page === "website" ? (

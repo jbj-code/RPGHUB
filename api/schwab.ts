@@ -1,5 +1,6 @@
 // schwab.ts
 // Single Vercel entry routing Schwab + OpenFIGI actions by `action` query/body param.
+// Includes sheetQuote / sheetStock for Google Sheets SCHWAB_OPT() and SCHWAB_STOCK().
 
 import { handler as handleAuth } from "./_handlers/auth.js";
 import { handler as handleStatus } from "./_handlers/status.js";
@@ -10,6 +11,8 @@ import { handler as handlePrices } from "./_handlers/prices.js";
 import { handler as handleOptimize } from "./_handlers/optimize.js";
 import { handler as handleScreener } from "./_handlers/screener.js";
 import { handler as handleExplorer } from "./_handlers/explorer.js";
+import { handler as handleSheetQuote } from "./_handlers/sheetQuote.js";
+import { handler as handleSheetStock } from "./_handlers/sheetStock.js";
 
 // --- Action router ---
 export default async function handler(req: any, res: any) {
@@ -30,10 +33,12 @@ export default async function handler(req: any, res: any) {
     case "prices":   return handlePrices(req, res);
     case "optimize": return handleOptimize(req, res);
     case "screener": return handleScreener(req, res);
-    case "explorer": return handleExplorer(req, res);
+    case "explorer":    return handleExplorer(req, res);
+    case "sheetQuote":  return handleSheetQuote(req, res);
+    case "sheetStock":  return handleSheetStock(req, res);
     default:
       res.status(400).json({
-        error: `Unknown or missing action: "${action}". Valid: auth, status, quotes, returns, figi, prices, optimize, screener, explorer`,
+        error: `Unknown or missing action: "${action}". Valid: auth, status, quotes, returns, figi, prices, optimize, screener, explorer, sheetQuote, sheetStock`,
       });
   }
 }

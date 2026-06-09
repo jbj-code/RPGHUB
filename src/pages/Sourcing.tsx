@@ -1,810 +1,569 @@
 // Sourcing.tsx
-// AI-assisted HNW prospect discovery for wealth management.
-//
-// API INTEGRATION POINTS (not yet connected):
-//   Trigger events → Exa AI (exa.ai) or NewsAPI for event monitoring
-//   SEC Form 4 filings → SEC EDGAR API (free, api.sec.gov/submissions)
-//   Contact enrichment → Apollo.io or Hunter.io for email discovery
-//   Scheduled scans → Vercel Cron (api/sourcing-scan.ts)
-//   Email delivery → Resend (resend.com) for weekly digest
+// HNW prospect discovery: SEC Form 4 insider sale scans (export to Google Sheets).
 
-import { useState } from "react";
+import { useState, useCallback, useEffect, useRef, type CSSProperties } from "react";
 import type { Theme } from "../theme";
-import { PAGE_LAYOUT } from "../theme";
+import {
+  getFixedRailsLayoutStyles,
+  getPrimaryActionButtonStyle,
+  getRailFooterActionButtonLayout,
+  getPageCardStyle,
+  getTableHeaderCellStyle,
+  PAGE_LAYOUT,
+  shadows,
+} from "../theme";
+import { SCHWAB_API_BASE } from "../constants";
 
-type SourcingProps = { theme: Theme };
+type SourcingProps = { theme: Theme; sidebarWidth: number };
 
-type TriggerType = "acquisition" | "ipo" | "funding" | "sec_filing" | "news";
-type ProspectStatus = "new" | "draft" | "approved" | "sent" | "responded" | "qualified";
-type TabId = "feed" | "prospects" | "pipeline" | "digest";
-
-type TriggerEvent = {
-  id: string;
-  date: string;
-  type: TriggerType;
-  headline: string;
-  source: string;
-  estimatedValue?: string;
-  prospectCount: number;
-  apiSource?: string; // which API will power this
+type Form4Lead = {
+  filerName: string;
+  companyName: string;
+  companyTicker: string | null;
+  role: string;
+  transactionValue: number;
+  shares: number;
+  pricePerShare: number | null;
+  transactionDate: string;
+  filedDate: string;
+  transactionCode: string;
+  filingUrl: string;
+  accessionNo: string;
 };
 
-type Prospect = {
-  id: string;
-  triggerId: string;
-  name: string;
-  title: string;
-  company: string;
-  linkedinUrl?: string;
-  email?: string;
-  estimatedLiquidity: string;
-  message: string;
-  status: ProspectStatus;
-  addedDate: string;
-  notes?: string;
+type Form4ScanMeta = {
+  days: number;
+  minValueUsd: number;
+  titleKeywordsOnly: boolean;
+  filingsSearched: number;
+  filingsParsed: number;
+  parseErrors: number;
+  leadCount: number;
 };
-
-// --- Mock data (replace with live API calls) ---
-
-const MOCK_TRIGGERS: TriggerEvent[] = [
-  {
-    id: "t1", date: "2026-05-05", type: "acquisition",
-    headline: "GitHub acquires Cursor for $2.1B — 200+ employees eligible for equity payout",
-    source: "TechCrunch", estimatedValue: "$2.1B", prospectCount: 4, apiSource: "Exa AI",
-  },
-  {
-    id: "t2", date: "2026-05-03", type: "ipo",
-    headline: "Databricks S-1 filing — 18 executives with $5M+ vested equity ahead of IPO",
-    source: "SEC EDGAR", estimatedValue: "$43B valuation", prospectCount: 6, apiSource: "SEC EDGAR API",
-  },
-  {
-    id: "t3", date: "2026-05-01", type: "sec_filing",
-    headline: "NVDA insider sale: SVP sold $12M in shares — Form 4 filed",
-    source: "SEC EDGAR", estimatedValue: "$12M transaction", prospectCount: 1, apiSource: "SEC EDGAR API",
-  },
-  {
-    id: "t4", date: "2026-04-28", type: "funding",
-    headline: "Anduril raises $2.5B Series F — 5 co-founders / early execs with large stakes",
-    source: "Bloomberg", estimatedValue: "$2.5B round", prospectCount: 3, apiSource: "Exa AI",
-  },
-  {
-    id: "t5", date: "2026-04-25", type: "news",
-    headline: "SpaceX secondary share sale at $350/sh — early employees cashing out",
-    source: "WSJ", estimatedValue: "~$60B implied valuation", prospectCount: 2, apiSource: "Exa AI",
-  },
-];
-
-const MOCK_PROSPECTS: Prospect[] = [
-  {
-    id: "p1", triggerId: "t1", name: "Marcus Webb", title: "Staff Engineer",
-    company: "Cursor → GitHub/Microsoft", linkedinUrl: "https://linkedin.com/in/marcuswebb",
-    estimatedLiquidity: "$2–6M",
-    message: `Hi Marcus,\n\nCongratulations on the GitHub acquisition — the Cursor team has built something remarkable, and it's exciting to see it recognized at this scale.\n\nI lead wealth advisory at [Firm Name], a boutique multi-family office that works exclusively with technology executives and founders navigating significant liquidity events. We specialize in the moments that matter most: tax-efficient liquidity planning, diversification strategy, and long-term wealth structuring — so the transition from equity to lasting financial security is handled thoughtfully.\n\nWould you be open to a 20-minute conversation? No pitch — just an honest discussion about what the next chapter looks like and whether our approach might be a fit.\n\nBest,\n[Your Name]`,
-    status: "draft", addedDate: "2026-05-05",
-  },
-  {
-    id: "p2", triggerId: "t1", name: "Priya Anand", title: "Head of Design",
-    company: "Cursor → GitHub/Microsoft", linkedinUrl: "https://linkedin.com/in/priyaanand",
-    email: "priya@cursor.sh",
-    estimatedLiquidity: "$1.5–4M",
-    message: `Hi Priya,\n\nThe Cursor acquisition is a testament to the product vision you and the team built — congratulations.\n\nI'm reaching out from [Firm Name], a multi-family office that helps technology leaders navigate exactly this kind of moment: translating equity gains into long-term financial security in a tax-efficient way.\n\nI'd love to connect briefly if you're thinking through your options. Happy to share how we've helped others in similar situations.\n\nBest,\n[Your Name]`,
-    status: "approved", addedDate: "2026-05-05",
-  },
-  {
-    id: "p3", triggerId: "t2", name: "David Liang", title: "VP of Engineering",
-    company: "Databricks", linkedinUrl: "https://linkedin.com/in/davidliang",
-    estimatedLiquidity: "$8–20M",
-    message: `Hi David,\n\nWith Databricks' S-1 filing and the IPO on the horizon, I imagine you're thinking carefully about what comes next for your equity.\n\nAt [Firm Name], we specialize in pre-IPO and IPO liquidity planning — lockup strategy, 10b5-1 plan structuring, concentrated position management, and tax optimization. We've helped executives at several unicorn-to-public transitions preserve significantly more wealth than they would have otherwise.\n\nWould a brief call make sense? Happy to share specifics about our process.\n\nBest,\n[Your Name]`,
-    status: "sent", addedDate: "2026-05-03",
-  },
-  {
-    id: "p4", triggerId: "t3", name: "Jennifer Holt", title: "SVP, Product Strategy",
-    company: "NVIDIA", linkedinUrl: "https://linkedin.com/in/jenniferholt",
-    email: "jennifer.holt@nvidia.com",
-    estimatedLiquidity: "$12M+ (recent sale)",
-    message: `Hi Jennifer,\n\nI noticed your recent NVIDIA share sale — congratulations on the meaningful liquidity milestone.\n\nI lead wealth strategy at [Firm Name], a multi-family office that works with senior technology executives on exactly this kind of transition: reinvesting proceeds strategically, managing tax exposure, and building a long-term financial plan that doesn't depend entirely on a single company.\n\nIf you haven't already locked in an advisor for this, I'd welcome a brief conversation.\n\nBest,\n[Your Name]`,
-    status: "new", addedDate: "2026-05-01",
-  },
-  {
-    id: "p5", triggerId: "t4", name: "Brian Schimpf", title: "Co-Founder & CEO",
-    company: "Anduril Industries",
-    estimatedLiquidity: "$50M+",
-    message: `Hi Brian,\n\nAnduril's Series F is a landmark — congratulations on building one of the most consequential defense technology companies of the decade.\n\nI lead a boutique multi-family office focused on founders and executives at this stage of wealth. At $2.5B raised, the complexity of your financial picture — founder equity, secondary liquidity, tax planning, estate structure — is significant. We work quietly and exclusively with a small number of clients at this level.\n\nIf you're evaluating advisory relationships, I'd welcome a confidential conversation.\n\nBest,\n[Your Name]`,
-    status: "draft", addedDate: "2026-04-28",
-  },
-];
 
 // --- Helpers ---
 
-const TRIGGER_CONFIG: Record<TriggerType, { label: string; icon: string; color: string }> = {
-  acquisition: { label: "Acquisition", icon: "handshake", color: "#f59e0b" },
-  ipo:         { label: "IPO",         icon: "trending_up", color: "#8b5cf6" },
-  funding:     { label: "Funding",     icon: "attach_money", color: "#3b82f6" },
-  sec_filing:  { label: "SEC Filing",  icon: "gavel", color: "#10b981" },
-  news:        { label: "News",        icon: "newspaper", color: "#6b7280" },
-};
-
-const STATUS_CONFIG: Record<ProspectStatus, { label: string; color: string; bg: string }> = {
-  new:       { label: "New",       color: "#6b7280", bg: "#6b728018" },
-  draft:     { label: "Draft",     color: "#f59e0b", bg: "#f59e0b18" },
-  approved:  { label: "Approved",  color: "#3b82f6", bg: "#3b82f618" },
-  sent:      { label: "Sent",      color: "#8b5cf6", bg: "#8b5cf618" },
-  responded: { label: "Responded", color: "#10b981", bg: "#10b98118" },
-  qualified: { label: "Qualified", color: "#44c1c1", bg: "#44c1c118" },
-};
-
-const PIPELINE_COLUMNS: ProspectStatus[] = ["new", "draft", "approved", "sent", "responded", "qualified"];
-
-// --- Sub-components ---
-
-function StatCard({ icon, value, label, t }: { icon: string; value: string | number; label: string; t: Theme }) {
-  return (
-    <div style={{
-      flex: 1, minWidth: 110,
-      backgroundColor: t.colors.surface,
-      border: `1px solid ${t.colors.border}`,
-      borderRadius: t.radius.md,
-      padding: `${t.spacing(2.5)} ${t.spacing(3)}`,
-      display: "flex", flexDirection: "column", gap: t.spacing(0.5),
-    }}>
-      <div style={{ display: "flex", alignItems: "center", gap: t.spacing(1), color: t.colors.textMuted }}>
-        <span className="material-symbols-outlined" style={{ fontSize: 16 }}>{icon}</span>
-        <span style={{ fontSize: "0.75rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</span>
-      </div>
-      <div style={{ fontSize: "1.6rem", fontWeight: 700, color: t.colors.text, lineHeight: 1 }}>{value}</div>
-    </div>
-  );
+function formatUsd(n: number): string {
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}K`;
+  return `$${n.toLocaleString("en-US")}`;
 }
 
-function TriggerBadge({ type }: { type: TriggerType; t?: Theme }) {
-  const cfg = TRIGGER_CONFIG[type];
-  return (
-    <span style={{
-      display: "inline-flex", alignItems: "center", gap: 4,
-      padding: "2px 8px", borderRadius: 20, fontSize: "0.72rem", fontWeight: 600,
-      backgroundColor: `${cfg.color}18`, color: cfg.color,
-      border: `1px solid ${cfg.color}30`,
-    }}>
-      <span className="material-symbols-outlined" style={{ fontSize: 12 }}>{cfg.icon}</span>
-      {cfg.label}
-    </span>
-  );
-}
-
-function StatusBadge({ status }: { status: ProspectStatus }) {
-  const cfg = STATUS_CONFIG[status];
-  return (
-    <span style={{
-      display: "inline-block", padding: "2px 10px", borderRadius: 20,
-      fontSize: "0.72rem", fontWeight: 600,
-      backgroundColor: cfg.bg, color: cfg.color,
-    }}>
-      {cfg.label}
-    </span>
-  );
-}
-
-// --- Feed tab ---
-
-function FeedTab({ triggers, onSelectTrigger, t }: {
-  triggers: TriggerEvent[];
-  onSelectTrigger: (id: string) => void;
-  t: Theme;
-}) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(2) }}>
-      {/* Data sources panel */}
-      <div style={{
-        backgroundColor: t.colors.surface, border: `1px solid ${t.colors.border}`,
-        borderRadius: t.radius.md, padding: t.spacing(3),
-      }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: t.spacing(2) }}>
-          <h3 style={{ margin: 0, fontSize: "0.85rem", fontWeight: 700, color: t.colors.text }}>
-            Data Sources
-          </h3>
-          <span style={{ fontSize: "0.75rem", color: t.colors.textMuted }}>Connect APIs to enable automated scanning</span>
-        </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: t.spacing(1.5) }}>
-          {[
-            { name: "Exa AI", desc: "News + people search", icon: "travel_explore", status: "pending" },
-            { name: "SEC EDGAR", desc: "Insider filings (Form 4, S-1)", icon: "gavel", status: "pending" },
-            { name: "Apollo.io", desc: "Email + contact enrichment", icon: "contacts", status: "pending" },
-            { name: "Crunchbase", desc: "Funding events", icon: "attach_money", status: "pending" },
-          ].map((src) => (
-            <div key={src.name} style={{
-              display: "flex", alignItems: "center", gap: t.spacing(1.5),
-              padding: `${t.spacing(1.25)} ${t.spacing(2)}`,
-              backgroundColor: t.colors.background,
-              border: `1px dashed ${t.colors.border}`,
-              borderRadius: t.radius.sm, cursor: "pointer",
-              flex: "1 1 180px",
-            }}>
-              <span className="material-symbols-outlined" style={{ fontSize: 16, color: t.colors.textMuted }}>{src.icon}</span>
-              <div>
-                <div style={{ fontSize: "0.82rem", fontWeight: 600, color: t.colors.text }}>{src.name}</div>
-                <div style={{ fontSize: "0.72rem", color: t.colors.textMuted }}>{src.desc}</div>
-              </div>
-              <span style={{
-                marginLeft: "auto", fontSize: "0.68rem", fontWeight: 600,
-                color: "#f59e0b", backgroundColor: "#f59e0b15",
-                padding: "1px 6px", borderRadius: 10,
-              }}>Not connected</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Trigger events */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <h3 style={{ margin: 0, fontSize: "0.85rem", fontWeight: 700, color: t.colors.text }}>
-          Recent Trigger Events
-        </h3>
-        <button style={{
-          display: "inline-flex", alignItems: "center", gap: 6,
-          padding: `${t.spacing(1)} ${t.spacing(2)}`,
-          backgroundColor: t.colors.primary, color: "#fff",
-          border: "none", borderRadius: t.radius.sm, cursor: "pointer",
-          fontSize: "0.82rem", fontWeight: 600,
-        }}>
-          <span className="material-symbols-outlined" style={{ fontSize: 15 }}>bolt</span>
-          Run Scan
-        </button>
-      </div>
-
-      {triggers.map((ev) => {
-        const cfg = TRIGGER_CONFIG[ev.type];
-        return (
-          <div key={ev.id} className="agent-message" style={{
-            backgroundColor: t.colors.surface,
-            border: `1px solid ${t.colors.border}`,
-            borderRadius: t.radius.md,
-            padding: t.spacing(3),
-            display: "flex", alignItems: "flex-start", gap: t.spacing(3),
-          }}>
-            <div style={{
-              width: 40, height: 40, borderRadius: t.radius.sm, flexShrink: 0,
-              backgroundColor: `${cfg.color}15`, border: `1px solid ${cfg.color}30`,
-              display: "flex", alignItems: "center", justifyContent: "center",
-            }}>
-              <span className="material-symbols-outlined" style={{ fontSize: 18, color: cfg.color }}>{cfg.icon}</span>
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: t.spacing(1.5), marginBottom: t.spacing(0.75) }}>
-                <TriggerBadge type={ev.type} t={t} />
-                <span style={{ fontSize: "0.75rem", color: t.colors.textMuted }}>{ev.date}</span>
-                <span style={{ fontSize: "0.75rem", color: t.colors.textMuted }}>· {ev.source}</span>
-                {ev.estimatedValue && (
-                  <span style={{ fontSize: "0.75rem", fontWeight: 600, color: t.colors.primary }}>{ev.estimatedValue}</span>
-                )}
-              </div>
-              <p style={{ margin: `0 0 ${t.spacing(1)}`, fontSize: "0.9rem", fontWeight: 600, color: t.colors.text, lineHeight: 1.4 }}>
-                {ev.headline}
-              </p>
-              <div style={{ display: "flex", alignItems: "center", gap: t.spacing(2) }}>
-                {ev.apiSource && (
-                  <span style={{ fontSize: "0.72rem", color: t.colors.textMuted }}>
-                    Source: {ev.apiSource}
-                  </span>
-                )}
-                <span style={{ fontSize: "0.72rem", color: t.colors.secondary, fontWeight: 600 }}>
-                  {ev.prospectCount} prospect{ev.prospectCount !== 1 ? "s" : ""} identified
-                </span>
-              </div>
-            </div>
-            <button
-              onClick={() => onSelectTrigger(ev.id)}
-              style={{
-                flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 5,
-                padding: `${t.spacing(1)} ${t.spacing(2)}`,
-                backgroundColor: "transparent",
-                color: t.colors.primary,
-                border: `1px solid ${t.colors.primary}50`,
-                borderRadius: t.radius.sm, cursor: "pointer",
-                fontSize: "0.8rem", fontWeight: 600,
-              }}
-            >
-              View Prospects
-              <span className="material-symbols-outlined" style={{ fontSize: 14 }}>arrow_forward</span>
-            </button>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// --- Prospects tab ---
-
-function ProspectsTab({ prospects, triggers, filterTrigger, t }: {
-  prospects: Prospect[];
-  triggers: TriggerEvent[];
-  filterTrigger: string | null;
-  t: Theme;
-}) {
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Record<string, string>>(
-    Object.fromEntries(prospects.map((p) => [p.id, p.message]))
-  );
-  const [statuses, setStatuses] = useState<Record<string, ProspectStatus>>(
-    Object.fromEntries(prospects.map((p) => [p.id, p.status]))
-  );
-
-  const filtered = filterTrigger
-    ? prospects.filter((p) => p.triggerId === filterTrigger)
-    : prospects;
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(1.5) }}>
-      {filtered.map((p) => {
-        const trigger = triggers.find((tr) => tr.id === p.triggerId);
-        const isExpanded = expanded === p.id;
-        const status = statuses[p.id] ?? p.status;
-
-        return (
-          <div key={p.id} className="agent-message" style={{
-            backgroundColor: t.colors.surface,
-            border: `1px solid ${isExpanded ? t.colors.primary + "60" : t.colors.border}`,
-            borderRadius: t.radius.md,
-            overflow: "hidden",
-            transition: "border-color 0.2s",
-          }}>
-            {/* Prospect row */}
-            <div
-              onClick={() => setExpanded(isExpanded ? null : p.id)}
-              style={{
-                padding: t.spacing(3), cursor: "pointer",
-                display: "flex", alignItems: "center", gap: t.spacing(2.5),
-              }}
-            >
-              {/* Avatar */}
-              <div style={{
-                width: 38, height: 38, borderRadius: "50%", flexShrink: 0,
-                backgroundColor: `${t.colors.primary}20`,
-                border: `1px solid ${t.colors.primary}30`,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: "0.85rem", fontWeight: 700, color: t.colors.primary,
-              }}>
-                {p.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
-              </div>
-
-              {/* Info */}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: t.spacing(1.5), flexWrap: "wrap" }}>
-                  <span style={{ fontWeight: 700, fontSize: "0.93rem", color: t.colors.text }}>{p.name}</span>
-                  <StatusBadge status={status} />
-                  {trigger && <TriggerBadge type={trigger.type} t={t} />}
-                </div>
-                <div style={{ fontSize: "0.8rem", color: t.colors.textMuted, marginTop: 2 }}>
-                  {p.title} · {p.company}
-                </div>
-              </div>
-
-              <div style={{ textAlign: "right", flexShrink: 0 }}>
-                <div style={{ fontSize: "0.85rem", fontWeight: 700, color: t.colors.secondary }}>{p.estimatedLiquidity}</div>
-                <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, marginTop: 2 }}>est. liquidity</div>
-              </div>
-
-              <span className="material-symbols-outlined" style={{
-                fontSize: 18, color: t.colors.textMuted, flexShrink: 0,
-                transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)",
-                transition: "transform 0.2s",
-              }}>expand_more</span>
-            </div>
-
-            {/* Expanded detail */}
-            {isExpanded && (
-              <div style={{ borderTop: `1px solid ${t.colors.border}`, padding: t.spacing(3) }}>
-                {/* Contact row */}
-                <div style={{ display: "flex", gap: t.spacing(2), marginBottom: t.spacing(2.5), flexWrap: "wrap" }}>
-                  {p.linkedinUrl && (
-                    <a href={p.linkedinUrl} target="_blank" rel="noopener noreferrer" style={{
-                      display: "inline-flex", alignItems: "center", gap: 5,
-                      fontSize: "0.8rem", color: "#0077b5", textDecoration: "none", fontWeight: 600,
-                    }}>
-                      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>link</span>
-                      LinkedIn
-                    </a>
-                  )}
-                  {p.email ? (
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: "0.8rem", color: t.colors.text }}>
-                      <span className="material-symbols-outlined" style={{ fontSize: 14, color: t.colors.textMuted }}>mail</span>
-                      {p.email}
-                    </span>
-                  ) : (
-                    <span style={{
-                      display: "inline-flex", alignItems: "center", gap: 5,
-                      fontSize: "0.8rem", color: "#f59e0b", fontWeight: 500,
-                    }}>
-                      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>mail</span>
-                      Email not found — connect Apollo.io
-                    </span>
-                  )}
-                </div>
-
-                {/* Message editor */}
-                <div style={{ marginBottom: t.spacing(2) }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: t.spacing(1) }}>
-                    <label style={{ fontSize: "0.78rem", fontWeight: 700, color: t.colors.textMuted, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                      Personalized Outreach Message
-                    </label>
-                    <span style={{ fontSize: "0.72rem", color: t.colors.textMuted }}>AI-generated · edit as needed</span>
-                  </div>
-                  <textarea
-                    value={messages[p.id] ?? p.message}
-                    onChange={(e) => setMessages((prev) => ({ ...prev, [p.id]: e.target.value }))}
-                    rows={12}
-                    style={{
-                      width: "100%", boxSizing: "border-box",
-                      backgroundColor: t.colors.background,
-                      border: `1px solid ${t.colors.border}`,
-                      borderRadius: t.radius.sm,
-                      padding: t.spacing(2), fontSize: "0.875rem",
-                      color: t.colors.text, fontFamily: t.typography.fontFamily,
-                      lineHeight: 1.65, resize: "vertical", outline: "none",
-                    }}
-                  />
-                </div>
-
-                {/* Actions */}
-                <div style={{ display: "flex", gap: t.spacing(1.5), flexWrap: "wrap" }}>
-                  <button
-                    onClick={() => {
-                      void navigator.clipboard.writeText(messages[p.id] ?? p.message);
-                    }}
-                    style={{
-                      display: "inline-flex", alignItems: "center", gap: 5,
-                      padding: `${t.spacing(1)} ${t.spacing(2)}`,
-                      backgroundColor: t.colors.background,
-                      border: `1px solid ${t.colors.border}`,
-                      borderRadius: t.radius.sm, cursor: "pointer",
-                      fontSize: "0.8rem", color: t.colors.text, fontWeight: 500,
-                    }}
-                  >
-                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>content_copy</span>
-                    Copy
-                  </button>
-                  <button
-                    onClick={() => setStatuses((prev) => ({ ...prev, [p.id]: "approved" }))}
-                    style={{
-                      display: "inline-flex", alignItems: "center", gap: 5,
-                      padding: `${t.spacing(1)} ${t.spacing(2)}`,
-                      backgroundColor: "#3b82f608",
-                      border: "1px solid #3b82f640",
-                      borderRadius: t.radius.sm, cursor: "pointer",
-                      fontSize: "0.8rem", color: "#3b82f6", fontWeight: 600,
-                    }}
-                  >
-                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>check_circle</span>
-                    Approve
-                  </button>
-                  <button
-                    onClick={() => setStatuses((prev) => ({ ...prev, [p.id]: "sent" }))}
-                    style={{
-                      display: "inline-flex", alignItems: "center", gap: 5,
-                      padding: `${t.spacing(1)} ${t.spacing(2.5)}`,
-                      backgroundColor: t.colors.primary, color: "#fff",
-                      border: "none", borderRadius: t.radius.sm, cursor: "pointer",
-                      fontSize: "0.8rem", fontWeight: 600,
-                    }}
-                  >
-                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>send</span>
-                    Mark as Sent
-                  </button>
-                  {p.linkedinUrl && (
-                    <a
-                      href={p.linkedinUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{
-                        display: "inline-flex", alignItems: "center", gap: 5,
-                        padding: `${t.spacing(1)} ${t.spacing(2)}`,
-                        backgroundColor: "#0077b508",
-                        border: "1px solid #0077b540",
-                        borderRadius: t.radius.sm, cursor: "pointer",
-                        fontSize: "0.8rem", color: "#0077b5", fontWeight: 600,
-                        textDecoration: "none",
-                      }}
-                    >
-                      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>open_in_new</span>
-                      Open LinkedIn
-                    </a>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// --- Pipeline tab ---
-
-function PipelineTab({ prospects, t }: { prospects: Prospect[]; t: Theme }) {
-  return (
-    <div style={{ display: "flex", gap: t.spacing(2), overflowX: "auto", paddingBottom: t.spacing(2) }}>
-      {PIPELINE_COLUMNS.map((col) => {
-        const colProspects = prospects.filter((p) => p.status === col);
-        const cfg = STATUS_CONFIG[col];
-        return (
-          <div key={col} style={{ minWidth: 220, flex: "0 0 220px" }}>
-            <div style={{
-              display: "flex", alignItems: "center", gap: t.spacing(1),
-              marginBottom: t.spacing(1.5),
-              padding: `${t.spacing(1)} ${t.spacing(1.5)}`,
-              backgroundColor: cfg.bg, borderRadius: t.radius.sm,
-            }}>
-              <span style={{ fontWeight: 700, fontSize: "0.8rem", color: cfg.color }}>{cfg.label}</span>
-              <span style={{
-                marginLeft: "auto", backgroundColor: cfg.color,
-                color: "#fff", borderRadius: 10, padding: "0px 7px",
-                fontSize: "0.72rem", fontWeight: 700,
-              }}>{colProspects.length}</span>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(1) }}>
-              {colProspects.map((p) => (
-                <div key={p.id} style={{
-                  backgroundColor: t.colors.surface,
-                  border: `1px solid ${t.colors.border}`,
-                  borderRadius: t.radius.sm,
-                  padding: t.spacing(2),
-                }}>
-                  <div style={{ fontWeight: 600, fontSize: "0.85rem", color: t.colors.text, marginBottom: 2 }}>{p.name}</div>
-                  <div style={{ fontSize: "0.75rem", color: t.colors.textMuted, marginBottom: t.spacing(1) }}>
-                    {p.title}
-                  </div>
-                  <div style={{ fontSize: "0.75rem", color: t.colors.secondary, fontWeight: 600 }}>{p.estimatedLiquidity}</div>
-                </div>
-              ))}
-              {colProspects.length === 0 && (
-                <div style={{
-                  padding: t.spacing(3), textAlign: "center",
-                  border: `1px dashed ${t.colors.border}`, borderRadius: t.radius.sm,
-                  fontSize: "0.75rem", color: t.colors.textMuted,
-                }}>Empty</div>
-              )}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// --- Digest tab ---
-
-function DigestTab({ prospects, triggers, t }: {
-  prospects: Prospect[];
-  triggers: TriggerEvent[];
-  t: Theme;
-}) {
-  const newThisWeek = prospects.filter((p) => p.status === "new" || p.status === "draft").length;
-  const sentThisWeek = prospects.filter((p) => p.status === "sent" || p.status === "responded").length;
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(3), maxWidth: 680 }}>
-      {/* Config */}
-      <div style={{
-        backgroundColor: t.colors.surface, border: `1px solid ${t.colors.border}`,
-        borderRadius: t.radius.md, padding: t.spacing(3),
-      }}>
-        <h3 style={{ margin: `0 0 ${t.spacing(2)}`, fontSize: "0.9rem", fontWeight: 700, color: t.colors.text }}>
-          Digest Settings
-        </h3>
-        <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(1.5) }}>
-          <div style={{ display: "flex", alignItems: "center", gap: t.spacing(2) }}>
-            <label style={{ fontSize: "0.82rem", color: t.colors.textMuted, fontWeight: 500, minWidth: 120 }}>Recipient email</label>
-            <input
-              defaultValue="boss@firm.com"
-              style={{
-                flex: 1, padding: `${t.spacing(1)} ${t.spacing(1.5)}`,
-                backgroundColor: t.colors.background, border: `1px solid ${t.colors.border}`,
-                borderRadius: t.radius.sm, fontSize: "0.85rem",
-                color: t.colors.text, fontFamily: t.typography.fontFamily, outline: "none",
-              }}
-            />
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: t.spacing(2) }}>
-            <label style={{ fontSize: "0.82rem", color: t.colors.textMuted, fontWeight: 500, minWidth: 120 }}>Frequency</label>
-            <select style={{
-              padding: `${t.spacing(1)} ${t.spacing(1.5)}`,
-              backgroundColor: t.colors.background, border: `1px solid ${t.colors.border}`,
-              borderRadius: t.radius.sm, fontSize: "0.85rem", color: t.colors.text,
-              fontFamily: t.typography.fontFamily, outline: "none",
-            }}>
-              <option>Weekly — Monday 8am</option>
-              <option>Daily — 8am</option>
-              <option>Manual only</option>
-            </select>
-          </div>
-        </div>
-        <div style={{ marginTop: t.spacing(2), display: "flex", gap: t.spacing(1.5) }}>
-          <button style={{
-            display: "inline-flex", alignItems: "center", gap: 6,
-            padding: `${t.spacing(1)} ${t.spacing(2.5)}`,
-            backgroundColor: t.colors.primary, color: "#fff",
-            border: "none", borderRadius: t.radius.sm, cursor: "pointer",
-            fontSize: "0.82rem", fontWeight: 600,
-          }}>
-            <span className="material-symbols-outlined" style={{ fontSize: 15 }}>send</span>
-            Send Now — requires Resend API
-          </button>
-        </div>
-      </div>
-
-      {/* Preview */}
-      <div style={{
-        backgroundColor: t.colors.surface, border: `1px solid ${t.colors.border}`,
-        borderRadius: t.radius.md, padding: t.spacing(3),
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: t.spacing(1), marginBottom: t.spacing(2.5) }}>
-          <span className="material-symbols-outlined" style={{ fontSize: 16, color: t.colors.textMuted }}>preview</span>
-          <h3 style={{ margin: 0, fontSize: "0.9rem", fontWeight: 700, color: t.colors.text }}>Digest Preview</h3>
-        </div>
-        <div style={{
-          backgroundColor: t.colors.background, border: `1px solid ${t.colors.border}`,
-          borderRadius: t.radius.sm, padding: t.spacing(3),
-          fontSize: "0.87rem", lineHeight: 1.7, color: t.colors.text,
-        }}>
-          <p style={{ margin: `0 0 ${t.spacing(1.5)}`, fontWeight: 700, fontSize: "1rem" }}>
-            Weekly Sourcing Digest — Week of {new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-          </p>
-          <p style={{ margin: `0 0 ${t.spacing(1)}`, color: t.colors.textMuted, fontSize: "0.8rem" }}>
-            {triggers.length} trigger events · {prospects.length} total prospects · {newThisWeek} awaiting review · {sentThisWeek} outreaches sent
-          </p>
-          <hr style={{ border: "none", borderTop: `1px solid ${t.colors.border}`, margin: `${t.spacing(2)} 0` }} />
-          <p style={{ margin: `0 0 ${t.spacing(1)}`, fontWeight: 700 }}>🏆 Top Prospects This Week</p>
-          {prospects.filter((p) => p.status === "draft" || p.status === "new").slice(0, 3).map((p) => (
-            <div key={p.id} style={{ marginBottom: t.spacing(1.5), paddingLeft: t.spacing(2), borderLeft: `3px solid ${t.colors.primary}` }}>
-              <strong>{p.name}</strong> — {p.title}, {p.company}<br />
-              <span style={{ color: t.colors.textMuted, fontSize: "0.8rem" }}>
-                Est. liquidity: {p.estimatedLiquidity} · Status: {p.status}
-              </span>
-            </div>
-          ))}
-          <p style={{ margin: `${t.spacing(2)} 0 0`, fontSize: "0.78rem", color: t.colors.textMuted }}>
-            Review and approve messages in the RPG HUB Sourcing dashboard.
-          </p>
-        </div>
-      </div>
-    </div>
-  );
+function downloadForm4Csv(leads: Form4Lead[]) {
+  const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
+  const header = ["Name", "Company", "Ticker", "Role", "Amount USD", "Shares", "Price", "Transaction Date", "Filed", "SEC URL"];
+  const rows = leads.map((r) => [
+    r.filerName,
+    r.companyName,
+    r.companyTicker ?? "",
+    r.role,
+    String(r.transactionValue),
+    String(r.shares),
+    r.pricePerShare != null ? String(r.pricePerShare) : "",
+    r.transactionDate,
+    r.filedDate,
+    r.filingUrl,
+  ].map(esc).join(","));
+  const csv = [header.join(","), ...rows].join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `form4-sales-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // --- Main page ---
 
-export function Sourcing({ theme: t }: SourcingProps) {
-  const [activeTab, setActiveTab] = useState<TabId>("feed");
-  const [filterTrigger, setFilterTrigger] = useState<string | null>(null);
+export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
+  const fixedRails = getFixedRailsLayoutStyles(t, {
+    sidebarWidth,
+    leftRailWidth: 286,
+    rightRailWidth: 256,
+    headerHeight: 104,
+  });
 
-  const stats = {
-    triggers: MOCK_TRIGGERS.length,
-    prospects: MOCK_PROSPECTS.length,
-    drafted: MOCK_PROSPECTS.filter((p) => p.status === "draft" || p.status === "approved").length,
-    sent: MOCK_PROSPECTS.filter((p) => p.status === "sent" || p.status === "responded" || p.status === "qualified").length,
+  const [days, setDays] = useState(7);
+  const [minValueM, setMinValueM] = useState(1);
+  const [titleFilter, setTitleFilter] = useState(true);
+  const [scanning, setScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState(0);
+  const scanWasRunning = useRef(false);
+  const [hasScanned, setHasScanned] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [leads, setLeads] = useState<Form4Lead[]>([]);
+  const [meta, setMeta] = useState<Form4ScanMeta | null>(null);
+  const [lastScanAt, setLastScanAt] = useState<Date | null>(null);
+  const [showInfoModal, setShowInfoModal] = useState(false);
+
+  useEffect(() => {
+    if (!showInfoModal) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setShowInfoModal(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showInfoModal]);
+
+  useEffect(() => {
+    if (!scanning) {
+      if (scanWasRunning.current) {
+        scanWasRunning.current = false;
+        setScanProgress(100);
+        const tid = setTimeout(() => setScanProgress(0), 700);
+        return () => clearTimeout(tid);
+      }
+      return;
+    }
+    scanWasRunning.current = true;
+    setScanProgress(0);
+    const start = Date.now();
+    const estimated = 75_000;
+    const id = setInterval(() => {
+      const ratio = (Date.now() - start) / estimated;
+      setScanProgress(88 * (1 - Math.exp(-2.5 * ratio)));
+    }, 250);
+    return () => clearInterval(id);
+  }, [scanning]);
+
+  const titleStyle: CSSProperties = {
+    fontWeight: t.typography.headingWeight,
+    fontSize: "1.5rem",
+    color: t.colors.text,
+    marginBottom: t.spacing(PAGE_LAYOUT.titleMarginBottom),
   };
 
-  const tabs: { id: TabId; label: string; icon: string }[] = [
-    { id: "feed",       label: "Trigger Feed",  icon: "rss_feed" },
-    { id: "prospects",  label: "Prospects",     icon: "people" },
-    { id: "pipeline",   label: "Pipeline",      icon: "view_kanban" },
-    { id: "digest",     label: "Weekly Digest", icon: "mark_email_read" },
-  ];
-
-  const handleSelectTrigger = (id: string) => {
-    setFilterTrigger(id);
-    setActiveTab("prospects");
+  const descStyle: CSSProperties = {
+    color: t.colors.textMuted,
+    fontSize: t.typography.baseFontSize,
+    lineHeight: 1.5,
+    marginBottom: 0,
   };
+
+  const sectionTitleStyle: CSSProperties = {
+    fontSize: "0.75rem",
+    color: t.colors.secondary,
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+    marginBottom: t.spacing(3),
+    fontWeight: 700,
+  };
+
+  const labelStyle: CSSProperties = {
+    fontSize: "0.72rem",
+    fontWeight: 700,
+    color: t.colors.textMuted,
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+    marginBottom: t.spacing(1),
+    display: "block",
+  };
+
+  const inputStyle: CSSProperties = {
+    width: "100%",
+    padding: `${t.spacing(2)} ${t.spacing(3)}`,
+    height: 36,
+    fontSize: "0.85rem",
+    border: `1px solid ${t.colors.border}`,
+    borderRadius: t.radius.md,
+    backgroundColor: t.colors.background,
+    color: t.colors.text,
+    boxSizing: "border-box",
+    fontFamily: t.typography.fontFamily,
+  };
+
+  const thStyle: CSSProperties = {
+    ...getTableHeaderCellStyle(t),
+    whiteSpace: "nowrap",
+    fontSize: "0.8rem",
+  };
+
+  const tdStyle: CSSProperties = {
+    padding: `${t.spacing(2)} ${t.spacing(3)}`,
+    borderBottom: `1px solid ${t.colors.border}`,
+    color: t.colors.text,
+    fontSize: "0.875rem",
+  };
+
+  const cardStyle = getPageCardStyle(t, { padding: t.spacing(4), marginBottom: t.spacing(4) });
+  const primaryBtn = getPrimaryActionButtonStyle(t);
+
+  const runScan = useCallback(async () => {
+    setScanning(true);
+    setError(null);
+    try {
+      const res = await fetch(`${SCHWAB_API_BASE}/api/sourcing`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "form4_scan",
+          days,
+          minValueUsd: minValueM * 1_000_000,
+          maxFilingsToParse: 40,
+          titleKeywordsOnly: titleFilter,
+        }),
+      });
+      const data = (await res.json()) as {
+        leads?: Form4Lead[];
+        error?: string;
+        meta?: Form4ScanMeta;
+      };
+      if (!res.ok) {
+        setLeads([]);
+        setMeta(null);
+        setHasScanned(true);
+        setError(data.error ?? `Scan failed (${res.status})`);
+        return;
+      }
+      setLeads(data.leads ?? []);
+      setMeta(data.meta ?? null);
+      setHasScanned(true);
+      setLastScanAt(new Date());
+    } catch {
+      setError("Network error. Try again.");
+      setLeads([]);
+      setMeta(null);
+      setHasScanned(true);
+    } finally {
+      setScanning(false);
+    }
+  }, [days, minValueM, titleFilter]);
+
+  const hasResults = leads.length > 0;
 
   return (
-    <section
-      className="agent-page page-card"
-      style={{
-        maxWidth: PAGE_LAYOUT.maxWidth, width: "100%", margin: "0 auto",
-        padding: `${t.spacing(5)} ${t.spacing(PAGE_LAYOUT.pagePaddingH)} ${t.spacing(5)}`,
-        boxSizing: "border-box", fontFamily: t.typography.fontFamily, color: t.colors.text,
-        border: "none", boxShadow: "none", backgroundColor: "transparent",
-      }}
-    >
-      {/* Header */}
-      <div style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        marginBottom: t.spacing(4), paddingBottom: t.spacing(3),
-        borderBottom: `1px solid ${t.colors.border}`,
-      }}>
-        <h2 style={{
-          margin: 0, fontWeight: t.typography.headingWeight,
-          fontSize: "1.625rem", color: t.colors.text,
-          display: "inline-flex", alignItems: "center", gap: t.spacing(2),
-        }}>
-          <span className="material-symbols-outlined" style={{ fontSize: "1.5rem", color: t.colors.secondary, lineHeight: 1 }} aria-hidden>
-            person_search
-          </span>
-          Sourcing
-        </h2>
-        <div style={{ display: "flex", alignItems: "center", gap: t.spacing(1.5) }}>
-          <span style={{
-            display: "inline-block", width: 7, height: 7, borderRadius: "50%",
-            backgroundColor: `${t.colors.secondary}60`,
-          }} />
-          <span style={{ fontSize: "0.78rem", color: t.colors.textMuted, fontWeight: 600 }}>
-            HNW Prospect Discovery
-          </span>
+    <section className="sourcing-page" style={fixedRails.page}>
+
+      {/* Fixed header */}
+      <div style={fixedRails.topHeader}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+          <h2 style={{ ...titleStyle, marginBottom: 0 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
+              <span className="material-symbols-outlined" style={{ fontSize: "1.5rem", color: t.colors.secondary, lineHeight: 1 }} aria-hidden>
+                person_search
+              </span>
+              Sourcing
+            </span>
+          </h2>
+          <button
+            type="button"
+            onClick={() => setShowInfoModal(true)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 28,
+              height: 28,
+              padding: 0,
+              border: "none",
+              borderRadius: "50%",
+              backgroundColor: "transparent",
+              color: t.colors.secondary,
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+            aria-label="How Sourcing works"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 26 }} aria-hidden>info</span>
+          </button>
         </div>
+        <p style={{ ...descStyle, marginTop: t.spacing(1) }}>
+          Scan SEC Form 4 insider <strong>sales</strong> for HNW prospecting. Configure filters in the left panel, review results in the table, then export CSV to your shared Google Sheet.
+        </p>
       </div>
 
-      {/* Stats */}
-      <div style={{ display: "flex", gap: t.spacing(2), flexWrap: "wrap", marginBottom: t.spacing(4) }}>
-        <StatCard icon="bolt"         value={stats.triggers}  label="Trigger Events" t={t} />
-        <StatCard icon="person_add"   value={stats.prospects} label="Prospects"       t={t} />
-        <StatCard icon="edit_note"    value={stats.drafted}   label="Drafts Ready"   t={t} />
-        <StatCard icon="send"         value={stats.sent}      label="Outreaches Sent" t={t} />
-      </div>
+      {showInfoModal && (
+        <>
+          <div
+            role="presentation"
+            style={{ position: "fixed", inset: 0, backgroundColor: t.colors.overlay, zIndex: 1000 }}
+            onClick={() => setShowInfoModal(false)}
+          />
+          <div
+            role="dialog"
+            aria-labelledby="sourcing-info-title"
+            aria-modal="true"
+            style={{
+              position: "fixed",
+              left: "50%",
+              top: "50%",
+              transform: "translate(-50%, -50%)",
+              zIndex: 1001,
+              backgroundColor: t.colors.surface,
+              borderRadius: t.radius.lg,
+              padding: t.spacing(5),
+              maxWidth: 560,
+              width: "90%",
+              maxHeight: "85vh",
+              overflowY: "auto",
+              boxShadow: shadows.modal,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: t.spacing(3) }}>
+              <h3 id="sourcing-info-title" style={{ ...sectionTitleStyle, marginBottom: 0, fontSize: "1rem", textTransform: "none", color: t.colors.secondary }}>
+                How Sourcing works
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowInfoModal(false)}
+                aria-label="Close"
+                style={{ padding: t.spacing(0.5), border: "none", background: "none", color: t.colors.textMuted, cursor: "pointer" }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 22 }}>close</span>
+              </button>
+            </div>
+            <div style={{ color: t.colors.text, fontSize: "0.88rem", lineHeight: 1.75 }}>
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Form 4 scan</p>
+              <p style={{ marginTop: 0, marginBottom: t.spacing(2) }}>
+                Uses the free SEC EDGAR API (no API key). We search recent Form 4 filings, parse XML for open-market sales, and filter by your minimum dollar amount and optional senior-title list.
+              </p>
+              <p style={{ marginBottom: t.spacing(2) }}>
+                Export CSV and import into your team Google Sheet — that sheet is your prospect list, not a database in this app.
+              </p>
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Tips</p>
+              <ul style={{ margin: 0, paddingLeft: t.spacing(5) }}>
+                <li>Verify each person on the SEC filing link before outreach.</li>
+                <li>Not every large sale is a prospect (10b5-1 plans, tax sales).</li>
+                <li>If results are thin, widen lookback or lower the $M minimum.</li>
+              </ul>
+            </div>
+          </div>
+        </>
+      )}
 
-      {/* Tabs */}
-      <div style={{
-        display: "flex", gap: 0,
-        borderBottom: `1px solid ${t.colors.border}`,
-        marginBottom: t.spacing(3),
-      }}>
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => {
-              setActiveTab(tab.id);
-              if (tab.id !== "prospects") setFilterTrigger(null);
-            }}
+      {/* Left rail — scan parameters */}
+      <aside style={fixedRails.leftRail}>
+        <div className="sourcing-scan-card" style={{ ...fixedRails.railPanel, minHeight: 0, flex: 1 }}>
+          <div style={{ ...fixedRails.railBody, display: "flex", flexDirection: "column", gap: t.spacing(4) }}>
+            <h3 style={{ ...sectionTitleStyle, marginBottom: 0 }}>Scan parameters</h3>
+
+            <div>
+              <label style={labelStyle} htmlFor="sourcing-days">Lookback (days)</label>
+              <input
+                id="sourcing-days"
+                type="number"
+                min={1}
+                max={30}
+                value={days}
+                onChange={(e) => setDays(Number(e.target.value) || 7)}
+                style={inputStyle}
+                disabled={scanning}
+              />
+            </div>
+
+            <div>
+              <label style={labelStyle} htmlFor="sourcing-min-m">Min sale ($M)</label>
+              <input
+                id="sourcing-min-m"
+                type="number"
+                min={0.1}
+                step={0.5}
+                value={minValueM}
+                onChange={(e) => setMinValueM(Number(e.target.value) || 1)}
+                style={inputStyle}
+                disabled={scanning}
+              />
+            </div>
+
+            <label style={{ display: "flex", alignItems: "center", gap: t.spacing(1.5), fontSize: "0.85rem", color: t.colors.text, cursor: scanning ? "not-allowed" : "pointer" }}>
+              <input
+                type="checkbox"
+                checked={titleFilter}
+                onChange={(e) => setTitleFilter(e.target.checked)}
+                disabled={scanning}
+              />
+              Senior titles only (CEO, Founder, CTO, VP, etc.)
+            </label>
+
+            {scanning && (
+              <p style={{ margin: 0, color: t.colors.textMuted, fontSize: "0.8rem", lineHeight: 1.5 }}>
+                Searching EDGAR and parsing filings — usually 30–90 seconds. Keep this tab open.
+              </p>
+            )}
+
+            {error && (
+              <div style={{ color: t.colors.danger, fontSize: "0.82rem", lineHeight: 1.5, fontWeight: 600 }}>
+                {error}
+              </div>
+            )}
+
+            {meta && !scanning && !error && (
+              <p style={{ margin: 0, color: t.colors.textMuted, fontSize: "0.78rem", lineHeight: 1.5 }}>
+                Parsed {meta.filingsParsed} of {meta.filingsSearched} filings
+                {meta.parseErrors > 0 ? ` · ${meta.parseErrors} errors` : ""}
+                {" · "}{meta.leadCount} match{meta.leadCount !== 1 ? "es" : ""}
+              </p>
+            )}
+          </div>
+
+          <div style={fixedRails.railFooter}>
+            <button
+              type="button"
+              onClick={() => void runScan()}
+              disabled={scanning}
+              style={{
+                ...primaryBtn,
+                ...getRailFooterActionButtonLayout(),
+                position: "relative",
+                overflow: "hidden",
+                ...(scanProgress > 0 ? {
+                  backgroundColor: "transparent",
+                  border: `2px solid ${t.colors.primary}`,
+                  color: scanProgress >= 50 ? t.colors.onPrimary : t.colors.primary,
+                } : {}),
+              }}
+            >
+              {scanProgress > 0 && (
+                <span
+                  aria-hidden
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    width: `${scanProgress}%`,
+                    backgroundColor: t.colors.primary,
+                    transition: "width 0.25s ease",
+                    zIndex: 0,
+                  }}
+                />
+              )}
+              <span style={{ position: "relative", zIndex: 1, display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
+                {scanning && <span className="options-pricing-fetch-spinner" aria-hidden />}
+                {scanning ? "Scanning EDGAR…" : "Run Form 4 scan"}
+              </span>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      {/* Center — results */}
+      <div style={fixedRails.contentWrap}>
+        {!hasResults && !scanning && !error && !hasScanned && (
+          <div
+            className="page-card"
             style={{
-              display: "inline-flex", alignItems: "center", gap: 6,
-              padding: `${t.spacing(1.75)} ${t.spacing(2.5)}`,
-              border: "none", background: "none", cursor: "pointer",
-              fontSize: "0.85rem", fontWeight: activeTab === tab.id ? 700 : 500,
-              color: activeTab === tab.id ? t.colors.primary : t.colors.textMuted,
-              borderBottom: `2px solid ${activeTab === tab.id ? t.colors.primary : "transparent"}`,
-              marginBottom: -1, transition: "color 0.15s, border-color 0.15s",
+              ...cardStyle,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              minHeight: 220,
+              color: t.colors.textMuted,
+              textAlign: "center",
+              gap: t.spacing(2),
             }}
           >
-            <span className="material-symbols-outlined" style={{ fontSize: 15 }}>{tab.icon}</span>
-            {tab.label}
-          </button>
-        ))}
-        {filterTrigger && activeTab === "prospects" && (
-          <button
-            onClick={() => setFilterTrigger(null)}
-            style={{
-              marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 4,
-              padding: `${t.spacing(1)} ${t.spacing(1.5)}`,
-              backgroundColor: `${t.colors.primary}15`, border: `1px solid ${t.colors.primary}40`,
-              borderRadius: t.radius.sm, cursor: "pointer",
-              fontSize: "0.75rem", color: t.colors.primary, fontWeight: 600,
-              alignSelf: "center",
-            }}
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: 13 }}>filter_alt_off</span>
-            Clear filter
-          </button>
+            <span className="material-symbols-outlined" style={{ fontSize: 40, opacity: 0.4 }} aria-hidden>gavel</span>
+            <p style={{ margin: 0, fontWeight: 600, color: t.colors.text }}>Configure parameters and run a scan</p>
+            <p style={{ margin: 0, fontSize: "0.85rem" }}>
+              Insider sales above ${minValueM}M from the last {days} days will appear here.
+            </p>
+          </div>
+        )}
+
+        {!hasResults && hasScanned && !scanning && !error && (
+          <div className="page-card" style={{ ...cardStyle, textAlign: "center", color: t.colors.textMuted }}>
+            <p style={{ margin: 0, fontSize: "0.9rem", lineHeight: 1.55 }}>
+              No qualifying sales matched your filters. Widen lookback, lower the minimum, or turn off senior titles only.
+            </p>
+          </div>
+        )}
+
+        {hasResults && (
+          <div className="page-card" style={{ ...cardStyle, padding: 0, overflow: "hidden" }}>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: t.typography.fontFamily }}>
+                <thead>
+                  <tr>
+                    {["Name", "Company", "Role", "Amount", "Txn date", "Filed", "Filing"].map((h) => (
+                      <th key={h} style={thStyle}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {leads.map((row, i) => (
+                    <tr
+                      key={`${row.accessionNo}-${row.filerName}-${i}`}
+                      style={{ backgroundColor: i % 2 === 0 ? t.colors.surface : t.colors.background }}
+                    >
+                      <td style={{ ...tdStyle, fontWeight: 600 }}>{row.filerName}</td>
+                      <td style={tdStyle}>
+                        {row.companyName}
+                        {row.companyTicker ? (
+                          <span style={{ color: t.colors.textMuted }}> ({row.companyTicker})</span>
+                        ) : null}
+                      </td>
+                      <td style={tdStyle}>{row.role}</td>
+                      <td style={{ ...tdStyle, fontWeight: 600, color: t.colors.primary }}>{formatUsd(row.transactionValue)}</td>
+                      <td style={tdStyle}>{row.transactionDate}</td>
+                      <td style={tdStyle}>{row.filedDate}</td>
+                      <td style={tdStyle}>
+                        <a href={row.filingUrl} target="_blank" rel="noopener noreferrer" style={{ color: t.colors.primary, fontWeight: 600 }}>
+                          View SEC
+                        </a>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {lastScanAt && (
+              <footer style={{ padding: `${t.spacing(2)} ${t.spacing(3)}`, borderTop: `1px solid ${t.colors.border}`, fontSize: "0.78rem", color: t.colors.textMuted }}>
+                Data as of{" "}
+                {lastScanAt.toLocaleString(undefined, {
+                  year: "numeric",
+                  month: "short",
+                  day: "2-digit",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </footer>
+            )}
+          </div>
         )}
       </div>
 
-      {/* Tab content */}
-      {activeTab === "feed" && (
-        <FeedTab triggers={MOCK_TRIGGERS} onSelectTrigger={handleSelectTrigger} t={t} />
-      )}
-      {activeTab === "prospects" && (
-        <ProspectsTab
-          prospects={MOCK_PROSPECTS}
-          triggers={MOCK_TRIGGERS}
-          filterTrigger={filterTrigger}
-          t={t}
-        />
-      )}
-      {activeTab === "pipeline" && (
-        <PipelineTab prospects={MOCK_PROSPECTS} t={t} />
-      )}
-      {activeTab === "digest" && (
-        <DigestTab prospects={MOCK_PROSPECTS} triggers={MOCK_TRIGGERS} t={t} />
-      )}
+      {/* Right rail — export & workflow */}
+      <aside style={fixedRails.rightRail}>
+        <div className="page-card" style={{ ...fixedRails.railPanel, gap: t.spacing(3) }}>
+          <h3 style={{ ...sectionTitleStyle, marginBottom: 0 }}>Workflow</h3>
+          <p style={{ margin: 0, fontSize: "0.78rem", color: t.colors.textMuted, lineHeight: 1.5 }}>
+            Prospects live in your shared <strong>Google Sheet</strong>. Export CSV from here after each scan.
+          </p>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(2) }}>
+            <div style={{ padding: t.spacing(2), borderRadius: t.radius.md, backgroundColor: t.colors.background, border: `1px solid ${t.colors.border}` }}>
+              <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>Qualifying sales</div>
+              <div style={{ fontSize: "1.4rem", fontWeight: 700, color: t.colors.text }}>{leads.length}</div>
+            </div>
+            <div style={{ padding: t.spacing(2), borderRadius: t.radius.md, backgroundColor: t.colors.background, border: `1px solid ${t.colors.border}` }}>
+              <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>Min threshold</div>
+              <div style={{ fontSize: "1rem", fontWeight: 700, color: t.colors.text }}>${minValueM}M+</div>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => downloadForm4Csv(leads)}
+            disabled={leads.length === 0}
+            style={{
+              ...primaryBtn,
+              width: "100%",
+              opacity: leads.length === 0 ? 0.5 : 1,
+              cursor: leads.length === 0 ? "not-allowed" : "pointer",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: t.spacing(1),
+            }}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 18 }} aria-hidden>download</span>
+            Export CSV
+          </button>
+
+          <p style={{ margin: 0, fontSize: "0.72rem", color: t.colors.textMuted, lineHeight: 1.45 }}>
+            Pipeline, outreach drafts, and email digest are planned — Form 4 scan is live today.
+          </p>
+        </div>
+      </aside>
     </section>
   );
 }

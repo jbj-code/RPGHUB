@@ -40,7 +40,7 @@ Target: **50–100 qualified outbounds/week** at a meaningful conversion rate.
 | Source | What It Gets | Cost | Status |
 |---|---|---|---|
 | **Exa AI** (exa.ai) | News, people discovery, event monitoring | $20/mo (paid) / 1k free searches | Not connected |
-| **SEC EDGAR API** (api.sec.gov) | Form 4 insider sales, S-1 IPO filings | **Free** | Not connected |
+| **SEC EDGAR API** (efts.sec.gov) | Form 4 insider sales | **Free** | **Live** — manual scan on Sourcing → Form 4 tab |
 | **Apollo.io** | Email discovery, contact enrichment | Free tier: 50 exports/mo; $49/mo for more | Not connected |
 | **Hunter.io** | Email finder (secondary fallback) | Free: 25/mo; $34/mo for 500 | Not connected |
 | **Crunchbase Basic API** | Funding rounds, founder data | $49/mo | Not connected |
@@ -108,64 +108,32 @@ A Vercel Cron + Exa AI + SEC EDGAR + Claude is effectively the same thing but:
 
 ---
 
-## Architecture Plan
+## Architecture Plan (current)
 
 ```
-Daily Cron (Vercel Cron, free)
-  └─ api/sourcing-scan.ts
-       ├─ Exa AI: "acquisition IPO funding tech executive 2026" (last 24h)
-       ├─ SEC EDGAR: Form 4 filings with transactions > $1M (last 24h)
-       └─ Claude: parse events → extract HNW individuals → score each one
-            └─ Apollo.io: enrich with email + LinkedIn URL
-                 └─ Claude: write personalized message per person
-                      └─ Supabase: insert prospect rows (status = "draft")
+Manual scan (live today)
+  └─ POST /api/sourcing  { action: "form4_scan" }
+       └─ api/_edgar-utils.ts — EFTS search → Form 4 XML parse → filter sales > $1M
+            └─ Sourcing page → Form 4 tab → table + Export CSV
+                 └─ Google Sheet — shared prospect list for the team (not Supabase)
 
-Weekly Digest (Monday 8am)
-  └─ api/sourcing-digest.ts
-       ├─ Pull all draft prospects from Supabase
-       ├─ Claude: summarize the week's top 10 opportunities
-       └─ Resend: email to boss with approve/skip links
-
-RPG Hub Sourcing Page (already built)
-  ├─ Review trigger events
-  ├─ Edit / approve messages
-  ├─ Mark sent, track pipeline
-  └─ Supabase as single source of truth
+Future (optional)
+  ├─ Vercel Cron weekly scan + email digest (Resend)
+  ├─ Exa AI for acquisition / IPO / funding triggers
+  └─ Apollo.io for email enrichment
 ```
+
+**Prospect CRM:** Google Sheets (shared with colleagues). Hub UI pipeline tabs remain mock until wired to sheet or kept as local workflow only.
 
 ---
 
-## Supabase Schema (to be created)
-```sql
--- sourcing_triggers: raw events found by the cron
-CREATE TABLE sourcing_triggers (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  created_at TIMESTAMPTZ DEFAULT now(),
-  type TEXT, -- acquisition | ipo | funding | sec_filing | news
-  headline TEXT,
-  source TEXT,
-  estimated_value TEXT,
-  url TEXT,
-  raw_data JSONB
-);
+## Form 4 scan (implemented)
 
--- sourcing_prospects: HNW individuals extracted from triggers
-CREATE TABLE sourcing_prospects (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  created_at TIMESTAMPTZ DEFAULT now(),
-  trigger_id UUID REFERENCES sourcing_triggers(id),
-  name TEXT,
-  title TEXT,
-  company TEXT,
-  linkedin_url TEXT,
-  email TEXT,
-  estimated_liquidity TEXT,
-  message TEXT,
-  status TEXT DEFAULT 'new', -- new | draft | approved | sent | responded | qualified
-  notes TEXT,
-  sent_at TIMESTAMPTZ
-);
-```
+- **UI:** Sourcing → **Form 4 Scan** tab
+- **API:** `api/sourcing.ts` + `api/_edgar-utils.ts`
+- **Env:** `SEC_EDGAR_USER_AGENT` on Vercel — format `"CompanyName email@domain.com"` (SEC policy)
+- **Defaults:** 7-day lookback, $1M+ sales, senior title filter on
+- **Export:** CSV for Google Sheets import
 
 ---
 
@@ -186,15 +154,14 @@ CREATE TABLE sourcing_prospects (
 | 2026-05-05 | Manual send for top tier | Better conversion at $15M+ wealth level |
 | 2026-05-05 | No Facebook/LinkedIn automation | ToS + compliance risk |
 | 2026-05-05 | Exa AI + SEC EDGAR as primary sources | Best quality triggers for HNW prospects |
+| 2026-06-09 | Google Sheets for prospects (not Supabase) | Easy sharing with colleagues |
+| 2026-06-09 | Manual Form 4 EDGAR scan first | Validate parsing before cron/email |
 
 ---
 
 ## Next Steps
-- [ ] Sign up for Exa AI — add `EXA_API_KEY` to Vercel env vars
-- [ ] Sign up for Apollo.io — add `APOLLO_API_KEY` to Vercel env vars
-- [ ] Create Supabase tables (`sourcing_triggers`, `sourcing_prospects`)
-- [ ] Build `api/sourcing-scan.ts` (Vercel Cron endpoint)
-- [ ] Build `api/sourcing-digest.ts` (weekly email via Resend)
-- [ ] Sign up for Resend — add `RESEND_API_KEY` to Vercel env vars
-- [ ] Connect Sourcing page to live Supabase data (replace mock data)
-- [ ] Test first live scan run
+- [x] SEC Form 4 manual scan + CSV export
+- [ ] Set `SEC_EDGAR_USER_AGENT` in Vercel env vars
+- [ ] Run first production scan and tune title / $ thresholds
+- [ ] Optional: Vercel Cron + weekly email digest
+- [ ] Optional: Exa AI, Apollo.io, Google Sheets API sync
