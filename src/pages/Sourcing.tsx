@@ -125,12 +125,6 @@ function txnSubtextForSales(sales: Form4Lead[], filedPrimary?: string): string |
   return `Txn ${formatShortDate(dates[0])} – ${formatShortDate(dates[dates.length - 1])}`;
 }
 
-function singleFilingForSales(sales: Form4Lead[]): Form4Lead | null {
-  const acc = sales[0]?.accessionNo;
-  if (!acc || sales.some((s) => s.accessionNo !== acc)) return null;
-  return sales[0];
-}
-
 function downloadForm4Csv(leads: Form4Lead[]) {
   const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
   const header = ["Name", "Country", "Company", "Ticker", "Role", "Amount USD", "Shares", "Price", "Transaction Date", "Filed", "Form 4 URL", "SEC viewer URL"];
@@ -685,7 +679,6 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
                       const expanded = expandedGroups.has(group.key);
                       const filedPrimary = latestFiledDate(group.sales);
                       const txnSub = txnSubtextForSales(group.sales, filedPrimary);
-                      const sharedFiling = singleFilingForSales(group.sales);
                       const rowBg = i % 2 === 0 ? t.colors.surface : t.colors.background;
 
                       const detailBorder = `1px solid ${t.colors.border}`;
@@ -717,47 +710,39 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
                               {txnSub ? <span style={subTextStyle}>{txnSub}</span> : null}
                             </td>
                             <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>
-                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: t.spacing(2) }}>
-                                <span>
-                                  {sharedFiling ? renderFilingLinks(sharedFiling) : multi ? (
-                                    <span style={{ color: t.colors.textMuted, fontSize: "0.82rem" }}>{group.sales.length} filings</span>
-                                  ) : (
-                                    renderFilingLinks(group.sales[0])
-                                  )}
-                                </span>
-                                {multi ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleGroup(group.key)}
-                                    aria-expanded={expanded}
-                                    aria-label={expanded ? "Collapse sales" : "Expand sales"}
+                              {multi ? (
+                                <button
+                                  type="button"
+                                  onClick={() => toggleGroup(group.key)}
+                                  aria-expanded={expanded}
+                                  aria-label={expanded ? "Collapse sales" : "Expand sales"}
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    padding: t.spacing(1),
+                                    margin: `-${t.spacing(1)}`,
+                                    border: "none",
+                                    background: "none",
+                                    color: t.colors.secondary,
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  <span
+                                    className="material-symbols-outlined"
                                     style={{
-                                      display: "inline-flex",
-                                      alignItems: "center",
-                                      justifyContent: "center",
-                                      padding: t.spacing(0.5),
-                                      border: `1px solid ${t.colors.border}`,
-                                      borderRadius: t.radius.sm,
-                                      backgroundColor: t.colors.background,
-                                      color: t.colors.secondary,
-                                      cursor: "pointer",
-                                      flexShrink: 0,
+                                      fontSize: 20,
+                                      transform: expanded ? "rotate(90deg)" : "none",
+                                      transition: "transform 0.15s ease",
                                     }}
+                                    aria-hidden
                                   >
-                                    <span
-                                      className="material-symbols-outlined"
-                                      style={{
-                                        fontSize: 20,
-                                        transform: expanded ? "rotate(90deg)" : "none",
-                                        transition: "transform 0.15s ease",
-                                      }}
-                                      aria-hidden
-                                    >
-                                      chevron_right
-                                    </span>
-                                  </button>
-                                ) : null}
-                              </div>
+                                    chevron_right
+                                  </span>
+                                </button>
+                              ) : (
+                                renderFilingLinks(group.sales[0])
+                              )}
                             </td>
                           </tr>
                           {multi && expanded
