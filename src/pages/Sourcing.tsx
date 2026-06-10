@@ -354,7 +354,7 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
             <div style={{ color: t.colors.text, fontSize: "0.88rem", lineHeight: 1.75 }}>
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Form 4 scan</p>
               <p style={{ marginTop: 0, marginBottom: t.spacing(2) }}>
-                Uses the free SEC EDGAR API (no API key). We search recent Form 4 filings, parse XML for open-market sales, and filter by your minimum dollar amount. Large sales from any insider role qualify — officers, directors, and 10% owners.
+                Uses the free SEC EDGAR API (no API key). We search recent Form 4 filings, parse XML for open-market sales, and filter by your minimum dollar amount. LP funds, LLCs, and similar entity filers are excluded — only natural-person insiders (officers, directors, 10% owners).
               </p>
               <p style={{ marginBottom: t.spacing(2) }}>
                 Export CSV and import into your team Google Sheet — that sheet is your prospect list, not a database in this app.

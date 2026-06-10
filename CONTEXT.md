@@ -125,8 +125,10 @@ src/
 **Parsing:** One table row per **qualifying sale line** (not per filing). Value = shares × price from XML. Same filing can yield multiple rows.
 
 **Filing links (per row):**
-- **Form 4** → `wk-form4_*.html` (transaction table humans read)
+- **Form 4** → XSL-rendered document (`xslF345X06/form4-*.xml` etc. from `schemaVersion` in the filing)
 - **SEC viewer** → legacy `cgi-bin/viewer` (owner/issuer identity; may show XBRL notice)
+
+**Filer filter:** `individualsOnly` defaults **on** — drops LP/LLC/fund/trust-style reporting owners (name heuristics; not a SEC API flag).
 
 **Strategy (business context):** Multi-family office HNW prospecting ($15M+ liquid). **Form 4 large insider sales** are the live signal; future triggers include acquisitions, IPO lockups, funding rounds (likely **Exa AI** + **SEC EDGAR**). Prospects = **Google Sheet** (CSV export), not an in-app CRM. Outreach is **manual send** from a principal’s email after review — not automated LinkedIn/Facebook bots. Compliance: **public data only** (filings, press); no scraped PII databases.
 

@@ -26,6 +26,8 @@ export type Form4ScanOptions = {
   minValueUsd: number;
   maxFilingsToParse: number;
   titleKeywordsOnly: boolean;
+  /** When true (default), drop fund/LP/LLC/etc. filers — keep natural-person names only. */
+  individualsOnly: boolean;
 };
 
 type EftsHit = {
@@ -123,8 +125,80 @@ function roleMatchesFilter(role: string): boolean {
   return TITLE_PATTERNS.some((re) => re.test(role));
 }
 
-function filingIndexUrl(cik: string, adshNoDashes: string): string {
-  return `${SEC_ARCHIVES}/${cikForUrl(cik)}/${adshNoDashes}/index.htm`;
+/** Fund, LP, LLC, trust, and similar non-person reporting owners. */
+const ENTITY_NAME_PATTERNS = [
+  /\bL\.?\s*P\.?\b/i,
+  /\bLLC\b/i,
+  /\bL\.L\.C\./i,
+  /\bInc\.?\b/i,
+  /\bCorp\.?\b/i,
+  /\bCorporation\b/i,
+  /\bTrust\b/i,
+  /\bFund\b/i,
+  /\bPartners\b/i,
+  /\bSPV\b/i,
+  /\bHoldings\b/i,
+  /\bCapital\b/i,
+  /\bVentures\b/i,
+  /\bManagement\b/i,
+  /\bAssociates\b/i,
+  /\bInvestments?\b/i,
+  /\bS\.A\.\b/i,
+  /\bde C\.V\./i,
+  /\bAIV\b/i,
+  /\bPLC\b/i,
+  /\bLtd\.?\b/i,
+  /\bG\.?\s*P\.?\b/i,
+  /\bLimited\b/i,
+  /\bCompany\b/i,
+  /\bCo\.,/i,
+];
+
+export function isLikelyEntityFiler(name: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed) return true;
+  return ENTITY_NAME_PATTERNS.some((re) => re.test(trimmed));
+}
+
+function xslFolderFromSchema(schemaVersion: string | null): string | null {
+  if (!schemaVersion) return null;
+  const m = schemaVersion.match(/^X(\d{2})\d{2}$/i);
+  return m ? `xslF345X${m[1]}` : null;
+}
+
+function xmlBaseName(xmlFile: string): string {
+  const slash = xmlFile.lastIndexOf("/");
+  return slash >= 0 ? xmlFile.slice(slash + 1) : xmlFile;
+}
+
+/** Human-readable Form 4 (XSL-rendered XML). Never index-headers.html. */
+export function buildForm4ViewUrl(
+  base: string,
+  xmlFile: string,
+  names: string[],
+  schemaVersion: string | null
+): string {
+  const fileName = xmlBaseName(xmlFile);
+  const xslFolder = xslFolderFromSchema(schemaVersion);
+  if (xslFolder) {
+    return `${base}/${xslFolder}/${fileName}`;
+  }
+
+  const namesLower = new Set(names.map((n) => n.toLowerCase()));
+  const paired = fileName.replace(/\.xml$/i, ".html");
+  if (namesLower.has(paired.toLowerCase())) {
+    return `${base}/${paired}`;
+  }
+
+  const wkHtml = names.find((n) => /^wk-form4_.*\.html?$/i.test(n));
+  if (wkHtml) return `${base}/${wkHtml}`;
+
+  const form4Html = names.find(
+    (n) => /form\s*4|form4/i.test(n) && /\.html?$/i.test(n) && !/^index/i.test(n)
+  );
+  if (form4Html) return `${base}/${form4Html}`;
+
+  return `${base}/${xmlFile}`;
 }
 
 /** Legacy SEC viewer — shows reporting owner / issuer even when XBRL notice appears. */
@@ -135,39 +209,6 @@ function filingLegacyViewerUrl(cik: string, accessionDashes: string): string {
     `&accession_number=${encodeURIComponent(accessionDashes)}` +
     "&xbrl_type=v"
   );
-}
-
-/** Styled Form 4 HTML (shares, price, dates) — often paired with wk-form4_*.xml but omitted from index.json. */
-function pickForm4HtmlUrl(
-  base: string,
-  xmlFile: string,
-  names: string[],
-  cik: string,
-  adsh: string
-): string {
-  const paired = xmlFile.replace(/\.xml$/i, ".html");
-  const namesLower = new Set(names.map((n) => n.toLowerCase()));
-
-  if (namesLower.has(paired.toLowerCase())) {
-    return `${base}/${paired}`;
-  }
-
-  const wkHtml = names.find((n) => /^wk-form4_.*\.html?$/i.test(n));
-  if (wkHtml) return `${base}/${wkHtml}`;
-
-  const form4Html = names.find(
-    (n) => /form\s*4|form4/i.test(n) && /\.html?$/i.test(n) && !/^index\.html?$/i.test(n)
-  );
-  if (form4Html) return `${base}/${form4Html}`;
-
-  const otherHtml = names.find((n) => /\.html?$/i.test(n) && !/^index\.html?$/i.test(n));
-  if (otherHtml) return `${base}/${otherHtml}`;
-
-  if (/^wk-form4_.*\.xml$/i.test(xmlFile)) {
-    return `${base}/${paired}`;
-  }
-
-  return filingIndexUrl(cik, adsh);
 }
 
 async function secFetch(url: string): Promise<Response> {
@@ -240,9 +281,10 @@ export async function searchRecentForm4Filings(
 }
 
 type Form4FilingAssets = {
+  base: string;
+  xmlFile: string;
+  indexNames: string[];
   xmlUrl: string;
-  /** Styled Form 4 document (transaction table). */
-  filingUrl: string;
   /** SEC viewer — owner/issuer identity check. */
   filingAltUrl: string;
 };
@@ -272,8 +314,10 @@ async function resolveForm4FilingAssets(
   if (!xmlFile) return null;
 
   return {
+    base,
+    xmlFile,
+    indexNames: names,
     xmlUrl: `${base}/${xmlFile}`,
-    filingUrl: pickForm4HtmlUrl(base, xmlFile, names, cik, adsh),
     filingAltUrl: filingLegacyViewerUrl(cik, accessionDashes),
   };
 }
@@ -289,7 +333,8 @@ export function parseForm4Sales(
     accessionNo: string;
   },
   minValueUsd: number,
-  titleKeywordsOnly: boolean
+  titleKeywordsOnly: boolean,
+  individualsOnly: boolean
 ): Form4SaleLead[] {
   const xml = stripXmlNamespaces(xmlRaw);
   const issuerName = firstTag(xml, "issuerName") ?? meta.companyName;
@@ -302,6 +347,7 @@ export function parseForm4Sales(
   }));
 
   const primaryOwner = owners[0] ?? { name: "Unknown", role: "Reporting owner" };
+  if (individualsOnly && isLikelyEntityFiler(primaryOwner.name)) return [];
 
   const leads: Form4SaleLead[] = [];
   const txBlocks = [
@@ -387,18 +433,27 @@ export async function scanForm4Sales(options: Form4ScanOptions): Promise<{
       }
 
       const xmlText = await xmlResp.text();
+      const xmlStripped = stripXmlNamespaces(xmlText);
+      const schemaVersion = firstTag(xmlStripped, "schemaVersion");
+      const filingUrl = buildForm4ViewUrl(
+        assets.base,
+        assets.xmlFile,
+        assets.indexNames,
+        schemaVersion
+      );
       const parsed = parseForm4Sales(
         xmlText,
         {
           companyName: filing.companyName,
           companyTicker: null,
           filedDate: filing.filedDate,
-          filingUrl: assets.filingUrl,
+          filingUrl,
           filingAltUrl: assets.filingAltUrl,
           accessionNo: filing.accessionNoDashes,
         },
         options.minValueUsd,
-        options.titleKeywordsOnly
+        options.titleKeywordsOnly,
+        options.individualsOnly
       );
 
       leads.push(...parsed);
