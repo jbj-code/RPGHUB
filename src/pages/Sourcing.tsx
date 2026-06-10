@@ -1,7 +1,7 @@
 // Sourcing.tsx
 // HNW prospect discovery: SEC Form 4 insider sale scans (export to Google Sheets).
 
-import { useState, useCallback, useEffect, useRef, type CSSProperties } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo, Fragment, type CSSProperties } from "react";
 import type { Theme } from "../theme";
 import {
   getFixedRailsLayoutStyles,
@@ -18,6 +18,7 @@ type SourcingProps = { theme: Theme; sidebarWidth: number };
 
 type Form4Lead = {
   filerName: string;
+  filerCountry?: string;
   companyName: string;
   companyTicker: string | null;
   role: string;
@@ -51,15 +52,91 @@ type ScanDepthId = (typeof SCAN_DEPTHS)[number]["id"];
 
 // --- Helpers ---
 
+type Form4LeadGroup = {
+  key: string;
+  filerName: string;
+  filerCountry: string;
+  companyName: string;
+  companyTicker: string | null;
+  role: string;
+  totalAmount: number;
+  sales: Form4Lead[];
+};
+
 function formatUsd(n: number): string {
   return `$${n.toLocaleString("en-US")}`;
 }
 
+function decodeHtml(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function formatShortDate(iso: string): string {
+  const d = new Date(`${iso.slice(0, 10)}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function groupLeads(leads: Form4Lead[]): Form4LeadGroup[] {
+  const map = new Map<string, Form4LeadGroup>();
+  for (const lead of leads) {
+    const key = `${lead.filerName}\0${lead.companyTicker ?? lead.companyName}`;
+    const existing = map.get(key);
+    if (existing) {
+      existing.sales.push(lead);
+      existing.totalAmount += lead.transactionValue;
+    } else {
+      map.set(key, {
+        key,
+        filerName: lead.filerName,
+        filerCountry: lead.filerCountry ?? "—",
+        companyName: lead.companyName,
+        companyTicker: lead.companyTicker,
+        role: lead.role,
+        totalAmount: lead.transactionValue,
+        sales: [lead],
+      });
+    }
+  }
+  return Array.from(map.values())
+    .map((g) => ({
+      ...g,
+      sales: [...g.sales].sort((a, b) => b.transactionValue - a.transactionValue),
+    }))
+    .sort((a, b) => b.totalAmount - a.totalAmount);
+}
+
+function latestFiledDate(sales: Form4Lead[]): string {
+  return [...sales.map((s) => s.filedDate.slice(0, 10))].sort().reverse()[0] ?? "";
+}
+
+function txnSubtextForSales(sales: Form4Lead[], filedPrimary?: string): string | null {
+  const dates = [...new Set(sales.map((s) => s.transactionDate.slice(0, 10)))].sort();
+  if (dates.length === 0) return null;
+  if (dates.length === 1) {
+    if (filedPrimary && dates[0] === filedPrimary.slice(0, 10)) return null;
+    return `Txn ${formatShortDate(dates[0])}`;
+  }
+  return `Txn ${formatShortDate(dates[0])} – ${formatShortDate(dates[dates.length - 1])}`;
+}
+
+function singleFilingForSales(sales: Form4Lead[]): Form4Lead | null {
+  const acc = sales[0]?.accessionNo;
+  if (!acc || sales.some((s) => s.accessionNo !== acc)) return null;
+  return sales[0];
+}
+
 function downloadForm4Csv(leads: Form4Lead[]) {
   const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
-  const header = ["Name", "Company", "Ticker", "Role", "Amount USD", "Shares", "Price", "Transaction Date", "Filed", "Form 4 URL", "SEC viewer URL"];
+  const header = ["Name", "Country", "Company", "Ticker", "Role", "Amount USD", "Shares", "Price", "Transaction Date", "Filed", "Form 4 URL", "SEC viewer URL"];
   const rows = leads.map((r) => [
     r.filerName,
+    r.filerCountry ?? "",
     r.companyName,
     r.companyTicker ?? "",
     r.role,
@@ -103,6 +180,7 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
   const [meta, setMeta] = useState<Form4ScanMeta | null>(null);
   const [lastScanAt, setLastScanAt] = useState<Date | null>(null);
   const [showInfoModal, setShowInfoModal] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     if (!showInfoModal) return;
@@ -256,6 +334,7 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
       }
       setLeads(data.leads ?? []);
       setMeta(data.meta ?? null);
+      setExpandedGroups(new Set());
       setHasScanned(true);
       setLastScanAt(new Date());
     } catch {
@@ -269,6 +348,51 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
   }, [days, minValueM, scanDepth]);
 
   const hasResults = leads.length > 0;
+  const groupedLeads = useMemo(() => groupLeads(leads), [leads]);
+
+  const toggleGroup = useCallback((key: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const subTextStyle: CSSProperties = {
+    display: "block",
+    fontSize: "0.72rem",
+    color: t.colors.textMuted,
+    fontWeight: 500,
+  };
+
+  const renderFilingLinks = (row: Form4Lead) => (
+    <>
+      <a
+        href={row.filingUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ color: t.colors.primary, fontWeight: 600 }}
+      >
+        Form 4
+      </a>
+      {row.filingAltUrl ? (
+        <>
+          <span style={{ color: t.colors.textMuted, margin: `0 ${t.spacing(0.5)}` }}>·</span>
+          <a
+            href={row.filingAltUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: t.colors.primary, fontWeight: 600 }}
+          >
+            SEC viewer
+          </a>
+        </>
+      ) : (
+        <span style={{ color: t.colors.textMuted, fontSize: "0.78rem" }}> · run a new scan for SEC viewer link</span>
+      )}
+    </>
+  );
 
   return (
     <section className="sourcing-page" style={fixedRails.page}>
@@ -525,7 +649,13 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
                 <strong>Form 4</strong> opens the transaction table; <strong>SEC viewer</strong> shows issuer and reporting-owner details for identity checks.
               </p>
               <p style={{ fontSize: "0.85rem", color: t.colors.text, marginBottom: t.spacing(3), marginTop: 0 }}>
-                <strong>Matches:</strong> {leads.length}
+                <strong>Matches:</strong> {groupedLeads.length}
+                {groupedLeads.length !== leads.length ? (
+                  <>
+                    {" · "}
+                    <strong>Sales:</strong> {leads.length}
+                  </>
+                ) : null}
                 {" · "}
                 <strong>Lookback:</strong> {days} days
                 {" · "}
@@ -535,13 +665,13 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
                 <table style={tableStyle}>
                   <thead>
                     <tr>
-                      {["Name", "Company", "Role", "Amount", "Txn date", "Filed", "Filing"].map((h, colIdx, arr) => (
+                      {["Name", "Company", "Role", "Amount", "Filed", "Filing"].map((h, colIdx, arr) => (
                         <th
                           key={h}
                           style={{
                             ...thStyle,
                             ...(colIdx === 0 ? { borderTopLeftRadius: t.radius.md } : {}),
-                            ...(colIdx === arr.length - 1 ? { borderTopRightRadius: t.radius.md } : {}),
+                            ...(colIdx === arr.length - 1 ? { borderTopRightRadius: t.radius.md, width: "1%" } : {}),
                           }}
                         >
                           {h}
@@ -550,49 +680,124 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
                     </tr>
                   </thead>
                   <tbody>
-                    {leads.map((row, i) => (
-                      <tr
-                        key={`${row.accessionNo}-${row.filerName}-${i}`}
-                        style={{ backgroundColor: i % 2 === 0 ? t.colors.surface : t.colors.background }}
-                      >
-                        <td style={{ ...tdStyle, fontWeight: 600 }}>{row.filerName}</td>
-                        <td style={tdStyle}>
-                          {row.companyName}
-                          {row.companyTicker ? (
-                            <span style={{ color: t.colors.textMuted }}> ({row.companyTicker})</span>
-                          ) : null}
-                        </td>
-                        <td style={tdStyle}>{row.role}</td>
-                        <td style={{ ...tdStyle, fontWeight: 600, color: t.colors.primary }}>{formatUsd(row.transactionValue)}</td>
-                        <td style={tdStyle}>{row.transactionDate}</td>
-                        <td style={tdStyle}>{row.filedDate}</td>
-                        <td style={tdStyle}>
-                          <a
-                            href={row.filingUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{ color: t.colors.primary, fontWeight: 600 }}
-                          >
-                            Form 4
-                          </a>
-                          {row.filingAltUrl ? (
-                            <>
-                              <span style={{ color: t.colors.textMuted, margin: `0 ${t.spacing(0.5)}` }}>·</span>
-                              <a
-                                href={row.filingAltUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                style={{ color: t.colors.primary, fontWeight: 600 }}
-                              >
-                                SEC viewer
-                              </a>
-                            </>
-                          ) : (
-                            <span style={{ color: t.colors.textMuted, fontSize: "0.78rem" }}> · run a new scan for SEC viewer link</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                    {groupedLeads.map((group, i) => {
+                      const multi = group.sales.length > 1;
+                      const expanded = expandedGroups.has(group.key);
+                      const filedPrimary = latestFiledDate(group.sales);
+                      const txnSub = txnSubtextForSales(group.sales, filedPrimary);
+                      const sharedFiling = singleFilingForSales(group.sales);
+                      const rowBg = i % 2 === 0 ? t.colors.surface : t.colors.background;
+
+                      const detailBorder = `1px solid ${t.colors.border}`;
+
+                      return (
+                        <Fragment key={group.key}>
+                          <tr style={{ backgroundColor: rowBg }}>
+                            <td style={{ ...tdStyle, fontWeight: 600 }}>
+                              <span>{group.filerName}</span>
+                              {group.filerCountry !== "—" ? (
+                                <span style={subTextStyle}>{group.filerCountry}</span>
+                              ) : null}
+                            </td>
+                            <td style={tdStyle}>
+                              {group.companyName}
+                              {group.companyTicker ? (
+                                <span style={{ color: t.colors.textMuted }}> ({group.companyTicker})</span>
+                              ) : null}
+                            </td>
+                            <td style={tdStyle}>{decodeHtml(group.role)}</td>
+                            <td style={{ ...tdStyle, fontWeight: 600, color: t.colors.primary }}>
+                              <span>{formatUsd(group.totalAmount)}</span>
+                              {multi ? (
+                                <span style={subTextStyle}>{group.sales.length} sales</span>
+                              ) : null}
+                            </td>
+                            <td style={tdStyle}>
+                              <span style={{ fontWeight: 600 }}>{formatShortDate(filedPrimary)}</span>
+                              {txnSub ? <span style={subTextStyle}>{txnSub}</span> : null}
+                            </td>
+                            <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: t.spacing(2) }}>
+                                <span>
+                                  {sharedFiling ? renderFilingLinks(sharedFiling) : multi ? (
+                                    <span style={{ color: t.colors.textMuted, fontSize: "0.82rem" }}>{group.sales.length} filings</span>
+                                  ) : (
+                                    renderFilingLinks(group.sales[0])
+                                  )}
+                                </span>
+                                {multi ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleGroup(group.key)}
+                                    aria-expanded={expanded}
+                                    aria-label={expanded ? "Collapse sales" : "Expand sales"}
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      padding: t.spacing(0.5),
+                                      border: `1px solid ${t.colors.border}`,
+                                      borderRadius: t.radius.sm,
+                                      backgroundColor: t.colors.background,
+                                      color: t.colors.secondary,
+                                      cursor: "pointer",
+                                      flexShrink: 0,
+                                    }}
+                                  >
+                                    <span
+                                      className="material-symbols-outlined"
+                                      style={{
+                                        fontSize: 20,
+                                        transform: expanded ? "rotate(90deg)" : "none",
+                                        transition: "transform 0.15s ease",
+                                      }}
+                                      aria-hidden
+                                    >
+                                      chevron_right
+                                    </span>
+                                  </button>
+                                ) : null}
+                              </div>
+                            </td>
+                          </tr>
+                          {multi && expanded
+                            ? group.sales.map((sale, j) => (
+                                <tr
+                                  key={`${group.key}-${sale.accessionNo}-${j}`}
+                                  style={{ backgroundColor: rowBg }}
+                                >
+                                  <td colSpan={3} style={{ ...tdStyle, paddingTop: t.spacing(1), paddingBottom: t.spacing(1), borderBottom: j === group.sales.length - 1 ? detailBorder : "none" }}>
+                                    <span
+                                      style={{
+                                        display: "inline-block",
+                                        marginLeft: t.spacing(2),
+                                        paddingLeft: t.spacing(2),
+                                        borderLeft: `2px solid ${t.colors.border}`,
+                                        fontSize: "0.78rem",
+                                        color: t.colors.textMuted,
+                                      }}
+                                    >
+                                      Sale {j + 1}
+                                    </span>
+                                  </td>
+                                  <td style={{ ...tdStyle, fontWeight: 600, color: t.colors.primary, paddingTop: t.spacing(1), paddingBottom: t.spacing(1), borderBottom: j === group.sales.length - 1 ? detailBorder : "none" }}>
+                                    {formatUsd(sale.transactionValue)}
+                                  </td>
+                                  <td style={{ ...tdStyle, paddingTop: t.spacing(1), paddingBottom: t.spacing(1), borderBottom: j === group.sales.length - 1 ? detailBorder : "none" }}>
+                                    <span style={{ fontWeight: 600 }}>{formatShortDate(sale.filedDate)}</span>
+                                    {sale.transactionDate.slice(0, 10) !== sale.filedDate.slice(0, 10) ? (
+                                      <span style={subTextStyle}>Txn {formatShortDate(sale.transactionDate)}</span>
+                                    ) : null}
+                                  </td>
+                                  <td style={{ ...tdStyle, paddingTop: t.spacing(1), paddingBottom: t.spacing(1), borderBottom: j === group.sales.length - 1 ? detailBorder : "none" }}>
+                                    {renderFilingLinks(sale)}
+                                  </td>
+                                </tr>
+                              ))
+                            : null}
+                        </Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -623,8 +828,11 @@ export function Sourcing({ theme: t, sidebarWidth }: SourcingProps) {
 
           <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(2) }}>
             <div style={{ padding: t.spacing(2), borderRadius: t.radius.md, backgroundColor: t.colors.background, border: `1px solid ${t.colors.border}` }}>
-              <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>Qualifying sales</div>
-              <div style={{ fontSize: "1.4rem", fontWeight: 700, color: t.colors.text }}>{leads.length}</div>
+              <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>Prospects</div>
+              <div style={{ fontSize: "1.4rem", fontWeight: 700, color: t.colors.text }}>{groupedLeads.length}</div>
+              {groupedLeads.length !== leads.length ? (
+                <div style={{ fontSize: "0.78rem", color: t.colors.textMuted, marginTop: 4 }}>{leads.length} qualifying sales</div>
+              ) : null}
             </div>
             <div style={{ padding: t.spacing(2), borderRadius: t.radius.md, backgroundColor: t.colors.background, border: `1px solid ${t.colors.border}` }}>
               <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>Min threshold</div>

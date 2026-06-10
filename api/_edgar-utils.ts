@@ -6,6 +6,8 @@ const SEC_ARCHIVES = "https://www.sec.gov/Archives/edgar/data";
 
 export type Form4SaleLead = {
   filerName: string;
+  /** Country label for display (e.g. US, UK). From reporting-owner address on the filing. */
+  filerCountry: string;
   companyName: string;
   companyTicker: string | null;
   role: string;
@@ -158,6 +160,42 @@ export function isLikelyEntityFiler(name: string): boolean {
   const trimmed = name.trim();
   if (!trimmed) return true;
   return ENTITY_NAME_PATTERNS.some((re) => re.test(trimmed));
+}
+
+const COUNTRY_ABBREV: Array<[RegExp, string]> = [
+  [/UNITED\s+STATES/i, "US"],
+  [/UNITED\s+KINGDOM|(^|\s)UK(\s|$)/i, "UK"],
+  [/^CANADA$/i, "CA"],
+  [/^GERMANY$/i, "DE"],
+  [/^FRANCE$/i, "FR"],
+  [/^ICELAND$/i, "IS"],
+  [/^DENMARK$/i, "DK"],
+  [/^SWEDEN$/i, "SE"],
+  [/^NORWAY$/i, "NO"],
+  [/^NETHERLANDS$/i, "NL"],
+  [/^SWITZERLAND$/i, "CH"],
+  [/^IRELAND$/i, "IE"],
+  [/^AUSTRALIA$/i, "AU"],
+  [/^SINGAPORE$/i, "SG"],
+  [/^HONG\s+KONG$/i, "HK"],
+  [/^JAPAN$/i, "JP"],
+  [/^ISRAEL$/i, "IL"],
+];
+
+export function countryFromOwnerBlock(ownerXml: string): string {
+  const nonUs = firstTag(ownerXml, "rptOwnerNonUSAddressFlag");
+  if (nonUs !== "1" && nonUs !== "true") return "US";
+  const desc = (firstTag(ownerXml, "rptOwnerStateDescription") ?? "").trim();
+  if (!desc) return "Non-US";
+  const upper = desc.toUpperCase();
+  for (const [re, code] of COUNTRY_ABBREV) {
+    if (re.test(upper)) return code;
+  }
+  if (upper.length <= 4) return upper;
+  return desc
+    .split(/\s+/)[0]
+    .replace(/[^A-Za-z]/g, "")
+    .slice(0, 12);
 }
 
 function xslFolderFromSchema(schemaVersion: string | null): string | null {
@@ -344,9 +382,10 @@ export function parseForm4Sales(
   const owners = ownerBlocks.map((block) => ({
     name: firstTag(block, "rptOwnerName") ?? "Unknown",
     role: roleFromOwnerBlock(block),
+    country: countryFromOwnerBlock(block),
   }));
 
-  const primaryOwner = owners[0] ?? { name: "Unknown", role: "Reporting owner" };
+  const primaryOwner = owners[0] ?? { name: "Unknown", role: "Reporting owner", country: "US" };
   if (individualsOnly && isLikelyEntityFiler(primaryOwner.name)) return [];
 
   const leads: Form4SaleLead[] = [];
@@ -371,6 +410,7 @@ export function parseForm4Sales(
 
     leads.push({
       filerName: primaryOwner.name,
+      filerCountry: primaryOwner.country,
       companyName: issuerName,
       companyTicker: issuerTicker,
       role,
