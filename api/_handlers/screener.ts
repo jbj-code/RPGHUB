@@ -31,6 +31,46 @@ function parseLiquidityMode(raw: unknown): LiquidityMode {
   return "strict";
 }
 
+type RankMode = "score" | "yield";
+
+function parseRankMode(raw: unknown): RankMode {
+  const v = String(raw ?? "score").toLowerCase();
+  if (v === "yield" || v === "yield_only" || v === "yieldonly") return "yield";
+  return "score";
+}
+
+/** Pick the better of two contracts for the same ticker (strike selection + ordering). */
+function isBetterRankedRow(
+  candidate: { score: number; periodYieldPct: number },
+  incumbent: { score: number; periodYieldPct: number },
+  rankMode: RankMode,
+): boolean {
+  if (rankMode === "yield") {
+    if (candidate.periodYieldPct !== incumbent.periodYieldPct) {
+      return candidate.periodYieldPct > incumbent.periodYieldPct;
+    }
+    return candidate.score > incumbent.score;
+  }
+  if (candidate.score !== incumbent.score) return candidate.score > incumbent.score;
+  return candidate.periodYieldPct > incumbent.periodYieldPct;
+}
+
+function sortRankedRows<T extends { score: number; periodYieldPct: number; annYieldPct: number }>(
+  rows: T[],
+  rankMode: RankMode,
+): T[] {
+  return [...rows].sort((a, b) => {
+    if (rankMode === "yield") {
+      if (b.periodYieldPct !== a.periodYieldPct) return b.periodYieldPct - a.periodYieldPct;
+      if (b.score !== a.score) return b.score - a.score;
+      return b.annYieldPct - a.annYieldPct;
+    }
+    if (b.score !== a.score) return b.score - a.score;
+    if (b.periodYieldPct !== a.periodYieldPct) return b.periodYieldPct - a.periodYieldPct;
+    return b.annYieldPct - a.annYieldPct;
+  });
+}
+
 // Default scan universe: S&P 500 (~503) + liquid sector ETFs.
 const UNIVERSE_SYMBOLS: string[] = SP500_UNIVERSE_SYMBOLS;
 
@@ -505,6 +545,7 @@ export async function handler(req: any, res: any): Promise<void> {
   }
 
   const topN = Math.min(Math.max(1, Number(body.topN) || 5), 20);
+  const rankMode = parseRankMode(body.rankMode);
   const minMarketCap = body.minMarketCap != null ? Number(body.minMarketCap) : null;
   const scanDepth = parseScanDepth(body.scanDepth);
   const liquidityMode = parseLiquidityMode(body.liquidityMode);
@@ -559,6 +600,11 @@ export async function handler(req: any, res: any): Promise<void> {
     if (liquidityMode !== "strict") {
       warnings.push(
         `Liquidity mode: ${liquidityMode} — illiquid contracts are ranked lower instead of excluded when possible.`
+      );
+    }
+    if (rankMode === "yield") {
+      warnings.push(
+        "Ranking: yield only — best strike per ticker and table order use period yield (liquidity filters still apply)."
       );
     }
 
@@ -1184,19 +1230,18 @@ export async function handler(req: any, res: any): Promise<void> {
     }
 
     // ─── Ranking / dedup ─────────────────────────────────────────────────────
-    // Cross-OTM deduplication (bands mode only): each ticker appears in at most one bucket.
+    // Cross-OTM deduplication (bands mode only): each ticker appears in at most one bucket,
+    // assigned to the band containing its best contract (by score or period yield).
     if (otmLayout === "bands" && otmLevels.length > 1) {
-      const allCandidates: Array<{ ticker: string; otmPct: number; score: number }> = [];
+      const globalBest = new Map<string, RankedOption>();
       for (const otmPct of otmLevels) {
         for (const row of resultsByOtmPct[otmPct] ?? []) {
-          allCandidates.push({ ticker: row.ticker, otmPct, score: row.score });
+          const ex = globalBest.get(row.ticker);
+          if (!ex || isBetterRankedRow(row, ex, rankMode)) globalBest.set(row.ticker, row);
         }
       }
-      allCandidates.sort((a, b) => b.score - a.score);
       const tickerToOtm: Record<string, number> = {};
-      for (const c of allCandidates) {
-        if (!(c.ticker in tickerToOtm)) tickerToOtm[c.ticker] = c.otmPct;
-      }
+      for (const [ticker, row] of globalBest) tickerToOtm[ticker] = row.otmPct;
       for (const otmPct of otmLevels) {
         resultsByOtmPct[otmPct] = (resultsByOtmPct[otmPct] ?? []).filter(
           (r) => tickerToOtm[r.ticker] === otmPct
@@ -1206,17 +1251,12 @@ export async function handler(req: any, res: any): Promise<void> {
 
     for (const otmPct of otmLevels) {
       const arr = resultsByOtmPct[otmPct] ?? [];
-      // Keep the single best-scoring contract per ticker within the broad section.
-      // The 7–8 % clustering within a 5–9 % band is correct — that IS the optimal yield/risk
-      // point. actualOtmPct in the result lets users see the precise strike distance.
       const tickerBest = new Map<string, (typeof arr)[0]>();
       for (const row of arr) {
         const ex = tickerBest.get(row.ticker);
-        if (!ex || row.score > ex.score) tickerBest.set(row.ticker, row);
+        if (!ex || isBetterRankedRow(row, ex, rankMode)) tickerBest.set(row.ticker, row);
       }
-      const deduped = Array.from(tickerBest.values()).sort((a, b) =>
-        b.score !== a.score ? b.score - a.score : b.annYieldPct - a.annYieldPct
-      );
+      const deduped = sortRankedRows(Array.from(tickerBest.values()), rankMode);
       deduped.slice(0, topN).forEach((r, idx) => (r.rank = idx + 1));
       resultsByOtmPct[otmPct] = deduped.slice(0, topN);
     }
@@ -1231,6 +1271,7 @@ export async function handler(req: any, res: any): Promise<void> {
       dte,
       positionSide,
       otmLayout,
+      rankMode,
       ...(otmLayout === "range" ? { otmRange: { min: otmRangeMin, max: otmRangeMax } } : {}),
     });
   } catch (err: unknown) {

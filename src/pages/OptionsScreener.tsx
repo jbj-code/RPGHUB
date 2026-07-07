@@ -82,6 +82,7 @@ type ScreenerResponse = {
   positionSide?: "write" | "buy";
   otmLayout?: OtmLayout;
   otmRange?: { min: number; max: number };
+  rankMode?: RankMode;
 };
 
 const OTM_LEVELS = [5, 10, 15, 20] as const;
@@ -89,6 +90,8 @@ const OTM_LEVELS = [5, 10, 15, 20] as const;
 const CUSTOM_OTM_KEY = 0;
 
 type OtmLayout = "bands" | "range";
+
+type RankMode = "score" | "yield";
 
 const MONTH_OPTIONS: DropdownOption[] = [
   { value: "01", label: "January" },
@@ -587,6 +590,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
   /** Matches the scan that produced current tables. */
   const [outcomeOtmLayout, setOutcomeOtmLayout] = useState<OtmLayout>("bands");
   const [outcomeOtmRange, setOutcomeOtmRange] = useState<{ min: number; max: number } | null>(null);
+  const [outcomeRankMode, setOutcomeRankMode] = useState<RankMode>("score");
   const [showInfoModal, setShowInfoModal] = useState(false);
   const [bucketId, setBucketId] = useState<string>(OPPORTUNITY_BUCKETS[0]!.id);
   const [scanDepth, setScanDepth] = useState<ScanDepth>("standard");
@@ -594,6 +598,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
   const [otmLayout, setOtmLayout] = useState<OtmLayout>("bands");
   const [otmPctMin, setOtmPctMin] = useState(5);
   const [otmPctMax, setOtmPctMax] = useState(15);
+  const [rankMode, setRankMode] = useState<RankMode>("score");
   const [resultsView, setResultsView] = useState<ResultsView>("bands");
   const [tableSort, setTableSort] = useState<ScreenerTableSortState>({ phase: "none" });
   const [lastScanDte, setLastScanDte] = useState<number | null>(null);
@@ -991,6 +996,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
         positionSide,
         expiration,
         otmLayout,
+        rankMode,
         topN: 10,
         scanDepth,
         liquidityMode,
@@ -1039,6 +1045,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                 ? { min: otmPctMin, max: otmPctMax }
                 : null
           );
+          setOutcomeRankMode(json.rankMode === "yield" ? "yield" : rankMode);
         }
       }
     } catch (err: any) {
@@ -1188,10 +1195,16 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                 <li><strong>Custom range</strong> — set Min/Max OTM % (like Options Optimizer) and get one ranked table of the best ideas within that strike distance.</li>
               </ul>
 
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Ranking</p>
+              <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
+                <li><strong>Smart score</strong> — best strike per ticker uses yield + delta + IV/RV + liquidity + skew; tables ordered by composite score.</li>
+                <li><strong>Yield only</strong> — best strike per ticker is the highest period yield in band (liquidity filters still apply); tables ordered by period yield.</li>
+              </ul>
+
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Results views</p>
               <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
-                <li><strong>Risk bands</strong> — top ideas grouped by OTM level (5–9%, 10–14%, etc.), ranked by composite score within each band.</li>
-                <li><strong>Yield leaderboard</strong> — flat top 5 across all bands, sorted by period yield (best for &ldquo;give me the highest-yield names&rdquo; requests).</li>
+                <li><strong>Risk bands</strong> — top ideas grouped by OTM level (5–9%, 10–14%, etc.).</li>
+                <li><strong>Yield leaderboard</strong> — flat top 5 across all bands, sorted by period yield.</li>
               </ul>
 
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Key columns</p>
@@ -1400,6 +1413,46 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Ranking: composite score vs period yield */}
+          <div>
+            <span style={labelStyle}>
+              <HelpTooltip
+                theme={t}
+                text="Smart score picks the best strike per ticker using yield, delta, IV/RV, liquidity, and skew. Yield only picks the highest period-yield strike per ticker (liquidity filters still apply) and ranks tables by period yield."
+              >
+                <span style={{ cursor: "help" }}>Ranking</span>
+              </HelpTooltip>
+            </span>
+            <div style={{ display: "flex", gap: t.spacing(2) }}>
+              {(
+                [
+                  { v: "score" as const, label: "Smart score" },
+                  { v: "yield" as const, label: "Yield only" },
+                ] as const
+              ).map(({ v, label }) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setRankMode(v)}
+                  aria-pressed={rankMode === v}
+                  style={{
+                    flex: 1,
+                    padding: `${t.spacing(2)} ${t.spacing(2)}`,
+                    borderRadius: t.radius.md,
+                    border: `1px solid ${rankMode === v ? t.colors.primary : t.colors.border}`,
+                    backgroundColor: rankMode === v ? `${t.colors.primary}18` : t.colors.background,
+                    color: rankMode === v ? t.colors.primary : t.colors.text,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    fontSize: "0.78rem",
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Target Expiration */}
@@ -1722,11 +1775,19 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                 ))}
               </div>
             </div>
-            {resultsView === "leaderboard" && lastScanDte != null && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: t.spacing(1) }}>
               <span style={{ fontSize: "0.78rem", color: t.colors.textMuted }}>
-                Top 5 by period yield · {lastScanDte} DTE
+                Strike pick &amp; table order:{" "}
+                <strong style={{ color: t.colors.text }}>
+                  {outcomeRankMode === "yield" ? "Yield only" : "Smart score"}
+                </strong>
               </span>
-            )}
+              {resultsView === "leaderboard" && lastScanDte != null && (
+                <span style={{ fontSize: "0.78rem", color: t.colors.textMuted }}>
+                  Top 5 by period yield · {lastScanDte} DTE
+                </span>
+              )}
+            </div>
           </div>
         )}
 
