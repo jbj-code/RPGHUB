@@ -1,7 +1,7 @@
 // OptionsScreener.tsx
 // Market-wide options screener: scan US equities for top OTM put/call ideas by yield band.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Theme } from "../theme";
 import {
   getFixedRailsLayoutStyles,
@@ -41,6 +41,8 @@ type RankedOption = {
   ask?: number;
   limitPrice?: number;
   annYieldPct: number;
+  /** Premium ÷ strike notional for this expiry (not annualized). */
+  periodYieldPct?: number;
   premiumPerContract: number;
   impliedVolPct?: number | null;
   realizedVol20dPct?: number | null;
@@ -78,9 +80,15 @@ type ScreenerResponse = {
   optionType?: "P" | "C";
   dte?: number;
   positionSide?: "write" | "buy";
+  otmLayout?: OtmLayout;
+  otmRange?: { min: number; max: number };
 };
 
 const OTM_LEVELS = [5, 10, 15, 20] as const;
+/** Backend key for custom min–max OTM range (single results table). */
+const CUSTOM_OTM_KEY = 0;
+
+type OtmLayout = "bands" | "range";
 
 const MONTH_OPTIONS: DropdownOption[] = [
   { value: "01", label: "January" },
@@ -117,12 +125,13 @@ function formatVolPct(n: number | null | undefined): string {
 
 /** Build a tab-separated string for the given bucket — paste directly into Excel.
  *  IV, RV and Ann.Yield are in decimal form (0.83 = 83%) for easy Excel calculations. */
-function buildBucketTsv(rows: RankedOption[], positionSide: PositionSide): string {
+function buildBucketTsv(rows: RankedOption[], positionSide: PositionSide, dte?: number | null): string {
   const n = (v: number | null | undefined, d = 2) => (v == null || !Number.isFinite(v) ? "" : v.toFixed(d));
   const pct = (v: number | null | undefined) => (v == null || !Number.isFinite(v) ? "" : (v / 100).toFixed(4));
   const headers = [
     "Rank", "Ticker", "Company", "1M Return", "Price", "Strike", "OTM %",
     "IV", "RV 20d", "Skew", "Bid", "Ask",
+    positionSide === "buy" ? "Period debit %" : "Period yield %",
     positionSide === "buy" ? "Ann. Debit" : "Ann. Yield",
     positionSide === "buy" ? "Debit ($)" : "Premium ($)",
   ];
@@ -139,6 +148,7 @@ function buildBucketTsv(rows: RankedOption[], positionSide: PositionSide): strin
     r.skewPct != null ? n(r.skewPct, 1) : "",
     n(r.bid),
     n(r.ask ?? r.bid),
+    pct(periodYieldFromRow(r, dte)),
     pct(r.annYieldPct),
     n(r.premiumPerContract),
   ].join("\t"));
@@ -316,6 +326,124 @@ function HelpTooltip({ theme: t, text, children }: HelpTooltipProps) {
   );
 }
 
+type ResultsView = "bands" | "leaderboard";
+
+type ScreenerTableSortKey = "periodYield" | "annYield";
+
+type ScreenerTableSortState =
+  | { phase: "none" }
+  | { phase: "asc" | "desc"; key: ScreenerTableSortKey };
+
+function periodYieldFromRow(r: RankedOption, dte?: number | null): number {
+  if (r.periodYieldPct != null && Number.isFinite(r.periodYieldPct)) return r.periodYieldPct;
+  if (dte != null && dte > 0 && Number.isFinite(r.annYieldPct)) return r.annYieldPct * (dte / 365);
+  return r.annYieldPct;
+}
+
+function sortScreenerRows(
+  rows: RankedOption[],
+  sort: ScreenerTableSortState,
+  dte?: number | null,
+): RankedOption[] {
+  if (sort.phase === "none") return rows;
+  const arr = [...rows];
+  const sign = sort.phase === "asc" ? 1 : -1;
+  arr.sort((a, b) => {
+    let cmp = 0;
+    if (sort.key === "periodYield") {
+      const va = periodYieldFromRow(a, dte);
+      const vb = periodYieldFromRow(b, dte);
+      cmp = va === vb ? 0 : va < vb ? -1 : 1;
+    } else {
+      cmp = a.annYieldPct === b.annYieldPct ? 0 : a.annYieldPct < b.annYieldPct ? -1 : 1;
+    }
+    return cmp * sign;
+  });
+  return arr;
+}
+
+type SortableScreenerThProps = {
+  theme: Theme;
+  sortKey: ScreenerTableSortKey;
+  tableSort: ScreenerTableSortState;
+  onCycle: (key: ScreenerTableSortKey) => void;
+  label: string;
+  labelHelp?: string;
+};
+
+function SortableScreenerTh({
+  theme: t,
+  sortKey,
+  tableSort,
+  onCycle,
+  label,
+  labelHelp,
+}: SortableScreenerThProps) {
+  const active = tableSort.phase !== "none" && tableSort.key === sortKey;
+  const ariaSort =
+    !active ? "none" : tableSort.phase === "asc" ? "ascending" : "descending";
+
+  const btn = (
+    <button
+      type="button"
+      className="options-optimizer-sort-th-btn"
+      onClick={() => onCycle(sortKey)}
+      title="Sort: default order → ascending → descending"
+      style={{
+        background: "none",
+        border: "none",
+        color: t.colors.secondaryText,
+        fontWeight: 600,
+        cursor: "pointer",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        padding: 0,
+        font: "inherit",
+        textAlign: "right",
+        maxWidth: "100%",
+        borderRadius: 4,
+        marginLeft: "auto",
+      }}
+    >
+      {labelHelp ? (
+        <HelpTooltip theme={t} text={labelHelp}>
+          <span style={{ cursor: "help" }}>{label}</span>
+        </HelpTooltip>
+      ) : (
+        <span>{label}</span>
+      )}
+      {active && (
+        <span
+          className="material-symbols-outlined"
+          style={{ fontSize: 18, lineHeight: 1, opacity: 0.95 }}
+          aria-hidden
+        >
+          {tableSort.phase === "asc" ? "arrow_upward" : "arrow_downward"}
+        </span>
+      )}
+    </button>
+  );
+
+  return (
+    <th
+      style={{
+        textAlign: "right",
+        fontWeight: 600,
+        padding: `${t.spacing(2)} ${t.spacing(3)}`,
+        backgroundColor: t.colors.secondary,
+        borderBottom: `1px solid ${t.colors.border}`,
+        color: t.colors.secondaryText,
+        fontSize: "0.8rem",
+        whiteSpace: "nowrap",
+      }}
+      aria-sort={ariaSort}
+    >
+      {btn}
+    </th>
+  );
+}
+
 export type OptionsScreenerProps = { theme: Theme; sidebarWidth: number };
 
 const otmLabels: Record<number, { headline: string; detail: string }> = {
@@ -324,6 +452,19 @@ const otmLabels: Record<number, { headline: string; detail: string }> = {
   15: { headline: "15–19% OTM", detail: "Moderate" },
   20: { headline: "20–30% OTM", detail: "Conservative, lower yield" },
 };
+
+function formatOtmBandLabel(
+  key: number,
+  range: { min: number; max: number } | null,
+): { headline: string; detail: string } {
+  if (key === CUSTOM_OTM_KEY && range) {
+    return {
+      headline: `${range.min}–${range.max}% OTM`,
+      detail: "Custom range — best ideas within your min/max band",
+    };
+  }
+  return otmLabels[key] ?? { headline: `${key}% OTM`, detail: "" };
+}
 
 // --- Main page component ---
 
@@ -443,10 +584,19 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
   const [lastScanAt, setLastScanAt] = useState<Date | null>(null);
   /** Matches the scan that produced current tables (so labels stay correct if you change controls). */
   const [outcomePositionSide, setOutcomePositionSide] = useState<PositionSide>("write");
+  /** Matches the scan that produced current tables. */
+  const [outcomeOtmLayout, setOutcomeOtmLayout] = useState<OtmLayout>("bands");
+  const [outcomeOtmRange, setOutcomeOtmRange] = useState<{ min: number; max: number } | null>(null);
   const [showInfoModal, setShowInfoModal] = useState(false);
   const [bucketId, setBucketId] = useState<string>(OPPORTUNITY_BUCKETS[0]!.id);
   const [scanDepth, setScanDepth] = useState<ScanDepth>("standard");
   const [liquidityMode, setLiquidityMode] = useState<LiquidityMode>("strict");
+  const [otmLayout, setOtmLayout] = useState<OtmLayout>("bands");
+  const [otmPctMin, setOtmPctMin] = useState(5);
+  const [otmPctMax, setOtmPctMax] = useState(15);
+  const [resultsView, setResultsView] = useState<ResultsView>("bands");
+  const [tableSort, setTableSort] = useState<ScreenerTableSortState>({ phase: "none" });
+  const [lastScanDte, setLastScanDte] = useState<number | null>(null);
   // Year input state for the Month/Year expiration picker (non-monthly mode)
   const [expYearInput, setExpYearInput] = useState<string>(
     () => expirations[0]?.value?.slice(0, 4) ?? String(new Date().getFullYear())
@@ -487,30 +637,371 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
     return () => clearInterval(id);
   }, [scanning, scanDepth]);
 
-  const hasResults = OTM_LEVELS.some((l) => (resultsByOtmPct[l] ?? []).length > 0);
+  const hasResults = Object.values(resultsByOtmPct).some((rows) => rows.length > 0);
+
+  const outcomeBandLevels = useMemo(() => {
+    if (outcomeOtmLayout === "range") {
+      return (resultsByOtmPct[CUSTOM_OTM_KEY] ?? []).length > 0 ? [CUSTOM_OTM_KEY] : [];
+    }
+    return OTM_LEVELS.filter((l) => (resultsByOtmPct[l] ?? []).length > 0);
+  }, [resultsByOtmPct, outcomeOtmLayout]);
+
+  const bandLevelsForDisplay = useMemo(() => {
+    if (scanning) {
+      return otmLayout === "range" ? [CUSTOM_OTM_KEY] : [...OTM_LEVELS];
+    }
+    return outcomeBandLevels;
+  }, [scanning, otmLayout, outcomeBandLevels]);
+
+  const rangeForBandLabels =
+    (scanning ? otmLayout : outcomeOtmLayout) === "range"
+      ? scanning
+        ? { min: otmPctMin, max: otmPctMax }
+        : outcomeOtmRange
+      : null;
 
   const tableQuotePrimary = outcomePositionSide === "buy" ? "Ask" : "Bid";
   const tableQuoteSecondary = outcomePositionSide === "buy" ? "Bid" : "Ask";
   const tableAnnLabel = outcomePositionSide === "buy" ? "Ann. debit %" : "Ann. yield";
   const tablePremLabel = outcomePositionSide === "buy" ? "Debit" : "Premium";
+  const tablePeriodLabel = outcomePositionSide === "buy" ? "Period debit %" : "Period yield";
+
+  const cycleTableSort = useCallback((key: ScreenerTableSortKey) => {
+    setTableSort((prev) => {
+      if (prev.phase === "none" || prev.key !== key) return { phase: "asc", key };
+      if (prev.phase === "asc") return { phase: "desc", key };
+      return { phase: "none" };
+    });
+  }, []);
+
+  const allLeaderboardCandidates = useMemo(() => {
+    const out: RankedOption[] = [];
+    for (const rows of Object.values(resultsByOtmPct)) out.push(...rows);
+    return out;
+  }, [resultsByOtmPct]);
+
+  const leaderboardRows = useMemo(() => {
+    let arr = [...allLeaderboardCandidates];
+    if (tableSort.phase === "none") {
+      arr.sort((a, b) => periodYieldFromRow(b, lastScanDte) - periodYieldFromRow(a, lastScanDte));
+    } else {
+      arr = sortScreenerRows(arr, tableSort, lastScanDte);
+    }
+    return arr.slice(0, 5);
+  }, [allLeaderboardCandidates, tableSort, lastScanDte]);
+
+  const sortBucketRows = useCallback(
+    (rows: RankedOption[]) => sortScreenerRows(rows, tableSort, lastScanDte),
+    [tableSort, lastScanDte],
+  );
+
+  const renderScreenerResultRows = (
+    rows: RankedOption[],
+    copyKeyPrefix: string,
+    rankOverride?: (index: number) => number,
+  ) =>
+    rows.map((r, rowIdx) => {
+      const copyKey = `${copyKeyPrefix}-${r.ticker}-${r.strike}`;
+      const displayRank = rankOverride ? rankOverride(rowIdx) : r.rank;
+      return (
+        <tr key={`${copyKeyPrefix}-${r.ticker}-${r.strike}-${r.otmPct}`} style={{ borderBottom: `1px solid ${t.colors.border}` }}>
+          <td
+            style={{
+              ...tdStyle,
+              fontWeight: 600,
+              color:
+                displayRank === 1 ? rankingColors.gold :
+                displayRank === 2 ? rankingColors.silver :
+                displayRank === 3 ? rankingColors.bronze :
+                t.colors.text,
+            }}
+          >
+            #{displayRank}
+          </td>
+          <td style={{ ...tdStyle, fontWeight: 600 }}>
+            {r.ticker}
+            {r.liquidityFlags && r.liquidityFlags.length > 0 && (
+              <span style={{ display: "block", fontSize: "0.65rem", color: t.colors.textMuted, fontWeight: 500, marginTop: 2 }}>
+                {r.liquidityFlags.includes("wide_spread") ? "Wide spread" : ""}
+                {r.liquidityFlags.includes("wide_spread") && r.liquidityFlags.includes("low_oi") ? " · " : ""}
+                {r.liquidityFlags.includes("low_oi") ? "Low OI" : ""}
+              </span>
+            )}
+          </td>
+          <td style={{ ...tdStyle, maxWidth: 180 }}>
+            <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {r.company}
+            </div>
+            {copyKeyPrefix === "leaderboard" && (
+              <span style={{ display: "block", fontSize: "0.68rem", color: t.colors.textMuted, fontWeight: 500 }}>
+                {formatOtmBandLabel(r.otmPct, outcomeOtmRange).headline}
+              </span>
+            )}
+          </td>
+          <td style={tdNumStyle}>
+            {formatStrikePrice(r.currentPrice)}
+            <span
+              style={{
+                display: "block",
+                fontSize: "0.7rem",
+                fontWeight: 500,
+                color:
+                  r.oneMonthPerfPct == null
+                    ? t.colors.textMuted
+                    : r.oneMonthPerfPct >= 0
+                      ? t.colors.success
+                      : t.colors.danger,
+              }}
+            >
+              1M {formatPct(r.oneMonthPerfPct)}
+            </span>
+          </td>
+          <td style={tdNumStyle}>
+            {formatStrikePrice(r.strike)}
+            {r.actualOtmPct != null && (
+              <span style={{ display: "block", fontSize: "0.7rem", color: t.colors.textMuted, fontWeight: 500 }}>
+                {r.actualOtmPct.toFixed(1)}% OTM
+              </span>
+            )}
+          </td>
+          <td style={{
+            ...tdNumStyle,
+            color: r.delta == null
+              ? t.colors.textMuted
+              : outcomePositionSide === "buy"
+                ? r.delta >= 0.30 ? t.colors.success : r.delta >= 0.15 ? t.colors.text : t.colors.danger
+                : r.delta <= 0.15 ? t.colors.success : r.delta <= 0.30 ? t.colors.text : t.colors.danger,
+          }}>
+            {r.delta == null ? "—" : `${(r.delta * 100).toFixed(0)}%`}
+          </td>
+          <td style={tdNumStyle}>
+            <span>
+              {formatVolPct(r.impliedVolPct ?? null)}
+              {r.realizedVol20dPct != null && (
+                <span style={{ color: t.colors.textMuted, fontWeight: 400 }}>
+                  {" / "}{formatVolPct(r.realizedVol20dPct)}
+                </span>
+              )}
+            </span>
+            {r.impliedVolPct != null && r.realizedVol20dPct != null && r.realizedVol20dPct > 0 && (() => {
+              const ratio = r.impliedVolPct / r.realizedVol20dPct;
+              const isRich = outcomePositionSide === "write" ? ratio >= 1.0 : ratio < 1.0;
+              const color = isRich
+                ? t.colors.success
+                : ratio < 0.85
+                  ? t.colors.danger
+                  : t.colors.textMuted;
+              return (
+                <span style={{ display: "block", fontSize: "0.7rem", fontWeight: 600, color }}>
+                  {ratio.toFixed(2)}× IV/RV
+                </span>
+              );
+            })()}
+          </td>
+          <td style={tdNumStyle}>
+            {r.skewPct == null ? (
+              <span style={{ color: t.colors.textMuted }}>—</span>
+            ) : (() => {
+              const skew = r.skewPct;
+              const isWrite = outcomePositionSide === "write";
+              const isPutSide = optionType === "puts";
+              const isGood = isWrite ? (isPutSide ? skew > 0 : skew < 0) : (!isPutSide ? skew < 0 : skew > 0);
+              const color = Math.abs(skew) < 2
+                ? t.colors.textMuted
+                : isGood ? t.colors.success : t.colors.danger;
+              return (
+                <span style={{ fontWeight: 600, color }}>
+                  {skew > 0 ? "+" : ""}{skew.toFixed(1)}
+                </span>
+              );
+            })()}
+          </td>
+          <td style={tdNumStyle}>
+            {(() => {
+              const bid = r.bid;
+              const ask = r.ask ?? r.bid;
+              const primary = outcomePositionSide === "buy" ? ask : bid;
+              const secondary = outcomePositionSide === "buy" ? bid : ask;
+              return (
+                <>
+                  <span style={{ fontWeight: 700 }}>${primary.toFixed(2)}</span>
+                  <span
+                    style={{
+                      display: "block",
+                      fontSize: "0.72rem",
+                      color: t.colors.textMuted,
+                      fontWeight: 500,
+                    }}
+                  >
+                    {tableQuoteSecondary} ${secondary.toFixed(2)}
+                  </span>
+                </>
+              );
+            })()}
+          </td>
+          <td
+            style={{
+              ...tdNumStyle,
+              color: outcomePositionSide === "buy" ? t.colors.text : t.colors.success,
+            }}
+          >
+            {periodYieldFromRow(r, lastScanDte).toFixed(2)}%
+          </td>
+          <td
+            style={{
+              ...tdNumStyle,
+              color: outcomePositionSide === "buy" ? t.colors.text : t.colors.success,
+            }}
+          >
+            {r.annYieldPct.toFixed(2)}%
+          </td>
+          <td style={tdNumStyle}>{formatPremium(r.premiumPerContract)}</td>
+          <td style={{ ...tdStyle, textAlign: "center" }}>
+            <button
+              type="button"
+              onClick={() => {
+                void navigator.clipboard.writeText(r.schwabSymbol);
+                setLastCopiedOpportunityKey(copyKey);
+                window.setTimeout(
+                  () => setLastCopiedOpportunityKey((prev) => prev === copyKey ? null : prev),
+                  1200
+                );
+              }}
+              title={`Copy order symbol: ${r.schwabSymbol}`}
+              aria-label={`Copy order symbol: ${r.schwabSymbol}`}
+              className="options-optimizer-copy-symbol"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 34,
+                height: 34,
+                padding: 0,
+                border: "none",
+                background: "none",
+                cursor: "pointer",
+                color: t.colors.textMuted,
+                borderRadius: t.radius.sm,
+                position: "relative",
+              }}
+            >
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: 22, position: "absolute", opacity: lastCopiedOpportunityKey === copyKey ? 0 : 1, transition: "opacity 0.2s ease", pointerEvents: "none" }}
+                aria-hidden
+              >
+                content_copy
+              </span>
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: 22, position: "absolute", opacity: lastCopiedOpportunityKey === copyKey ? 1 : 0, transition: "opacity 0.2s ease", pointerEvents: "none" }}
+                aria-hidden
+              >
+                check
+              </span>
+            </button>
+          </td>
+        </tr>
+      );
+    });
+
+  const renderScreenerTableHead = (options?: { leftRadius?: boolean; rightRadius?: boolean }) => (
+    <thead>
+      <tr>
+        <th style={{ ...thStyle, ...(options?.leftRadius ? { borderTopLeftRadius: t.radius.md } : {}) }}>Rank</th>
+        <th style={thStyle}>Ticker</th>
+        <th style={thStyle}>Company</th>
+        <th style={thNumStyle}>Px</th>
+        <th style={thNumStyle}>Strike</th>
+        <th style={thNumStyle}>
+          <HelpTooltip
+            theme={t}
+            text={outcomePositionSide === "buy"
+              ? "Probability of the option finishing in-the-money (expiring with value). Derived from delta. Higher = more likely to profit for long buyers. Green ≥30%, red ≤15%."
+              : "Probability of the option finishing in-the-money (being assigned on a short). Derived from delta. Lower = safer for premium sellers. Green ≤15%, red >30%."}
+          >
+            <span style={{ cursor: "help" }}>Δ Prob</span>
+          </HelpTooltip>
+        </th>
+        <th style={thNumStyle}>
+          <HelpTooltip
+            theme={t}
+            text={outcomePositionSide === "buy"
+              ? "IV / RV ratio — compares what the option market implies will happen (IV) to what the stock has actually done over the past 20 trading days (RV). For buying: below 1.0 (green) means options are cheap relative to real movement — you're getting more bang for your buck. Above 1.0 (red) means options are expensive. The ratio is a key ranking signal alongside raw IV."
+              : "IV / RV ratio — compares what the option market implies will happen (IV) to what the stock has actually done over the past 20 trading days (RV). For selling: above 1.0 (green) means options are rich relative to real movement — you collect more premium than the stock's actual risk justifies. This is the core 'free lunch' signal. Below 0.90 (red) means the stock is moving more than options imply — avoid writing these."}
+          >
+            <span style={{ cursor: "help" }}>IV / RV ratio</span>
+          </HelpTooltip>
+        </th>
+        <th style={thNumStyle}>
+          <HelpTooltip
+            theme={t}
+            text={outcomePositionSide === "buy"
+              ? "Skew — measures whether puts or calls are more expensive. Calculated as (avg IV of OTM puts) minus (avg IV of OTM calls), 5–20% range. Positive = puts pricier (market fears a drop). Negative = calls pricier (market expects a rally). For buying calls: negative skew is good — calls are relatively cheap. For buying puts: positive skew means you're paying a premium for downside protection."
+              : "Skew — measures whether puts or calls are more expensive. Calculated as (avg IV of OTM puts) minus (avg IV of OTM calls), 5–20% range. Positive = puts pricier (market fears a drop) — great for put writes since you collect richer premium. Negative = calls pricier or near-neutral — typical for most stocks, fine for call writes. Small values near 0pp mean puts and calls are priced similarly."}
+          >
+            <span style={{ cursor: "help" }}>Skew</span>
+          </HelpTooltip>
+        </th>
+        <th style={thNumStyle}>{tableQuotePrimary}</th>
+        <SortableScreenerTh
+          theme={t}
+          sortKey="periodYield"
+          tableSort={tableSort}
+          onCycle={cycleTableSort}
+          label={tablePeriodLabel}
+          labelHelp={
+            outcomePositionSide === "buy"
+              ? "Debit as % of strike notional for this expiry (not annualized). Click to sort."
+              : "Premium as % of strike notional if held to expiration (not annualized). Click to sort."
+          }
+        />
+        <SortableScreenerTh
+          theme={t}
+          sortKey="annYield"
+          tableSort={tableSort}
+          onCycle={cycleTableSort}
+          label={tableAnnLabel}
+          labelHelp={
+            outcomePositionSide === "buy"
+              ? "Annualized debit as % of strike (× 365 ÷ DTE). Click to sort."
+              : "Annualized yield as % of strike (× 365 ÷ DTE). Click to sort."
+          }
+        />
+        <th style={thNumStyle}>{tablePremLabel}</th>
+        <th style={{ ...thStyle, textAlign: "center", ...(options?.rightRadius ? { borderTopRightRadius: t.radius.md } : {}) }}>Action</th>
+      </tr>
+    </thead>
+  );
 
   async function onScan() {
     if (!expiration) return;
+    if (otmLayout === "range" && otmPctMax <= otmPctMin) {
+      setScanError("Max OTM % must be greater than Min OTM %.");
+      return;
+    }
     setScanError(null);
     setWarnings([]);
     setResultsByOtmPct({});
+    setTableSort({ phase: "none" });
     setScanning(true);
     try {
       const payload: Record<string, unknown> = {
         optionType,
         positionSide,
         expiration,
-        otmLevels: Array.from(OTM_LEVELS),
+        otmLayout,
         topN: 10,
         scanDepth,
         liquidityMode,
         monthlyOnly,
       };
+      if (otmLayout === "range") {
+        payload.otmPctMin = otmPctMin;
+        payload.otmPctMax = otmPctMax;
+      } else {
+        payload.otmLevels = Array.from(OTM_LEVELS);
+      }
       if (isFullUniverse) payload.minMarketCap = minMarketCap;
       if (activeBucket.symbols.length > 0) {
         payload.universeSymbols = activeBucket.symbols;
@@ -534,11 +1025,20 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
       setWarnings(json.warnings ?? []);
       setScanError(json.message ? String(json.message) : null);
       setResultsByOtmPct(json.resultsByOtmPct ?? {});
+      setLastScanDte(typeof json.dte === "number" && Number.isFinite(json.dte) ? json.dte : null);
       if (res.ok) {
-        const hasAnyOtm = OTM_LEVELS.some((l) => (json.resultsByOtmPct?.[l] ?? []).length > 0);
-        if (hasAnyOtm) {
+        const hasAny = Object.values(json.resultsByOtmPct ?? {}).some((rows) => rows.length > 0);
+        if (hasAny) {
           setLastScanAt(new Date());
           setOutcomePositionSide(positionSide);
+          setOutcomeOtmLayout(json.otmLayout === "range" ? "range" : otmLayout);
+          setOutcomeOtmRange(
+            json.otmLayout === "range" && json.otmRange
+              ? { min: json.otmRange.min, max: json.otmRange.max }
+              : otmLayout === "range"
+                ? { min: otmPctMin, max: otmPctMax }
+                : null
+          );
         }
       }
     } catch (err: any) {
@@ -682,11 +1182,24 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                 <li><strong>Gamma penalty</strong> (write only) — mild discount for high-gamma contracts near the strike.</li>
               </ul>
 
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>OTM filter</p>
+              <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
+                <li><strong>Risk bands</strong> — four tables at 5–9%, 10–14%, 15–19%, and 20–30% OTM. Each ticker appears in one band only.</li>
+                <li><strong>Custom range</strong> — set Min/Max OTM % (like Options Optimizer) and get one ranked table of the best ideas within that strike distance.</li>
+              </ul>
+
+              <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Results views</p>
+              <ul style={{ margin: 0, marginBottom: t.spacing(3), paddingLeft: t.spacing(5) }}>
+                <li><strong>Risk bands</strong> — top ideas grouped by OTM level (5–9%, 10–14%, etc.), ranked by composite score within each band.</li>
+                <li><strong>Yield leaderboard</strong> — flat top 5 across all bands, sorted by period yield (best for &ldquo;give me the highest-yield names&rdquo; requests).</li>
+              </ul>
+
               <p style={{ fontWeight: 700, marginBottom: t.spacing(1), color: t.colors.primary }}>Key columns</p>
               <ul style={{ margin: 0, marginBottom: t.spacing(2), paddingLeft: t.spacing(5) }}>
                 <li><strong>Δ Prob</strong> — |delta| as proxy for probability ITM. Write: green ≤15% (safe), red &gt;30%. Buy: green ≥30% (likely to profit), red ≤15%.</li>
                 <li><strong>IV / RV column</strong> — shows <em>IV / RV 20d</em> on one line (implied vol / annualised ~20-day realized vol), with the IV/RV ratio badge below. The ratio is the core signal for both strategies.</li>
-                <li><strong>Ann. yield / Ann. debit %</strong> — annualised credit (write) or debit (buy) as % of strike.</li>
+                <li><strong>Period yield / Period debit %</strong> — premium (or debit) as % of strike for this expiry only — the number to use when someone asks &ldquo;yield over the next ~3 months.&rdquo;</li>
+                <li><strong>Ann. yield / Ann. debit %</strong> — same figure annualized (× 365 ÷ DTE). Click column headers to sort ascending, descending, or back to default rank.</li>
                 <li><strong>Premium / Debit</strong> — dollars per contract (100 shares). Negative = debit for buys.</li>
                 <li><strong>Action</strong> — copies the Schwab-formatted order symbol to clipboard.</li>
               </ul>
@@ -803,6 +1316,90 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* OTM filter: risk bands vs custom range */}
+          <div>
+            <span style={labelStyle}>
+              <HelpTooltip
+                theme={t}
+                text="Risk bands splits results into 5–9%, 10–14%, 15–19%, and 20–30% OTM tables. Custom range scans one min–max OTM band (like Options Optimizer) and returns the best ideas within that range."
+              >
+                <span style={{ cursor: "help" }}>OTM filter</span>
+              </HelpTooltip>
+            </span>
+            <div style={{ display: "flex", gap: t.spacing(2), marginBottom: otmLayout === "range" ? t.spacing(2) : 0 }}>
+              {(
+                [
+                  { v: "bands" as const, label: "Risk bands" },
+                  { v: "range" as const, label: "Custom range" },
+                ] as const
+              ).map(({ v, label }) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setOtmLayout(v)}
+                  aria-pressed={otmLayout === v}
+                  style={{
+                    flex: 1,
+                    padding: `${t.spacing(2)} ${t.spacing(2)}`,
+                    borderRadius: t.radius.md,
+                    border: `1px solid ${otmLayout === v ? t.colors.primary : t.colors.border}`,
+                    backgroundColor: otmLayout === v ? `${t.colors.primary}18` : t.colors.background,
+                    color: otmLayout === v ? t.colors.primary : t.colors.text,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    fontSize: "0.78rem",
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {otmLayout === "range" && (
+              <div style={{ display: "flex", gap: t.spacing(2), alignItems: "flex-end" }}>
+                <div style={{ flex: 1 }}>
+                  <HelpTooltip
+                    theme={t}
+                    text="Minimum OTM distance as a percent of current price. Only strikes at or beyond this level are included."
+                  >
+                    <label style={{ ...labelStyle, display: "block" }}>Min OTM %</label>
+                  </HelpTooltip>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    style={inputStyle}
+                    value={otmPctMin > 0 ? `${otmPctMin}%` : ""}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(/%/g, "");
+                      setOtmPctMin(Number(raw) || 0);
+                    }}
+                    placeholder="5%"
+                    aria-label="Minimum OTM percent"
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <HelpTooltip
+                    theme={t}
+                    text="Maximum OTM distance as a percent of current price. Only strikes within this level are included."
+                  >
+                    <label style={{ ...labelStyle, display: "block" }}>Max OTM %</label>
+                  </HelpTooltip>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    style={inputStyle}
+                    value={otmPctMax > 0 ? `${otmPctMax}%` : ""}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(/%/g, "");
+                      setOtmPctMax(Number(raw) || 0);
+                    }}
+                    placeholder="15%"
+                    aria-label="Maximum OTM percent"
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Target Expiration */}
@@ -1079,8 +1676,62 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
           </div>
         )}
 
+        {hasResults && (
+          <div
+            className="page-card"
+            style={{
+              ...cardStyle,
+              marginBottom: t.spacing(4),
+              padding: t.spacing(3),
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: t.spacing(3),
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              <div style={{ fontSize: "0.72rem", fontWeight: 700, color: t.colors.textMuted, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: t.spacing(1) }}>
+                Results view
+              </div>
+              <div style={{ display: "flex", gap: t.spacing(2) }}>
+                {(
+                  [
+                    { v: "bands" as const, label: "Risk bands" },
+                    { v: "leaderboard" as const, label: "Yield leaderboard" },
+                  ] as const
+                ).map(({ v, label }) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setResultsView(v)}
+                    aria-pressed={resultsView === v}
+                    style={{
+                      padding: `${t.spacing(2)} ${t.spacing(3)}`,
+                      borderRadius: t.radius.md,
+                      border: `1px solid ${resultsView === v ? t.colors.primary : t.colors.border}`,
+                      backgroundColor: resultsView === v ? `${t.colors.primary}18` : t.colors.background,
+                      color: resultsView === v ? t.colors.primary : t.colors.text,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      fontSize: "0.82rem",
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {resultsView === "leaderboard" && lastScanDte != null && (
+              <span style={{ fontSize: "0.78rem", color: t.colors.textMuted }}>
+                Top 5 by period yield · {lastScanDte} DTE
+              </span>
+            )}
+          </div>
+        )}
+
         {/* ── Top Picks summary card ── */}
-        {hasResults && (() => {
+        {hasResults && resultsView === "bands" && outcomeOtmLayout === "bands" && (() => {
           const picks = OTM_LEVELS.map((lvl) => ({ lvl, row: resultsByOtmPct[lvl]?.[0] ?? null })).filter((p) => p.row != null) as Array<{ lvl: number; row: RankedOption }>;
           if (picks.length === 0) return null;
 
@@ -1251,15 +1902,16 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
           );
         })()}
 
-        {OTM_LEVELS.map((otmPct) => {
-          const arr = resultsByOtmPct[otmPct] ?? [];
+        {resultsView === "bands" && bandLevelsForDisplay.map((otmPct) => {
+          const arr = sortBucketRows(resultsByOtmPct[otmPct] ?? []);
+          const bandLabel = formatOtmBandLabel(otmPct, rangeForBandLabels);
           if (!hasResults && !scanning) return null;
           return (
             <div key={otmPct} className="page-card" style={cardStyle}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: t.spacing(3) }}>
                 <div style={{ display: "flex", alignItems: "baseline", gap: t.spacing(3) }}>
-                  <h3 style={{ ...sectionTitleStyle, marginBottom: 0 }}>{otmLabels[otmPct].headline}</h3>
-                  <span style={{ fontSize: "0.8rem", color: t.colors.textMuted }}>{otmLabels[otmPct].detail}</span>
+                  <h3 style={{ ...sectionTitleStyle, marginBottom: 0 }}>{bandLabel.headline}</h3>
+                  <span style={{ fontSize: "0.8rem", color: t.colors.textMuted }}>{bandLabel.detail}</span>
                 </div>
                 {arr.length > 0 && (() => {
                   const bucketKey = `bucket-${otmPct}`;
@@ -1270,7 +1922,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                       title="Copy table to clipboard (Excel format)"
                       aria-label="Copy table to clipboard"
                       onClick={() => {
-                        void navigator.clipboard.writeText(buildBucketTsv(arr, outcomePositionSide));
+                        void navigator.clipboard.writeText(buildBucketTsv(arr, outcomePositionSide, lastScanDte));
                         setLastCopiedBucketKey(bucketKey);
                         window.setTimeout(
                           () => setLastCopiedBucketKey((p) => p === bucketKey ? null : p),
@@ -1309,50 +1961,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
               ) : (
                 <div style={tableWrapStyle}>
                   <table style={tableStyle}>
-                    <thead>
-                      <tr>
-                        <th style={{ ...thStyle, borderTopLeftRadius: t.radius.md }}>Rank</th>
-                        <th style={thStyle}>Ticker</th>
-                        <th style={thStyle}>Company</th>
-                        <th style={thNumStyle}>1M Return</th>
-                        <th style={thNumStyle}>Px</th>
-                        <th style={thNumStyle}>Strike</th>
-                        <th style={thNumStyle}>
-                          <HelpTooltip
-                            theme={t}
-                            text={outcomePositionSide === "buy"
-                              ? "Probability of the option finishing in-the-money (expiring with value). Derived from delta. Higher = more likely to profit for long buyers. Green ≥30%, red ≤15%."
-                              : "Probability of the option finishing in-the-money (being assigned on a short). Derived from delta. Lower = safer for premium sellers. Green ≤15%, red >30%."}
-                          >
-                            <span style={{ cursor: "help" }}>Δ Prob</span>
-                          </HelpTooltip>
-                        </th>
-                        <th style={thNumStyle}>
-                          <HelpTooltip
-                            theme={t}
-                            text={outcomePositionSide === "buy"
-                              ? "IV / RV ratio — compares what the option market implies will happen (IV) to what the stock has actually done over the past 20 trading days (RV). For buying: below 1.0 (green) means options are cheap relative to real movement — you're getting more bang for your buck. Above 1.0 (red) means options are expensive. The ratio is a key ranking signal alongside raw IV."
-                              : "IV / RV ratio — compares what the option market implies will happen (IV) to what the stock has actually done over the past 20 trading days (RV). For selling: above 1.0 (green) means options are rich relative to real movement — you collect more premium than the stock's actual risk justifies. This is the core 'free lunch' signal. Below 0.90 (red) means the stock is moving more than options imply — avoid writing these."}
-                          >
-                            <span style={{ cursor: "help" }}>IV / RV ratio</span>
-                          </HelpTooltip>
-                        </th>
-                        <th style={thNumStyle}>
-                          <HelpTooltip
-                            theme={t}
-                            text={outcomePositionSide === "buy"
-                              ? "Skew — measures whether puts or calls are more expensive. Calculated as (avg IV of OTM puts) minus (avg IV of OTM calls), 5–20% range. Positive = puts pricier (market fears a drop). Negative = calls pricier (market expects a rally). For buying calls: negative skew is good — calls are relatively cheap. For buying puts: positive skew means you're paying a premium for downside protection."
-                              : "Skew — measures whether puts or calls are more expensive. Calculated as (avg IV of OTM puts) minus (avg IV of OTM calls), 5–20% range. Positive = puts pricier (market fears a drop) — great for put writes since you collect richer premium. Negative = calls pricier or near-neutral — typical for most stocks, fine for call writes. Small values near 0pp mean puts and calls are priced similarly."}
-                          >
-                            <span style={{ cursor: "help" }}>Skew</span>
-                          </HelpTooltip>
-                        </th>
-                        <th style={thNumStyle}>{tableQuotePrimary}</th>
-                        <th style={thNumStyle}>{tableAnnLabel}</th>
-                        <th style={thNumStyle}>{tablePremLabel}</th>
-                        <th style={{ ...thStyle, textAlign: "center", borderTopRightRadius: t.radius.md }}>Action</th>
-                      </tr>
-                    </thead>
+                    {renderScreenerTableHead({ leftRadius: true, rightRadius: true })}
                     <tbody>
                       {arr.length === 0 ? (
                         <tr>
@@ -1361,199 +1970,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                           </td>
                         </tr>
                       ) : (
-                        arr.map((r) => {
-                          const copyKey = `${otmPct}-${r.ticker}-${r.strike}`;
-                          return (
-                            <tr key={`${r.ticker}-${r.strike}-${r.otmPct}`} style={{ borderBottom: `1px solid ${t.colors.border}` }}>
-                              <td
-                                style={{
-                                  ...tdStyle,
-                                  fontWeight: 600,
-                                  color:
-                                    r.rank === 1 ? rankingColors.gold :
-                                    r.rank === 2 ? rankingColors.silver :
-                                    r.rank === 3 ? rankingColors.bronze :
-                                    t.colors.text,
-                                }}
-                              >
-                                #{r.rank}
-                              </td>
-                              <td style={{ ...tdStyle, fontWeight: 600 }}>
-                                {r.ticker}
-                                {r.liquidityFlags && r.liquidityFlags.length > 0 && (
-                                  <span style={{ display: "block", fontSize: "0.65rem", color: t.colors.textMuted, fontWeight: 500, marginTop: 2 }}>
-                                    {r.liquidityFlags.includes("wide_spread") ? "Wide spread" : ""}
-                                    {r.liquidityFlags.includes("wide_spread") && r.liquidityFlags.includes("low_oi") ? " · " : ""}
-                                    {r.liquidityFlags.includes("low_oi") ? "Low OI" : ""}
-                                  </span>
-                                )}
-                              </td>
-                              <td style={{ ...tdStyle, maxWidth: 180 }}>
-                                <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                  {r.company}
-                                </div>
-                              </td>
-                              <td
-                                style={{
-                                  ...tdNumStyle,
-                                  color: r.oneMonthPerfPct == null
-                                    ? t.colors.textMuted
-                                    : r.oneMonthPerfPct >= 0
-                                      ? t.colors.success
-                                      : t.colors.danger,
-                                }}
-                              >
-                                {formatPct(r.oneMonthPerfPct)}
-                              </td>
-                              <td style={tdNumStyle}>{formatStrikePrice(r.currentPrice)}</td>
-                              <td style={tdNumStyle}>
-                                {formatStrikePrice(r.strike)}
-                                {r.actualOtmPct != null && (
-                                  <span style={{ display: "block", fontSize: "0.7rem", color: t.colors.textMuted, fontWeight: 500 }}>
-                                    {r.actualOtmPct.toFixed(1)}% OTM
-                                  </span>
-                                )}
-                              </td>
-                              {/* Δ Prob — assignment probability from delta */}
-                              <td style={{
-                                ...tdNumStyle,
-                                color: r.delta == null
-                                  ? t.colors.textMuted
-                                  : outcomePositionSide === "buy"
-                                    // For buyers: higher delta = more likely to profit
-                                    ? r.delta >= 0.30 ? t.colors.success : r.delta >= 0.15 ? t.colors.text : t.colors.danger
-                                    // For writers: lower delta = safer (less assignment risk)
-                                    : r.delta <= 0.15 ? t.colors.success : r.delta <= 0.30 ? t.colors.text : t.colors.danger,
-                              }}>
-                                {r.delta == null ? "—" : `${(r.delta * 100).toFixed(0)}%`}
-                              </td>
-                              {/* IV / RV on one line + IV/RV ratio badge below */}
-                              <td style={tdNumStyle}>
-                                <span>
-                                  {formatVolPct(r.impliedVolPct ?? null)}
-                                  {r.realizedVol20dPct != null && (
-                                    <span style={{ color: t.colors.textMuted, fontWeight: 400 }}>
-                                      {" / "}{formatVolPct(r.realizedVol20dPct)}
-                                    </span>
-                                  )}
-                                </span>
-                                {r.impliedVolPct != null && r.realizedVol20dPct != null && r.realizedVol20dPct > 0 && (() => {
-                                  const ratio = r.impliedVolPct / r.realizedVol20dPct;
-                                  const isRich = outcomePositionSide === "write" ? ratio >= 1.0 : ratio < 1.0;
-                                  const color = isRich
-                                    ? t.colors.success
-                                    : ratio < 0.85
-                                      ? t.colors.danger
-                                      : t.colors.textMuted;
-                                  return (
-                                    <span style={{ display: "block", fontSize: "0.7rem", fontWeight: 600, color }}>
-                                      {ratio.toFixed(2)}× IV/RV
-                                    </span>
-                                  );
-                                })()}
-                              </td>
-                              {/* Put-call skew */}
-                              <td style={tdNumStyle}>
-                                {r.skewPct == null ? (
-                                  <span style={{ color: t.colors.textMuted }}>—</span>
-                                ) : (() => {
-                                  const skew = r.skewPct;
-                                  // Positive skew = puts pricier; green for put writers, neutral for calls
-                                  // For put writers and call buyers: positive skew is good.
-                                  // For call writers and put buyers: negative skew is good.
-                                  const isWrite = outcomePositionSide === "write";
-                                  const isPutSide = optionType === "puts";
-                                  const isGood = isWrite ? (isPutSide ? skew > 0 : skew < 0) : (!isPutSide ? skew < 0 : skew > 0);
-                                  const color = Math.abs(skew) < 2
-                                    ? t.colors.textMuted
-                                    : isGood ? t.colors.success : t.colors.danger;
-                                  return (
-                                    <span style={{ fontWeight: 600, color }}>
-                                      {skew > 0 ? "+" : ""}{skew.toFixed(1)}
-                                    </span>
-                                  );
-                                })()}
-                              </td>
-                              <td style={tdNumStyle}>
-                                {(() => {
-                                  const bid = r.bid;
-                                  const ask = r.ask ?? r.bid;
-                                  const primary = outcomePositionSide === "buy" ? ask : bid;
-                                  const secondary = outcomePositionSide === "buy" ? bid : ask;
-                                  return (
-                                    <>
-                                      <span style={{ fontWeight: 700 }}>${primary.toFixed(2)}</span>
-                                      <span
-                                        style={{
-                                          display: "block",
-                                          fontSize: "0.72rem",
-                                          color: t.colors.textMuted,
-                                          fontWeight: 500,
-                                        }}
-                                      >
-                                        {tableQuoteSecondary} ${secondary.toFixed(2)}
-                                      </span>
-                                    </>
-                                  );
-                                })()}
-                              </td>
-                              <td
-                                style={{
-                                  ...tdNumStyle,
-                                  color: outcomePositionSide === "buy" ? t.colors.text : t.colors.success,
-                                }}
-                              >
-                                {r.annYieldPct.toFixed(2)}%
-                              </td>
-                              <td style={tdNumStyle}>{formatPremium(r.premiumPerContract)}</td>
-                              <td style={{ ...tdStyle, textAlign: "center" }}>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    void navigator.clipboard.writeText(r.schwabSymbol);
-                                    setLastCopiedOpportunityKey(copyKey);
-                                    window.setTimeout(
-                                      () => setLastCopiedOpportunityKey((prev) => prev === copyKey ? null : prev),
-                                      1200
-                                    );
-                                  }}
-                                  title={`Copy order symbol: ${r.schwabSymbol}`}
-                                  aria-label={`Copy order symbol: ${r.schwabSymbol}`}
-                                  className="options-optimizer-copy-symbol"
-                                  style={{
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    width: 34,
-                                    height: 34,
-                                    padding: 0,
-                                    border: "none",
-                                    background: "none",
-                                    cursor: "pointer",
-                                    color: t.colors.textMuted,
-                                    borderRadius: t.radius.sm,
-                                    position: "relative",
-                                  }}
-                                >
-                                  <span
-                                    className="material-symbols-outlined"
-                                    style={{ fontSize: 22, position: "absolute", opacity: lastCopiedOpportunityKey === copyKey ? 0 : 1, transition: "opacity 0.2s ease", pointerEvents: "none" }}
-                                    aria-hidden
-                                  >
-                                    content_copy
-                                  </span>
-                                  <span
-                                    className="material-symbols-outlined"
-                                    style={{ fontSize: 22, position: "absolute", opacity: lastCopiedOpportunityKey === copyKey ? 1 : 0, transition: "opacity 0.2s ease", pointerEvents: "none" }}
-                                    aria-hidden
-                                  >
-                                    check
-                                  </span>
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })
+                        renderScreenerResultRows(arr, `bucket-${otmPct}`)
                       )}
                     </tbody>
                   </table>
@@ -1562,6 +1979,82 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
             </div>
           );
         })}
+
+        {hasResults && resultsView === "leaderboard" && (
+          <div className="page-card" style={cardStyle}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: t.spacing(3) }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: t.spacing(3), flexWrap: "wrap" }}>
+                <h3 style={{ ...sectionTitleStyle, marginBottom: 0 }}>Top 5 Yield Leaderboard</h3>
+                <span style={{ fontSize: "0.8rem", color: t.colors.textMuted }}>
+                  Highest period yield across all OTM bands — one row per ticker
+                  {lastScanDte != null ? ` · ${lastScanDte} DTE` : ""}
+                </span>
+              </div>
+              {leaderboardRows.length > 0 && (() => {
+                const bucketKey = "leaderboard";
+                const bucketCopied = lastCopiedBucketKey === bucketKey;
+                return (
+                  <button
+                    type="button"
+                    title="Copy table to clipboard (Excel format)"
+                    aria-label="Copy leaderboard to clipboard"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(buildBucketTsv(leaderboardRows, outcomePositionSide, lastScanDte));
+                      setLastCopiedBucketKey(bucketKey);
+                      window.setTimeout(
+                        () => setLastCopiedBucketKey((p) => p === bucketKey ? null : p),
+                        1500
+                      );
+                    }}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: t.spacing(1),
+                      padding: `${t.spacing(1)}px ${t.spacing(2)}px`,
+                      border: `1px solid ${bucketCopied ? t.colors.success : t.colors.border}`,
+                      borderRadius: t.radius.sm,
+                      background: bucketCopied ? `${t.colors.success}12` : "none",
+                      color: bucketCopied ? t.colors.success : t.colors.textMuted,
+                      fontSize: "0.78rem",
+                      fontWeight: 500,
+                      cursor: "pointer",
+                      transition: "color 0.15s, border-color 0.15s, background 0.15s",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <span className="material-symbols-outlined" style={{ fontSize: 15 }} aria-hidden>
+                      {bucketCopied ? "check" : "content_copy"}
+                    </span>
+                    {bucketCopied ? "Copied!" : "Copy table"}
+                  </button>
+                );
+              })()}
+            </div>
+
+            {scanning && leaderboardRows.length === 0 ? (
+              <div style={{ color: t.colors.textMuted, fontSize: "0.85rem", padding: t.spacing(2) }}>
+                Scanning…
+              </div>
+            ) : (
+              <div style={tableWrapStyle}>
+                <table style={tableStyle}>
+                  {renderScreenerTableHead({ leftRadius: true, rightRadius: true })}
+                  <tbody>
+                    {leaderboardRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={13} style={{ ...tdStyle, color: t.colors.textMuted }}>
+                          No results for this scan
+                        </td>
+                      </tr>
+                    ) : (
+                      renderScreenerResultRows(leaderboardRows, "leaderboard", (i) => i + 1)
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Footer */}
         {hasResults && (

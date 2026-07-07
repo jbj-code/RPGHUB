@@ -129,6 +129,8 @@ type RankedOption = {
   /** Bid when selling to open, ask when buying to open — used for yield / cost %. */
   limitPrice: number;
   annYieldPct: number;
+  /** Premium ÷ strike notional for this expiry (not annualized). */
+  periodYieldPct: number;
   premiumPerContract: number;
   /** Schwab implied vol when present (%), else null. */
   impliedVolPct: number | null;
@@ -354,6 +356,9 @@ async function fetchMarketCapsBatched(
 // that have liquid strikes well beyond 30% OTM.
 const OTM_BUCKETS = Array.from({ length: 35 }, (_, i) => ({ label: i + 5, min: i + 5, max: i + 6 }));
 
+/** Frontend key for custom min–max OTM range mode (single results table). */
+const CUSTOM_OTM_KEY = 0;
+
 /** Map a 1 % bucket label to the broad frontend section key (5 | 10 | 15 | 20). */
 function broadBucket(label: number): 5 | 10 | 15 | 20 {
   if (label >= 20) return 20;
@@ -374,6 +379,17 @@ function actualOtmMatchesBucket(actualOtmPct: number, broadKey: 5 | 10 | 15 | 20
     case 15: return actualOtmPct >= 15 - BUFFER && actualOtmPct < 20 + BUFFER;
     case 20: return actualOtmPct >= 20 - BUFFER && actualOtmPct < 42;
   }
+}
+
+function actualOtmMatchesRange(actualOtmPct: number, minPct: number, maxPct: number): boolean {
+  const BUFFER = 2;
+  return actualOtmPct >= minPct - BUFFER && actualOtmPct < maxPct + BUFFER;
+}
+
+function otmDistancePct(strike: number, spot: number, side: "C" | "P"): number {
+  return side === "C"
+    ? ((strike - spot) / spot) * 100
+    : ((spot - strike) / spot) * 100;
 }
 
 /** Returns every OTM strike in [minOtmPct, maxOtmPct) for the given side. */
@@ -464,12 +480,29 @@ export async function handler(req: any, res: any): Promise<void> {
     return;
   }
 
-  const _otmRaw = Array.isArray(body.otmLevels)
-    ? body.otmLevels
-        .map((n: any) => Number(n))
-        .filter((n: number) => Number.isFinite(n) && n >= 5) // 5% is the minimum meaningful OTM level
-    : [];
-  const otmLevels = _otmRaw.length > 0 ? _otmRaw : [5, 10, 15, 20];
+  const otmLayoutRaw = String(body.otmLayout ?? body.otmMode ?? "bands").toLowerCase();
+  const otmLayout: "bands" | "range" = otmLayoutRaw === "range" ? "range" : "bands";
+
+  let otmLevels: number[];
+  let otmRangeMin = 5;
+  let otmRangeMax = 15;
+
+  if (otmLayout === "range") {
+    otmRangeMin = clamp(Number(body.otmPctMin) || 5, 5, 39);
+    otmRangeMax = clamp(Number(body.otmPctMax) || 15, otmRangeMin + 0.5, 40);
+    if (otmRangeMax <= otmRangeMin) {
+      res.status(400).json({ error: "otmPctMax must be greater than otmPctMin." });
+      return;
+    }
+    otmLevels = [CUSTOM_OTM_KEY];
+  } else {
+    const _otmRaw = Array.isArray(body.otmLevels)
+      ? body.otmLevels
+          .map((n: any) => Number(n))
+          .filter((n: number) => Number.isFinite(n) && n >= 5) // 5% is the minimum meaningful OTM level
+      : [];
+    otmLevels = _otmRaw.length > 0 ? _otmRaw : [5, 10, 15, 20];
+  }
 
   const topN = Math.min(Math.max(1, Number(body.topN) || 5), 20);
   const minMarketCap = body.minMarketCap != null ? Number(body.minMarketCap) : null;
@@ -804,36 +837,47 @@ export async function handler(req: any, res: any): Promise<void> {
           }
           if (strikes.length === 0) return;
 
-          // Iterate 1 % sub-bands; diversity selection later ensures each OTM level represented.
-          for (const bucket of OTM_BUCKETS) {
-            const validStrikes = getStrikesInRange(strikes, spot, bucket.min, bucket.max, type);
-            for (const strike of validStrikes) {
-              let contractsRaw: any = strikesObjForExpiry[String(strike)];
-              if (!Array.isArray(contractsRaw) || contractsRaw.length === 0) {
-                for (const [sk, arr] of Object.entries<any>(strikesObjForExpiry)) {
-                  if (Number(sk) === strike && Array.isArray(arr) && arr.length > 0) {
-                    contractsRaw = arr;
-                    break;
-                  }
+          const pushStrikeSpec = (strike: number, subBandPct: number, otmPct: number) => {
+            let contractsRaw: any = strikesObjForExpiry[String(strike)];
+            if (!Array.isArray(contractsRaw) || contractsRaw.length === 0) {
+              for (const [sk, arr] of Object.entries<any>(strikesObjForExpiry)) {
+                if (Number(sk) === strike && Array.isArray(arr) && arr.length > 0) {
+                  contractsRaw = arr;
+                  break;
                 }
               }
-              let impliedVolPctFromChain: number | null = null;
-              if (Array.isArray(contractsRaw) && contractsRaw.length > 0) {
-                const c0 = contractsRaw[0];
-                  if (c0?.isMini === true || c0?.isNonStandard === true) continue;
-                impliedVolPctFromChain =
-                  c0 && typeof c0 === "object" ? impliedVolPercentFromQuote(c0) : null;
+            }
+            let impliedVolPctFromChain: number | null = null;
+            if (Array.isArray(contractsRaw) && contractsRaw.length > 0) {
+              const c0 = contractsRaw[0];
+              if (c0?.isMini === true || c0?.isNonStandard === true) return;
+              impliedVolPctFromChain =
+                c0 && typeof c0 === "object" ? impliedVolPercentFromQuote(c0) : null;
+            }
+            specs.push({
+              ticker,
+              expiry: expiration,
+              type,
+              subBandPct,
+              otmPct,
+              strike,
+              currentPrice: spot,
+              impliedVolPctFromChain,
+            });
+          };
+
+          if (otmLayout === "range") {
+            const validStrikes = getStrikesInRange(strikes, spot, otmRangeMin, otmRangeMax, type);
+            for (const strike of validStrikes) {
+              pushStrikeSpec(strike, CUSTOM_OTM_KEY, CUSTOM_OTM_KEY);
+            }
+          } else {
+            // Iterate 1 % sub-bands; diversity selection later ensures each OTM level represented.
+            for (const bucket of OTM_BUCKETS) {
+              const validStrikes = getStrikesInRange(strikes, spot, bucket.min, bucket.max, type);
+              for (const strike of validStrikes) {
+                pushStrikeSpec(strike, bucket.label, broadBucket(bucket.label));
               }
-              specs.push({
-                ticker,
-                expiry: expiration,
-                type,
-                subBandPct: bucket.label,          // 1 % sub-band (5–29)
-                otmPct: broadBucket(bucket.label),  // broad key   (5 | 10 | 15 | 20)
-                strike,
-                currentPrice: spot,
-                impliedVolPctFromChain,
-              });
             }
           }
         })
@@ -938,10 +982,14 @@ export async function handler(req: any, res: any): Promise<void> {
       const mid = ask > 0 && bid > 0 ? (ask + bid) / 2 : optionPrice;
       const spreadPct = mid > 0 ? spread / mid : 1;
 
-      const otmTierAdj = spec.otmPct <= 5 ? 0 : spec.otmPct <= 10 ? 0.12 : spec.otmPct <= 15 ? 0.25 : 0.45;
+      const otmForTier =
+        spec.otmPct === CUSTOM_OTM_KEY
+          ? otmDistancePct(spec.strike, spec.currentPrice, type)
+          : spec.otmPct;
+      const otmTierAdj = otmForTier <= 5 ? 0 : otmForTier <= 10 ? 0.12 : otmForTier <= 15 ? 0.25 : 0.45;
       let maxSpreadPct = (isBuyToOpen ? 0.42 : 0.35) + otmTierAdj;
       if (liquidityMode === "relaxed") maxSpreadPct += 0.12;
-      const minOI = spec.otmPct <= 5 ? 25 : spec.otmPct <= 10 ? 12 : spec.otmPct <= 15 ? 6 : 3;
+      const minOI = otmForTier <= 5 ? 25 : otmForTier <= 10 ? 12 : otmForTier <= 15 ? 6 : 3;
       const oi = quote?.openInterest ?? null;
 
       const liquidityFlags: string[] = [];
@@ -1064,9 +1112,12 @@ export async function handler(req: any, res: any): Promise<void> {
           : ((spec.currentPrice - spec.strike) / spec.currentPrice) * 100
       );
 
-      // Guard: if the real OTM doesn't match the assigned bucket (e.g. due to intraday
+      // Guard: if the real OTM doesn't match the assigned bucket/range (e.g. due to intraday
       // price drift between equity-quote fetch and chain fetch), discard the result.
-      if (!actualOtmMatchesBucket(actualOtmPct, spec.otmPct as 5 | 10 | 15 | 20)) continue;
+      const otmMatches = otmLayout === "range"
+        ? actualOtmMatchesRange(actualOtmPct, otmRangeMin, otmRangeMax)
+        : actualOtmMatchesBucket(actualOtmPct, spec.otmPct as 5 | 10 | 15 | 20);
+      if (!otmMatches) continue;
 
       if (!resultsByOtmPct[spec.otmPct]) resultsByOtmPct[spec.otmPct] = [];
       resultsByOtmPct[spec.otmPct].push({
@@ -1086,6 +1137,7 @@ export async function handler(req: any, res: any): Promise<void> {
         ask: round2(ask > 0 ? ask : bid),
         limitPrice: round2(optionPrice),
         annYieldPct: round2(annYieldPct),
+        periodYieldPct: round2(yieldPct),
         premiumPerContract: round2(premiumPerContract),
         impliedVolPct: ivPct == null ? null : round2(ivPct),
         realizedVol20dPct: rvPct == null ? null : round2(rvPct),
@@ -1132,11 +1184,8 @@ export async function handler(req: any, res: any): Promise<void> {
     }
 
     // ─── Ranking / dedup ─────────────────────────────────────────────────────
-    // Cross-OTM deduplication: each ticker appears in at most one bucket.
-    // Collect all candidates across all levels, sort by score descending, then
-    // greedily assign each ticker to the first (highest-scoring) level it appears in.
-    // This prevents a single high-IV name from flooding every OTM table.
-    {
+    // Cross-OTM deduplication (bands mode only): each ticker appears in at most one bucket.
+    if (otmLayout === "bands" && otmLevels.length > 1) {
       const allCandidates: Array<{ ticker: string; otmPct: number; score: number }> = [];
       for (const otmPct of otmLevels) {
         for (const row of resultsByOtmPct[otmPct] ?? []) {
@@ -1181,6 +1230,8 @@ export async function handler(req: any, res: any): Promise<void> {
       optionType: type,
       dte,
       positionSide,
+      otmLayout,
+      ...(otmLayout === "range" ? { otmRange: { min: otmRangeMin, max: otmRangeMax } } : {}),
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
