@@ -9,6 +9,7 @@ import { handler as handleReturns } from "./_handlers/returns.js";
 import { handler as handleFigi } from "./_handlers/figi.js";
 import { handler as handlePrices } from "./_handlers/prices.js";
 import { handler as handleOptimize } from "./_handlers/optimize.js";
+import { handler as handleCollar } from "./_handlers/collar.js";
 import { handler as handleScreener } from "./_handlers/screener.js";
 import { handler as handleExplorer } from "./_handlers/explorer.js";
 import { handler as handleSheetQuote } from "./_handlers/sheetQuote.js";
@@ -32,13 +33,14 @@ export default async function handler(req: any, res: any) {
     case "figi":     return handleFigi(req, res);
     case "prices":   return handlePrices(req, res);
     case "optimize": return handleOptimize(req, res);
+    case "collar":   return handleCollar(req, res);
     case "screener": return handleScreener(req, res);
     case "explorer":    return handleExplorer(req, res);
     case "sheetQuote":  return handleSheetQuote(req, res);
     case "sheetStock":  return handleSheetStock(req, res);
     default:
       res.status(400).json({
-        error: `Unknown or missing action: "${action}". Valid: auth, status, quotes, returns, figi, prices, optimize, screener, explorer, sheetQuote, sheetStock`,
+        error: `Unknown or missing action: "${action}". Valid: auth, status, quotes, returns, figi, prices, optimize, collar, screener, explorer, sheetQuote, sheetStock`,
       });
   }
 }

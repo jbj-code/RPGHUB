@@ -1,21 +1,21 @@
 // OptionsOptimizer.tsx
 // Rank and optimize options trades from portfolio criteria with Schwab quotes.
 
-import { useState, useCallback, useEffect, useMemo, type ReactNode } from "react";
+import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Theme } from "../theme";
 import {
   getFixedRailsLayoutStyles,
   getPrimaryActionButtonStyle,
-  getRailFooterActionButtonLayout,
+  getModalBackdropStyle,
   PAGE_LAYOUT,
   getDropdownTriggerStyle,
-  getDropdownPanelStyle,
+  getFieldInputStyle,
   getDropdownOptionStyle,
   THEME_DROPDOWN_OPTION_CLASS,
   getTooltipBubbleStyle,
-  getPageCardStyle,
   rankingColors,
+  shadows,
   zIndex,
 } from "../theme";
 import { SIDEBAR_WIDTH } from "../components/NavBar";
@@ -84,6 +84,50 @@ export type PortfolioRow = {
   currentExpiry?: string; // YYYY-MM-DD
   currentStrike?: number;
   currentContracts?: number;
+};
+
+type OptimizerMode = "leg-finder" | "collar";
+
+type CollarRankBy = "even" | "widest" | "best_floor";
+
+type CollarLegQuote = {
+  strike: number;
+  bid: number;
+  ask: number;
+  mid: number;
+};
+
+export type CollarResult = {
+  rank: number;
+  ticker: string;
+  expiry: string;
+  daysToMaturity: number;
+  spot: number;
+  putStrike: number;
+  callStrike: number;
+  put: CollarLegQuote;
+  call: CollarLegQuote;
+  netCostPerShare: number;
+  netCostPerContract: number;
+  floorPct: number;
+  capPct: number;
+  bandWidthPct: number;
+  evenScore: number;
+  isEven: boolean;
+  contractsFromShares: number;
+};
+
+type CollarDraft = {
+  ticker: string;
+  targetMode: "days" | "expiry" | "month";
+  days: number;
+  targetExpiry: string;
+  targetMonth: string;
+  monthly: boolean;
+  shareCount: number;
+  rankBy: CollarRankBy;
+  customPutStrike: string;
+  customCallStrike: string;
 };
 
 /** One row in the ranked optimization results */
@@ -159,6 +203,36 @@ function formatPrice(n: number): string {
   return Number.isInteger(n) ? `$${n.toFixed(0)}` : `$${n.toFixed(2)}`;
 }
 
+function collarPairKey(r: CollarResult): string {
+  return `${r.expiry}:${r.putStrike}:${r.callStrike}`;
+}
+
+function collarLegToTrade(r: CollarResult, side: "put" | "call", contracts: number): OptionsTrade {
+  const isPut = side === "put";
+  const leg = isPut ? r.put : r.call;
+  const strike = leg.strike;
+  const exec = isPut ? leg.ask : leg.bid;
+  return {
+    id: makeId(),
+    ticker: r.ticker,
+    maturity: r.expiry,
+    daysToMaturity: r.daysToMaturity,
+    strikePrice: strike,
+    currentPrice: r.spot,
+    moneynessPct: Math.round((strike / r.spot) * 10000) / 100,
+    optionSide: isPut ? "PUT - BUY to OPEN" : "CALL - SELL to OPEN",
+    pctOffBid: 0,
+    optionLimitPrice: leg.mid,
+    currentBid: leg.bid,
+    currentAsk: leg.ask,
+    contracts,
+    premiumReceived: isPut ? -exec * contracts * 100 : exec * contracts * 100,
+    yieldAtCurrentPrice: 0,
+    annualizedYieldPct: 0,
+    valueOfSharesAtStrike: strike * contracts * 100,
+  };
+}
+
 function formatDateForSheets(raw: string): string {
   if (!raw) return "";
   const normalized = raw.includes("T") ? raw : `${raw}T00:00:00Z`;
@@ -223,6 +297,7 @@ type OptimizerTableSortKey =
   | "strike"
   | "moneyness"
   | "limitPx"
+  | "periodYield"
   | "annYield"
   | "premiumPerContract";
 
@@ -249,8 +324,8 @@ export function formatRankedRowForCopy(r: RankedResult): string {
     String(r.rank),
     r.ticker,
     r.trade.maturity,
+    String(r.trade.daysToMaturity),
     r.trade.optionSide.startsWith("PUT") ? "Put" : "Call",
-    `${r.upsidePct}`,
     r.strike.toFixed(2),
     r.limitPrice.toFixed(2),
   ];
@@ -268,6 +343,8 @@ export function formatRankedRowForCopy(r: RankedResult): string {
 
 
 
+const MONTH_SELECT_WIDTH = 124;
+
 const MONTH_OPTIONS = [
   { value: "01", label: "January" },
   { value: "02", label: "February" },
@@ -282,6 +359,23 @@ const MONTH_OPTIONS = [
   { value: "11", label: "November" },
   { value: "12", label: "December" },
 ];
+
+const defaultCollarDraft = (): CollarDraft => {
+  const now = new Date();
+  const targetMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  return {
+    ticker: "",
+    targetMode: "month",
+    days: 30,
+    targetExpiry: "",
+    targetMonth,
+    monthly: true,
+    shareCount: 0,
+    rankBy: "even",
+    customPutStrike: "",
+    customCallStrike: "",
+  };
+};
 
 const defaultPortfolioRow = (): PortfolioRow => {
   const now = new Date();
@@ -309,6 +403,62 @@ const defaultPortfolioRow = (): PortfolioRow => {
     currentContracts: 0,
   };
 };
+
+function clonePortfolioRow(row: PortfolioRow): PortfolioRow {
+  return {
+    ...row,
+    id: makeId(),
+    ticker: row.ticker.trim().toUpperCase(),
+  };
+}
+
+function formatQueryStrikeBand(row: PortfolioRow): string {
+  if ((row.strikeFilterMode ?? "percent") === "strike") {
+    return `$${row.strikeMin ?? 0}–$${row.strikeMax ?? 0}`;
+  }
+  return `${row.moneyness} ${row.otmPctMin}–${row.otmPctMax}%`;
+}
+
+function formatQueryPositionLabel(row: PortfolioRow): string {
+  if (row.type === "Qty") {
+    const n = Math.max(1, Math.round(row.value || 1));
+    return `${n.toLocaleString("en-US")} contract${n === 1 ? "" : "s"}`;
+  }
+  if (row.value > 0) {
+    return `$${Math.round(row.value).toLocaleString("en-US")} notional`;
+  }
+  return "Notional";
+}
+
+function formatQueryExpiryHeadline(row: PortfolioRow): string {
+  if (row.targetMode === "expiry" && row.targetExpiry) {
+    return row.targetExpiry;
+  }
+  if (row.targetMode === "month" && row.targetMonth) {
+    const [year, monthNum] = row.targetMonth.split("-");
+    const monthLabel = MONTH_OPTIONS.find((o) => o.value === monthNum)?.label ?? monthNum;
+    return `${monthLabel} ${year}`;
+  }
+  return `${row.days} days`;
+}
+
+function formatQueryChipSecondary(row: PortfolioRow): string {
+  return `${row.putCall} · ${row.action} · ${formatQueryStrikeBand(row)}`;
+}
+
+type StrikeFilterKind = "OTM" | "ITM" | "strike";
+
+function getStrikeFilterKind(row: PortfolioRow): StrikeFilterKind {
+  if ((row.strikeFilterMode ?? "percent") === "strike") return "strike";
+  return row.moneyness ?? "OTM";
+}
+
+function applyStrikeFilterKind(row: PortfolioRow, kind: StrikeFilterKind): PortfolioRow {
+  if (kind === "strike") {
+    return { ...row, strikeFilterMode: "strike" };
+  }
+  return { ...row, strikeFilterMode: "percent", moneyness: kind };
+}
 
 // --- UI subcomponents ---
 
@@ -372,6 +522,15 @@ function HelpTooltip({ theme: t, text, children, maxWidth: tooltipWidth = 280 }:
   );
 }
 
+/** Static copy for Options Optimizer “Yield” (period, not annualized) header. */
+const periodYieldHeaderHelp: ReactNode = (
+  <div style={{ lineHeight: 1.45 }}>
+    <strong>Yield</strong> is the raw return on strike notional for this trade's actual holding period (premium ÷
+    capital at risk) — not annualized. <strong>Ann. Yield</strong> extrapolates this to a 365-day basis so trades with
+    different expiries can be compared apples-to-apples.
+  </div>
+);
+
 /** Static copy for Options Optimizer “Ann. Yield” header (hover label to open). */
 const annYieldHeaderHelp: ReactNode = (
   <div style={{ display: "flex", flexDirection: "column", gap: 8, lineHeight: 1.45 }}>
@@ -398,6 +557,8 @@ type SortableOptimizerThProps = {
   /** If set, the label text is wrapped in a help tooltip (no separate info icon). */
   labelHelp?: ReactNode;
   labelHelpMaxWidth?: number;
+  cellPadding?: string;
+  thStyle?: React.CSSProperties;
 };
 
 function SortableOptimizerTh({
@@ -409,6 +570,8 @@ function SortableOptimizerTh({
   textAlign,
   labelHelp,
   labelHelpMaxWidth,
+  cellPadding,
+  thStyle,
 }: SortableOptimizerThProps) {
   const active = tableSort.phase !== "none" && tableSort.key === sortKey;
   const ariaSort =
@@ -416,6 +579,21 @@ function SortableOptimizerTh({
 
   const justify =
     textAlign === "right" ? "flex-end" : textAlign === "center" ? "center" : "flex-start";
+
+  const sortIconReserve = (
+    <span
+      className="material-symbols-outlined options-optimizer-sort-icon"
+      style={{
+        fontSize: 16,
+        lineHeight: 1,
+        width: 16,
+        height: 16,
+        flexShrink: 0,
+        opacity: 0,
+      }}
+      aria-hidden
+    />
+  );
 
   const btn = (
     <button
@@ -431,14 +609,18 @@ function SortableOptimizerTh({
         cursor: "pointer",
         display: "inline-flex",
         alignItems: "center",
-        gap: 4,
+        gap: 2,
         padding: 0,
         font: "inherit",
         textAlign,
         maxWidth: "100%",
         borderRadius: 4,
+        whiteSpace: "nowrap",
+        lineHeight: 1.2,
+        verticalAlign: "middle",
       }}
     >
+      {textAlign === "center" ? sortIconReserve : null}
       {labelHelp ? (
         <HelpTooltip theme={t} text={labelHelp} maxWidth={labelHelpMaxWidth ?? 280}>
           <span style={{ cursor: "help" }}>{label}</span>
@@ -446,15 +628,20 @@ function SortableOptimizerTh({
       ) : (
         <span>{label}</span>
       )}
-      {active && (
-        <span
-          className="material-symbols-outlined"
-          style={{ fontSize: 18, lineHeight: 1, opacity: 0.95 }}
-          aria-hidden
-        >
-          {tableSort.phase === "asc" ? "arrow_upward" : "arrow_downward"}
-        </span>
-      )}
+      <span
+        className="material-symbols-outlined options-optimizer-sort-icon"
+        style={{
+          fontSize: 16,
+          lineHeight: 1,
+          width: 16,
+          height: 16,
+          flexShrink: 0,
+          opacity: active ? 0.95 : 0,
+        }}
+        aria-hidden
+      >
+        {tableSort.phase === "asc" ? "arrow_upward" : "arrow_downward"}
+      </span>
     </button>
   );
 
@@ -463,21 +650,15 @@ function SortableOptimizerTh({
       aria-sort={ariaSort}
       style={{
         textAlign,
-        padding: t.spacing(2),
+        padding: cellPadding ?? t.spacing(2),
         color: t.colors.secondaryText,
         fontWeight: 600,
         verticalAlign: "middle",
+        whiteSpace: "nowrap",
+        ...thStyle,
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: justify,
-          gap: 6,
-          flexWrap: "wrap",
-        }}
-      >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: justify }}>
         {btn}
       </div>
     </th>
@@ -495,7 +676,9 @@ type ThemeSelectProps = {
   openId: string | null;
   setOpenId: (id: string | null) => void;
   minWidth?: number;
+  fixedWidth?: number;
   dropdownMaxHeight?: number;
+  variant?: "default" | "embedded";
 };
 
 function OptimizerThemeSelect({
@@ -507,16 +690,89 @@ function OptimizerThemeSelect({
   openId,
   setOpenId,
   minWidth,
+  fixedWidth,
   dropdownMaxHeight,
+  variant = "default",
 }: ThemeSelectProps) {
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const open = openId === dropdownKey;
   const display = options.find((o) => o.value === value)?.label ?? value;
+  const [panelRect, setPanelRect] = useState<{ top: number; left: number; width: number } | null>(null);
+  const embedded = variant === "embedded";
+
+  useEffect(() => {
+    if (!open || !btnRef.current) {
+      setPanelRect(null);
+      return;
+    }
+    const update = () => {
+      const rect = btnRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setPanelRect({ top: rect.bottom + 4, left: rect.left, width: Math.max(rect.width, minWidth ?? 120) });
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [open, minWidth]);
+
+  useEffect(() => {
+    if (!open || !panelRef.current) return;
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        const panel = panelRef.current;
+        if (!panel) return;
+        const selected = panel.querySelector<HTMLElement>(`[data-option-value="${value}"]`);
+        if (!selected) return;
+        panel.scrollTop = selected.offsetTop - panel.clientHeight / 2 + selected.offsetHeight / 2;
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      if (raf2) cancelAnimationFrame(raf2);
+    };
+  }, [open, value]);
+
+  const triggerStyle: React.CSSProperties = embedded
+    ? {
+        ...getDropdownTriggerStyle(t),
+        border: "none",
+        borderRadius: 0,
+        height: 40,
+        minWidth: minWidth ?? 112,
+        maxWidth: minWidth ?? 112,
+        margin: 0,
+        backgroundColor: t.colors.background,
+        boxShadow: "none",
+        padding: `${t.spacing(2)} ${t.spacing(2)}`,
+        fontSize: t.typography.baseFontSize,
+      }
+    : {
+        ...getDropdownTriggerStyle(t),
+        minWidth: fixedWidth ?? minWidth ?? 120,
+        ...(fixedWidth != null ? { width: fixedWidth, maxWidth: fixedWidth } : {}),
+        margin: 0,
+      };
+
   return (
-    <div style={{ position: "relative", minWidth: minWidth ?? 0 }}>
+    <div
+      style={{
+        position: "relative",
+        minWidth: embedded ? 0 : fixedWidth ?? minWidth ?? 0,
+        width: fixedWidth,
+        flexShrink: embedded || fixedWidth != null ? 0 : undefined,
+      }}
+    >
       <button
+        ref={btnRef}
         type="button"
         onClick={() => setOpenId(open ? null : dropdownKey)}
-        style={{ ...getDropdownTriggerStyle(t), minWidth: minWidth ?? 120, margin: 0 }}
+        style={triggerStyle}
         aria-expanded={open}
         aria-haspopup="listbox"
       >
@@ -535,40 +791,52 @@ function OptimizerThemeSelect({
           expand_more
         </span>
       </button>
-      {open && (
-        <>
-          <div
-            role="presentation"
-            style={{ position: "fixed", inset: 0, zIndex: zIndex.dropdownPortalBackdrop }}
-            onClick={() => setOpenId(null)}
-          />
-          <div
-            style={{
-              ...getDropdownPanelStyle(t, "down"),
-              zIndex: zIndex.dropdownPortal,
-              minWidth: "100%",
-              ...(dropdownMaxHeight != null
-                ? { maxHeight: dropdownMaxHeight, overflowY: "auto" }
-                : {}),
-            }}
-          >
-            {options.map((o) => (
-              <button
-                key={o.value}
-                type="button"
-                className={THEME_DROPDOWN_OPTION_CLASS}
-                onClick={() => {
-                  onChange(o.value);
-                  setOpenId(null);
-                }}
-                style={getDropdownOptionStyle(t, value === o.value)}
-              >
-                {o.label}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
+      {open &&
+        panelRect &&
+        createPortal(
+          <>
+            <div
+              role="presentation"
+              style={{ position: "fixed", inset: 0, zIndex: zIndex.dropdownPortalBackdrop }}
+              onClick={() => setOpenId(null)}
+            />
+            <div
+              ref={panelRef}
+              style={{
+                position: "fixed",
+                top: panelRect.top,
+                left: panelRect.left,
+                minWidth: panelRect.width,
+                backgroundColor: t.colors.surface,
+                border: `1px solid ${t.colors.border}`,
+                borderRadius: t.radius.md,
+                boxShadow: shadows.dropdown,
+                zIndex: zIndex.dropdownPortal,
+                overflow: "hidden",
+                ...(dropdownMaxHeight != null
+                  ? { maxHeight: dropdownMaxHeight, overflowY: "auto" }
+                  : {}),
+              }}
+            >
+              {options.map((o) => (
+                <button
+                  key={o.value}
+                  type="button"
+                  data-option-value={o.value}
+                  className={THEME_DROPDOWN_OPTION_CLASS}
+                  onClick={() => {
+                    onChange(o.value);
+                    setOpenId(null);
+                  }}
+                  style={getDropdownOptionStyle(t, value === o.value)}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </>,
+          document.body
+        )}
     </div>
   );
 }
@@ -576,15 +844,24 @@ function OptimizerThemeSelect({
 // --- Main page component ---
 
 export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: OptionsOptimizerProps) {
-  const [portfolioRows, setPortfolioRows] = useState<PortfolioRow[]>([defaultPortfolioRow()]);
+  const [optimizerMode, setOptimizerMode] = useState<OptimizerMode>("leg-finder");
+  const [draftRow, setDraftRow] = useState<PortfolioRow>(defaultPortfolioRow());
+  const [collarDraft, setCollarDraft] = useState<CollarDraft>(defaultCollarDraft());
+  const [queryContracts, setQueryContracts] = useState<PortfolioRow[]>([]);
   const [portfolioDropdownId, setPortfolioDropdownId] = useState<string | null>(null);
   const [rankedResults, setRankedResults] = useState<RankedResult[] | null>(null);
+  const [collarResults, setCollarResults] = useState<CollarResult[] | null>(null);
+  const [collarSpot, setCollarSpot] = useState<number | null>(null);
+  const [collarLoading, setCollarLoading] = useState(false);
+  const [collarMessage, setCollarMessage] = useState<string | null>(null);
+  const [addedCollarKeys, setAddedCollarKeys] = useState<Set<string>>(() => new Set());
   const [optimizerTableSort, setOptimizerTableSort] = useState<OptimizerTableSortState>({
     phase: "none",
   });
   const [optimizeMessage, setOptimizeMessage] = useState<string | null>(null);
   const [optimizeLoading, setOptimizeLoading] = useState(false);
   const [trades, setTrades] = useState<OptionsTrade[]>([]);
+  const [tradeListPanelOpen, setTradeListPanelOpen] = useState(false);
   const [showOptimizeForModal, setShowOptimizeForModal] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [lastCopiedTradeId, setLastCopiedTradeId] = useState<string | null>(null);
@@ -593,6 +870,29 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
   const [figiStatusById, setFigiStatusById] = useState<Record<string, { ok: boolean; msg: string }>>({});
   const [exportingTradeList, setExportingTradeList] = useState(false);
   const [tradeListExportCopied, setTradeListExportCopied] = useState(false);
+  const inputsBarRef = useRef<HTMLDivElement>(null);
+  const [contentTop, setContentTop] = useState(224);
+
+  useLayoutEffect(() => {
+    const node = inputsBarRef.current;
+    if (!node) return;
+    const measure = () => {
+      const rect = node.getBoundingClientRect();
+      setContentTop(Math.ceil(rect.bottom));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [draftRow, optimizeMessage, queryContracts.length, optimizerMode, collarDraft, sidebarWidth]);
+
+  useEffect(() => {
+    if (showOptimizeForModal) setPortfolioDropdownId(null);
+  }, [showOptimizeForModal]);
 
   const requestTradeIdentifiers = useCallback(async (tr: OptionsTrade) => {
     try {
@@ -712,12 +1012,18 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
     return () => document.removeEventListener("keydown", onKey);
   }, [showOptimizeForModal]);
 
-  const addPortfolioRow = useCallback(() => {
-    setPortfolioRows((prev) => [defaultPortfolioRow(), ...prev]);
-  }, []);
+  const addQueryContract = useCallback(() => {
+    const ticker = draftRow.ticker.trim().toUpperCase();
+    if (!ticker) {
+      setOptimizeMessage("Enter a ticker before adding to the query.");
+      return;
+    }
+    setOptimizeMessage(null);
+    setQueryContracts((prev) => [clonePortfolioRow({ ...draftRow, ticker }), ...prev]);
+  }, [draftRow]);
 
-  const removePortfolioRow = useCallback((id: string) => {
-    setPortfolioRows((prev) => (prev.length > 1 ? prev.filter((r) => r.id !== id) : prev));
+  const removeQueryContract = useCallback((id: string) => {
+    setQueryContracts((prev) => prev.filter((r) => r.id !== id));
   }, []);
 
   const cycleOptimizerTableSort = useCallback((key: OptimizerTableSortKey) => {
@@ -760,6 +1066,14 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
         case "limitPx":
           cmp = a.limitPrice === b.limitPrice ? 0 : a.limitPrice < b.limitPrice ? -1 : 1;
           break;
+        case "periodYield":
+          cmp =
+            a.trade.yieldAtCurrentPrice === b.trade.yieldAtCurrentPrice
+              ? 0
+              : a.trade.yieldAtCurrentPrice < b.trade.yieldAtCurrentPrice
+                ? -1
+                : 1;
+          break;
         case "annYield":
           cmp = a.annYield === b.annYield ? 0 : a.annYield < b.annYield ? -1 : 1;
           break;
@@ -779,24 +1093,115 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
     return arr;
   }, [rankedResults, optimizerTableSort]);
 
-  const updatePortfolioRow = useCallback(
-    (id: string, field: keyof PortfolioRow, value: string | number | boolean) => {
-      setPortfolioRows((prev) =>
-        prev.map((r) => (r.id === id ? { ...r, [field]: value } : r))
-      );
+  const updateDraftRow = useCallback(
+    (field: keyof PortfolioRow, value: string | number | boolean) => {
+      setDraftRow((prev) => ({ ...prev, [field]: value }));
     },
     []
   );
 
+  const updateCollarDraft = useCallback(
+    (field: keyof CollarDraft, value: string | number | boolean) => {
+      setCollarDraft((prev) => ({ ...prev, [field]: value }));
+    },
+    []
+  );
+
+  const runCollarScan = useCallback(async () => {
+    const ticker = collarDraft.ticker.trim().toUpperCase();
+    if (!ticker) {
+      setCollarMessage("Enter a ticker to scan collars.");
+      setCollarResults(null);
+      return;
+    }
+    if (collarDraft.targetMode === "month") {
+      const parts = (collarDraft.targetMonth ?? "").split("-");
+      if (!/^\d{4}$/.test(parts[0] ?? "") || !/^\d{2}$/.test(parts[1] ?? "")) {
+        setCollarMessage("Select a valid target month and year.");
+        setCollarResults(null);
+        return;
+      }
+    }
+    setCollarLoading(true);
+    setCollarMessage(null);
+    try {
+      const customPut = Number(collarDraft.customPutStrike.replace(/,/g, ""));
+      const customCall = Number(collarDraft.customCallStrike.replace(/,/g, ""));
+      const body: Record<string, unknown> = {
+        action: "collar",
+        ticker,
+        targetMode: collarDraft.targetMode,
+        days: collarDraft.days,
+        targetExpiry: collarDraft.targetExpiry,
+        targetMonth: collarDraft.targetMonth,
+        monthly: collarDraft.monthly,
+        rankBy: collarDraft.rankBy,
+        shareCount: collarDraft.shareCount,
+      };
+      if (Number.isFinite(customPut) && customPut > 0 && Number.isFinite(customCall) && customCall > 0) {
+        body.customPutStrike = customPut;
+        body.customCallStrike = customCall;
+      }
+      const resp = await fetch(`${SCHWAB_API_BASE}/api/schwab`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        const err = data?.error ?? `Error ${resp.status}`;
+        if (typeof err === "string" && err.includes('Unknown or missing action: "collar"')) {
+          setCollarMessage(
+            "Collar API is not on the server yet — deploy the latest code to Vercel (includes api/_handlers/collar.ts), then retry."
+          );
+        } else {
+          setCollarMessage(err);
+        }
+        setCollarResults(null);
+        return;
+      }
+      setCollarResults(Array.isArray(data.results) ? data.results : []);
+      setCollarSpot(typeof data.spot === "number" ? data.spot : null);
+      setCollarMessage(data.message ?? null);
+      setLastUpdated(new Date());
+    } catch {
+      setCollarMessage("Network error. Try again.");
+      setCollarResults(null);
+    } finally {
+      setCollarLoading(false);
+    }
+  }, [collarDraft]);
+
+  const addCollarToTradeList = useCallback((r: CollarResult) => {
+    const contracts =
+      r.contractsFromShares > 0
+        ? r.contractsFromShares
+        : collarDraft.shareCount > 0
+          ? Math.max(1, Math.floor(collarDraft.shareCount / 100))
+          : 1;
+    setTrades((prev) => [
+      ...prev,
+      collarLegToTrade(r, "put", contracts),
+      collarLegToTrade(r, "call", contracts),
+    ]);
+    setAddedCollarKeys((prev) => new Set(prev).add(collarPairKey(r)));
+    setTradeListPanelOpen(true);
+  }, [collarDraft.shareCount]);
+
   const runOptimize = useCallback(async () => {
-    const tickers = portfolioRows.map((r) => r.ticker.trim().toUpperCase()).filter(Boolean);
+    if (queryContracts.length === 0) {
+      setOptimizeMessage("Add at least one contract to the query, then run Optimize.");
+      setRankedResults(null);
+      return;
+    }
+    const tickers = queryContracts.map((r) => r.ticker.trim().toUpperCase()).filter(Boolean);
     if (tickers.length === 0) {
       setOptimizeMessage("Add at least one ticker with a symbol to optimize.");
       setRankedResults(null);
       return;
     }
     // Validate month mode rows before sending
-    for (const row of portfolioRows) {
+    for (const row of queryContracts) {
       if ((row.targetMode ?? "month") === "month") {
         const tm = row.targetMonth ?? "";
         const parts = tm.split("-");
@@ -836,7 +1241,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "optimize",
-          portfolioRows,
+          portfolioRows: queryContracts,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -859,11 +1264,12 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
     } finally {
       setOptimizeLoading(false);
     }
-  }, [portfolioRows]);
+  }, [queryContracts]);
 
   const addToTradeList = useCallback((result: RankedResult) => {
     const trade = { ...result.trade, id: makeId(), sourceResultId: result.trade.id };
     setTrades((prev) => [...prev, trade]);
+    setTradeListPanelOpen(true);
   }, []);
 
   const removeTrade = useCallback((id: string) => {
@@ -884,6 +1290,13 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
     (optimizeMessage.includes("Schwab token expired") ||
       optimizeMessage.includes("Not authorized with Schwab"));
 
+  const showCollarAuthHint =
+    !!collarMessage &&
+    (collarMessage.includes("Schwab token expired") ||
+      collarMessage.includes("Not authorized with Schwab"));
+
+  const showCollarResultsTable = collarResults != null && collarResults.length > 0;
+
   // --- Styles ---
 
   const titleStyle: React.CSSProperties = {
@@ -900,7 +1313,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
     marginBottom: t.spacing(PAGE_LAYOUT.descMarginBottom),
   };
 
-  const cardStyle = getPageCardStyle(t, { padding: t.spacing(4), marginBottom: t.spacing(4) });
+  const primaryBtn = getPrimaryActionButtonStyle(t);
 
   const sectionTitleStyle: React.CSSProperties = {
     fontSize: "0.75rem",
@@ -911,14 +1324,13 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
   };
 
   const labelStyle: React.CSSProperties = {
-    fontSize: "0.72rem",
+    fontSize: "0.68rem",
     color: t.colors.textMuted,
     textTransform: "uppercase" as const,
     letterSpacing: "0.04em",
     marginBottom: t.spacing(0.5),
   };
 
-  const primaryBtn = getPrimaryActionButtonStyle(t);
   const secondaryBtnStyle: React.CSSProperties = {
     padding: `${t.spacing(2.5)} ${t.spacing(3)}`,
     fontSize: "0.875rem",
@@ -930,22 +1342,188 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
     cursor: "pointer",
   };
 
-  const inputStyle: React.CSSProperties = {
+  const fieldInput = (overrides?: React.CSSProperties): React.CSSProperties =>
+    getFieldInputStyle(t, { maxWidth: 120, ...overrides });
+
+  const inputSectionLabel: React.CSSProperties = {
+    fontSize: "0.78rem",
+    fontWeight: 700,
+    color: t.colors.secondary,
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
+    marginBottom: t.spacing(1),
+    whiteSpace: "nowrap",
+    lineHeight: 1.2,
+  };
+
+  const inputSectionBlockAuto: React.CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    flex: "0 0 auto",
+    alignSelf: "stretch",
+    justifyContent: "center",
+  };
+
+  const POSITION_FIELD_WIDTH = 300;
+
+  const inputSectionDivider: React.CSSProperties = {
+    width: 1,
+    alignSelf: "stretch",
+    backgroundColor: t.colors.border,
+    flexShrink: 0,
+    margin: `0 ${t.spacing(2.5)}`,
+  };
+
+  const inputFieldCol: React.CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-start",
+    flex: "0 0 auto",
+  };
+
+  const inputFieldsRowInline: React.CSSProperties = {
+    display: "flex",
+    alignItems: "flex-end",
+    gap: t.spacing(1.5),
+    width: "auto",
+  };
+
+  const inputFieldsRow: React.CSSProperties = {
+    display: "flex",
+    alignItems: "flex-end",
+    gap: t.spacing(1.5),
+    width: "auto",
+  };
+
+  const actionBtnRow: React.CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "stretch",
+    alignSelf: "stretch",
+    justifyContent: "center",
+    gap: t.spacing(1),
+    flex: "1 1 auto",
+    minWidth: 260,
+    marginLeft: t.spacing(2.5),
+    paddingLeft: t.spacing(2.5),
+    borderLeft: `1px solid ${t.colors.border}`,
+  };
+
+  const addContractBtn: React.CSSProperties = {
+    ...secondaryBtnStyle,
     width: "100%",
-    maxWidth: 120,
-    padding: `${t.spacing(2)} ${t.spacing(3)}`,
     height: 40,
-    fontSize: t.typography.baseFontSize,
-    border: `1px solid ${t.colors.border}`,
+    minHeight: 40,
+    padding: `${t.spacing(2)} ${t.spacing(3)}`,
     borderRadius: t.radius.md,
-    backgroundColor: t.colors.surface,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: t.spacing(1),
+    fontSize: t.typography.baseFontSize,
     color: t.colors.text,
   };
+
+  const optimizeBtnWide: React.CSSProperties = {
+    ...primaryBtn,
+    width: "100%",
+    height: 40,
+    minHeight: 40,
+    padding: `${t.spacing(2)} ${t.spacing(3)}`,
+    fontSize: t.typography.baseFontSize,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+  };
+
+  const combinedFieldShell: React.CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    height: 40,
+    maxHeight: 40,
+    flexShrink: 0,
+    boxSizing: "border-box",
+    border: `1px solid ${t.colors.border}`,
+    borderRadius: t.radius.md,
+    overflow: "hidden",
+    backgroundColor: t.colors.surface,
+    width: POSITION_FIELD_WIDTH,
+    minWidth: POSITION_FIELD_WIDTH,
+    maxWidth: POSITION_FIELD_WIDTH,
+  };
+
+  const combinedFieldInput: React.CSSProperties = {
+    ...fieldInput({ maxWidth: "none", minWidth: 0, flex: 1, width: "100%", height: 40 }),
+    border: "none",
+    borderRadius: 0,
+    boxShadow: "none",
+  };
+
+  const inputsBarPaddingY = t.spacing(2);
+  const inputsBarPaddingX = t.spacing(8);
+  const tradeListTabWidth = 40;
+  /** Inset main content below the inputs bar so it ends at the collapsed trade-list tab, not under it. */
+  const tradeListClearance = `${tradeListTabWidth}px`;
 
   const fixedRails = getFixedRailsLayoutStyles(t, {
     sidebarWidth,
     headerHeight: 104,
   });
+
+  const tableCellPadY = t.spacing(1.5);
+  const tableCellPadX = t.spacing(2.5);
+  const tableCellPadding = `${tableCellPadY} ${tableCellPadX}`;
+  const tableActionCellPadding = `${tableCellPadY} calc(${tableCellPadX} + ${t.spacing(2)}) ${tableCellPadY} ${tableCellPadX}`;
+  const tableEdgePadRight = tableCellPadX;
+  const tableFontSize = "0.84rem";
+  const tableHeaderFontSize = "0.76rem";
+  const tableThStyle: React.CSSProperties = {
+    padding: tableCellPadding,
+    color: t.colors.secondaryText,
+    fontWeight: 600,
+    fontSize: tableHeaderFontSize,
+    whiteSpace: "nowrap",
+    verticalAlign: "middle",
+    textAlign: "center",
+  };
+  const tableTdStyle: React.CSSProperties = {
+    padding: tableCellPadding,
+    fontSize: tableFontSize,
+    verticalAlign: "middle",
+    textAlign: "center",
+  };
+  const tableNumThStyle: React.CSSProperties = {
+    ...tableThStyle,
+    textAlign: "center",
+  };
+  const tableNumTdStyle: React.CSSProperties = {
+    ...tableTdStyle,
+    textAlign: "center",
+    whiteSpace: "nowrap",
+  };
+  const tradeListPanelWidth = 320;
+  const showResultsTable = rankedResults != null && rankedResults.length > 0;
+  const activeResultsTable = optimizerMode === "leg-finder" ? showResultsTable : showCollarResultsTable;
+  const centerPanelMinHeight = `calc(100vh - ${contentTop}px)`;
+  const mainTop = contentTop;
+
+  const schwabAttribution = (
+    <>
+      <span>Market data provided by Charles Schwab.</span>
+      {lastUpdated && (
+        <span>
+          Data as of{" "}
+          {lastUpdated.toLocaleString(undefined, {
+            year: "numeric",
+            month: "short",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </span>
+      )}
+    </>
+  );
 
   return (
     <section className="options-optimizer-page" style={fixedRails.page}>
@@ -966,7 +1544,52 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
               Options Optimizer
             </span>
           </h2>
-          <button
+          <div style={{ display: "flex", alignItems: "center", gap: t.spacing(2), flexShrink: 0 }}>
+            <div
+              role="tablist"
+              aria-label="Optimizer mode"
+              style={{
+                display: "inline-flex",
+                border: `1px solid ${t.colors.border}`,
+                borderRadius: t.radius.md,
+                overflow: "hidden",
+                backgroundColor: t.colors.background,
+              }}
+            >
+              {(
+                [
+                  { id: "leg-finder" as const, label: "Leg Finder" },
+                  { id: "collar" as const, label: "Collar" },
+                ] as const
+              ).map((mode) => {
+                const active = optimizerMode === mode.id;
+                return (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setOptimizerMode(mode.id)}
+                    style={{
+                      border: "none",
+                      background: active ? t.colors.secondary : "transparent",
+                      color: active ? t.colors.surface : t.colors.textMuted,
+                      fontWeight: 600,
+                      fontSize: "0.72rem",
+                      letterSpacing: "0.04em",
+                      textTransform: "uppercase",
+                      padding: `${t.spacing(1)} ${t.spacing(2)}`,
+                      cursor: "pointer",
+                      fontFamily: t.typography.fontFamily,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {mode.label}
+                  </button>
+                );
+              })}
+            </div>
+            <button
             type="button"
             onClick={() => setShowOptimizeForModal(true)}
             style={{
@@ -988,9 +1611,12 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
           >
             <span className="material-symbols-outlined options-optimizer-info-icon" style={{ fontSize: 26 }} aria-hidden>info</span>
           </button>
+          </div>
         </div>
         <p style={{ ...descStyle, marginTop: t.spacing(1), marginBottom: 0 }}>
-          Define the tickers and parameters you want, run Optimize to fetch live options from Schwab, then add ideas to your trade list.
+          {optimizerMode === "leg-finder"
+            ? "Define the tickers and parameters you want, run Optimize to fetch live options from Schwab, then add ideas to your trade list."
+            : "Scan live Schwab chains for protective collars (buy put + sell call). Rank by nearest-to-even net cost, or test your own strike pair."}
         </p>
       </div>
 
@@ -998,12 +1624,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
         <>
           <div
             role="presentation"
-            style={{
-              position: "fixed",
-              inset: 0,
-              backgroundColor: "rgba(0,0,0,0.4)",
-              zIndex: 1000,
-            }}
+            style={getModalBackdropStyle(t)}
             onClick={() => setShowOptimizeForModal(false)}
             onKeyDown={(e) => e.key === "Escape" && setShowOptimizeForModal(false)}
           />
@@ -1016,7 +1637,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
               left: "50%",
               top: "50%",
               transform: "translate(-50%, -50%)",
-              zIndex: 1001,
+              zIndex: zIndex.modal,
               backgroundColor: t.colors.surface,
               borderRadius: t.radius.lg,
               padding: t.spacing(5),
@@ -1090,920 +1711,1347 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
         </>
       )}
 
-      {/* —— Portfolio Tickers (Define what you want) —— */}
-      <aside
+      {/* —— Horizontal inputs bar —— */}
+      <div
+        ref={inputsBarRef}
+        className="options-optimizer-inputs-bar"
         style={{
-          ...fixedRails.leftRail,
-          zIndex: portfolioDropdownId ? 3000 : 6,
+          position: "fixed",
+          left: sidebarWidth,
+          right: 0,
+          top: fixedRails.headerHeight,
+          zIndex: zIndex.railDropdown,
+          backgroundColor: t.colors.surface,
+          borderBottom: `1px solid ${t.colors.border}`,
+          padding: `${inputsBarPaddingY} ${inputsBarPaddingX}`,
+          boxSizing: "border-box",
+          overflow: "visible",
         }}
       >
         <div
-          className="options-optimizer-card"
-          style={{
-            ...fixedRails.railPanel,
-            overflow: "visible",
-            minHeight: 0,
-            flex: 1,
-          }}
-        >
-        <h3 style={sectionTitleStyle}>Inputs</h3>
-        <div
+          className="options-optimizer-inputs-inner"
           style={{
             display: "flex",
-            flexDirection: "column",
-            gap: t.spacing(3),
-            overflowY: "auto",
-            overflowX: "hidden",
-            flex: 1,
-            scrollbarWidth: "none",
+            width: "100%",
+            alignItems: "stretch",
+            gap: 0,
           }}
         >
-          {portfolioRows.map((row) => {
-            const rowTicker = row.ticker.trim().toUpperCase();
-            const isOptimized =
-              !!rankedResults &&
-              rankedResults.length > 0 &&
-              rowTicker.length > 0 &&
-              rankedResults.some((r) => r.ticker === rowTicker);
+          {optimizerMode === "leg-finder" ? (() => {
+            const row = draftRow;
             const tmParts = (row.targetMonth ?? "").split("-");
             const tmYear = tmParts[0] ?? "";
             const tmMonth = tmParts[1] ?? "";
             return (
-            <div
-              key={row.id}
-              style={{
-                position: "relative",
-                display: "flex",
-                flexWrap: "wrap",
-                alignItems: "flex-end",
-                gap: t.spacing(3),
-                padding: t.spacing(3),
-                paddingTop: portfolioRows.length > 1 ? t.spacing(5) : t.spacing(3),
-                backgroundColor: isOptimized
-                  ? `${t.colors.primary}22`
-                  : t.colors.background,
-                borderRadius: t.radius.md,
-                border: `1px solid ${t.colors.border}`,
-              }}
-            >
-              {portfolioRows.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => removePortfolioRow(row.id)}
-                  style={{
-                    position: "absolute",
-                    top: t.spacing(1.5),
-                    right: t.spacing(1.5),
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    width: 22,
-                    height: 22,
-                    padding: 0,
-                    border: "none",
-                    background: "none",
-                    cursor: "pointer",
-                    color: t.colors.danger,
-                    borderRadius: "50%",
-                  }}
-                  aria-label="Remove row"
-                >
-                  <span className="material-symbols-outlined" style={{ fontSize: 18 }} aria-hidden>close</span>
-                </button>
-              )}
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "flex-start",
-                  gap: t.spacing(1),
-                }}
-              >
-                <HelpTooltip
-                  theme={t}
-                  text="Underlying symbol for the option, e.g. SPY, AAPL, NVDA."
-                >
-                  <label style={labelStyle}>Ticker</label>
-                </HelpTooltip>
-                <input
-                  type="text"
-                  placeholder="e.g. SPY"
-                  style={{ ...inputStyle, maxWidth: 90 }}
-                  value={row.ticker}
-                  onChange={(e) => updatePortfolioRow(row.id, "ticker", e.target.value)}
-                  aria-label="Ticker"
-                />
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "flex-start",
-                  gap: t.spacing(1),
-                }}
-              >
-                <label style={labelStyle}>Put / Call</label>
-                <OptimizerThemeSelect
-                  theme={t}
-                  value={row.putCall}
-                  options={[
-                    { value: "Put", label: "Put" },
-                    { value: "Call", label: "Call" },
-                  ]}
-                  onChange={(v) => updatePortfolioRow(row.id, "putCall", v as "Put" | "Call")}
-                  dropdownKey={`${row.id}-putCall`}
-                  openId={portfolioDropdownId}
-                  setOpenId={setPortfolioDropdownId}
-                  minWidth={100}
-                />
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "flex-start",
-                  gap: t.spacing(1),
-                }}
-              >
-                <label style={labelStyle}>Action</label>
-                <OptimizerThemeSelect
-                  theme={t}
-                  value={row.action}
-                  options={[
-                    { value: "Sell to Open", label: "Sell to Open" },
-                    { value: "Buy to Open", label: "Buy to Open" },
-                    { value: "Sell to Close", label: "Sell to Close" },
-                    { value: "Buy to Close", label: "Buy to Close" },
-                  ]}
-                  onChange={(v) =>
-                    updatePortfolioRow(
-                      row.id,
-                      "action",
-                      v as "Sell to Open" | "Buy to Open" | "Sell to Close" | "Buy to Close"
-                    )
-                  }
-                  dropdownKey={`${row.id}-action`}
-                  openId={portfolioDropdownId}
-                  setOpenId={setPortfolioDropdownId}
-                  minWidth={130}
-                />
-              </div>
-              {/* Type + Value side-by-side */}
-              <div style={{ display: "flex", gap: t.spacing(2), alignItems: "flex-end" }}>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
-                  <HelpTooltip
-                    theme={t}
-                    text="Qty = number of contracts. Notional = target dollar amount of underlying shares at strike."
-                  >
-                    <label style={labelStyle}>Type</label>
-                  </HelpTooltip>
-                  <OptimizerThemeSelect
-                    theme={t}
-                    value={row.type}
-                    options={[
-                      { value: "Qty", label: "Qty" },
-                      { value: "Notional", label: "Notional" },
-                    ]}
-                    onChange={(v) => updatePortfolioRow(row.id, "type", v as "Qty" | "Notional")}
-                    dropdownKey={`${row.id}-type`}
-                    openId={portfolioDropdownId}
-                    setOpenId={setPortfolioDropdownId}
-                    minWidth={90}
-                  />
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
-                  <HelpTooltip
-                    theme={t}
-                    text="If Type is Qty, this is contracts. If Notional, this is target notional of underlying at strike."
-                  >
-                    <label style={labelStyle}>Value</label>
-                  </HelpTooltip>
-                  {row.type === "Notional" ? (
+            <>
+              {/* Contract details */}
+              <div style={inputSectionBlockAuto}>
+                <span style={inputSectionLabel}>Contract details</span>
+                <div style={inputFieldsRowInline}>
+                  <div style={inputFieldCol}>
+                    <HelpTooltip
+                      theme={t}
+                      text="Underlying symbol for the option, e.g. SPY, AAPL, NVDA."
+                    >
+                      <label style={labelStyle}>Ticker</label>
+                    </HelpTooltip>
                     <input
                       type="text"
-                      inputMode="numeric"
-                      style={{ ...inputStyle, maxWidth: 90 }}
-                      value={row.value > 0 ? Math.round(row.value).toLocaleString("en-US") : ""}
-                      onChange={(e) => {
-                        const digits = e.target.value.replace(/[^\d]/g, "");
-                        updatePortfolioRow(row.id, "value", digits ? Number(digits) : 0);
-                      }}
-                      placeholder="0"
-                      aria-label="Value"
+                      placeholder="e.g. SPY"
+                      style={fieldInput({ maxWidth: 96, minWidth: 96 })}
+                      value={row.ticker}
+                      onChange={(e) => updateDraftRow("ticker", e.target.value)}
+                      aria-label="Ticker"
                     />
-                  ) : (
-                    <input
-                      type="number"
-                      min={0}
-                      style={{ ...inputStyle, maxWidth: 90 }}
-                      value={row.value || ""}
-                      onChange={(e) => updatePortfolioRow(row.id, "value", Number(e.target.value) || 0)}
-                      placeholder="0"
-                      aria-label="Value"
+                  </div>
+                  <div style={inputFieldCol}>
+                    <label style={labelStyle}>Put / Call</label>
+                    <OptimizerThemeSelect
+                      theme={t}
+                      value={row.putCall}
+                      options={[
+                        { value: "Put", label: "Put" },
+                        { value: "Call", label: "Call" },
+                      ]}
+                      onChange={(v) => updateDraftRow("putCall", v as "Put" | "Call")}
+                      dropdownKey={`${row.id}-putCall`}
+                      openId={portfolioDropdownId}
+                      setOpenId={setPortfolioDropdownId}
+                      minWidth={100}
                     />
-                  )}
+                  </div>
+                  <div style={inputFieldCol}>
+                    <label style={labelStyle}>Action</label>
+                    <OptimizerThemeSelect
+                      theme={t}
+                      value={row.action}
+                      options={[
+                        { value: "Sell to Open", label: "Sell to Open" },
+                        { value: "Buy to Open", label: "Buy to Open" },
+                        { value: "Sell to Close", label: "Sell to Close" },
+                        { value: "Buy to Close", label: "Buy to Close" },
+                      ]}
+                      onChange={(v) =>
+                        updateDraftRow(
+                          "action",
+                          v as "Sell to Open" | "Buy to Open" | "Sell to Close" | "Buy to Close"
+                        )
+                      }
+                      dropdownKey={`${row.id}-action`}
+                      openId={portfolioDropdownId}
+                      setOpenId={setPortfolioDropdownId}
+                      minWidth={130}
+                    />
+                  </div>
+                  <div style={inputFieldCol}>
+                    <HelpTooltip
+                      theme={t}
+                      text="Quantity = number of contracts. Notional = target dollar amount of underlying shares at strike."
+                    >
+                      <label style={labelStyle}>Position</label>
+                    </HelpTooltip>
+                    <div style={combinedFieldShell}>
+                      <OptimizerThemeSelect
+                        theme={t}
+                        variant="embedded"
+                        value={row.type}
+                        options={[
+                          { value: "Qty", label: "Quantity" },
+                          { value: "Notional", label: "Notional" },
+                        ]}
+                        onChange={(v) => updateDraftRow("type", v as "Qty" | "Notional")}
+                        dropdownKey={`${row.id}-type`}
+                        openId={portfolioDropdownId}
+                        setOpenId={setPortfolioDropdownId}
+                        minWidth={112}
+                      />
+                      <div
+                        style={{ width: 1, backgroundColor: t.colors.border, flexShrink: 0, alignSelf: "stretch" }}
+                        aria-hidden
+                      />
+                      {row.type === "Notional" ? (
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          style={combinedFieldInput}
+                          value={
+                            row.value > 0
+                              ? `$${Math.round(row.value).toLocaleString("en-US")}`
+                              : ""
+                          }
+                          onChange={(e) => {
+                            const digits = e.target.value.replace(/[^\d]/g, "");
+                            updateDraftRow("value", digits ? Number(digits) : 0);
+                          }}
+                          placeholder="$0"
+                          aria-label="Position notional value"
+                        />
+                      ) : (
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          style={combinedFieldInput}
+                          value={row.value > 0 ? Math.round(row.value).toLocaleString("en-US") : ""}
+                          onChange={(e) => {
+                            const digits = e.target.value.replace(/[^\d]/g, "");
+                            updateDraftRow("value", digits ? Number(digits) : 0);
+                          }}
+                          placeholder="0"
+                          aria-label="Position quantity"
+                        />
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
-              {/* Target by · Monthly checkbox — combined block */}
-              <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(1.5) }}>
-                {/* Row 1: Target by dropdown + Monthly checkbox inline */}
-                <div style={{ display: "flex", alignItems: "flex-end", gap: t.spacing(2), flexWrap: "wrap" }}>
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
-                    <label style={labelStyle}>Target by</label>
+
+              <div style={inputSectionDivider} aria-hidden />
+
+              <div className="options-optimizer-inputs-cluster" style={{ display: "flex", flex: "0 0 auto", alignSelf: "stretch", alignItems: "stretch" }}>
+              {/* Expiration criteria */}
+              <div style={inputSectionBlockAuto}>
+                <span style={inputSectionLabel}>Expiration criteria</span>
+                <div style={inputFieldsRow}>
+                  <div style={inputFieldCol}>
+                    <label style={labelStyle}>Target</label>
                     <OptimizerThemeSelect
                       theme={t}
                       value={row.targetMode ?? "month"}
                       options={[
-                        { value: "month", label: "Month / Year" },
-                        { value: "days", label: "Days (DTE)" },
-                        { value: "expiry", label: "Expiry date" },
+                        { value: "month", label: "Month" },
+                        { value: "days", label: "DTE" },
+                        { value: "expiry", label: "Date" },
                       ]}
-                      onChange={(v) => updatePortfolioRow(row.id, "targetMode", v as "days" | "expiry" | "month")}
+                      onChange={(v) => updateDraftRow("targetMode", v as "days" | "expiry" | "month")}
                       dropdownKey={`${row.id}-targetMode`}
                       openId={portfolioDropdownId}
                       setOpenId={setPortfolioDropdownId}
-                      minWidth={120}
+                      minWidth={96}
                     />
                   </div>
-                  <HelpTooltip
-                    theme={t}
-                    text="When checked, only the standard monthly expiry for the selected period is considered (3rd Friday, or Thursday if Friday is a market holiday)."
-                  >
-                    <label
-                      htmlFor={`monthly-${row.id}`}
-                      style={{ ...labelStyle, textTransform: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: t.spacing(1), paddingBottom: 9, userSelect: "none" }}
-                    >
-                      <input
-                        type="checkbox"
-                        id={`monthly-${row.id}`}
-                        checked={row.monthly}
-                        onChange={(e) => updatePortfolioRow(row.id, "monthly", e.target.checked)}
-                        aria-label="Monthly expiration only"
-                        style={{ margin: 0, cursor: "pointer" }}
-                      />
-                      Monthly only
-                    </label>
-                  </HelpTooltip>
-                </div>
-                {/* Row 2: Date input — changes based on mode */}
-                {(row.targetMode ?? "month") === "month" ? (
-                  <div style={{ display: "flex", gap: t.spacing(1.5), alignItems: "flex-end", flexWrap: "wrap" }}>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
-                      <label style={labelStyle}>Month</label>
-                      <OptimizerThemeSelect
-                        theme={t}
-                        value={tmMonth}
-                        options={MONTH_OPTIONS}
-                        onChange={(v) => {
-                          const year = tmYear || String(new Date().getFullYear());
-                          updatePortfolioRow(row.id, "targetMonth", `${year}-${v}`);
-                        }}
-                        dropdownKey={`${row.id}-tmMonth`}
-                        openId={portfolioDropdownId}
-                        setOpenId={setPortfolioDropdownId}
-                        minWidth={120}
-                        dropdownMaxHeight={220}
-                      />
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
-                      <label style={labelStyle}>Year</label>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        maxLength={4}
-                        style={{ ...inputStyle, maxWidth: 72 }}
-                        value={tmYear}
-                        onChange={(e) => {
-                          const yr = e.target.value.replace(/\D/g, "").slice(0, 4);
-                          const mo = tmMonth || "01";
-                          updatePortfolioRow(row.id, "targetMonth", `${yr}-${mo}`);
-                        }}
-                        placeholder={String(new Date().getFullYear())}
-                        aria-label="Expiry year"
-                      />
-                    </div>
-                  </div>
-                ) : (row.targetMode ?? "month") === "days" ? (
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
-                    <HelpTooltip
-                      theme={t}
-                      text="Target days to expiration for this leg. Optimizer will look near this DTE."
-                    >
-                      <label style={labelStyle}>Days (DTE)</label>
-                    </HelpTooltip>
-                    <input
-                      type="number"
-                      min={1}
-                      style={{ ...inputStyle, maxWidth: 90 }}
-                      value={row.days || ""}
-                      onChange={(e) => updatePortfolioRow(row.id, "days", Number(e.target.value) || 0)}
-                      placeholder="30"
-                      aria-label="Days to expiration"
-                    />
-                  </div>
-                ) : (
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
-                    <HelpTooltip
-                      theme={t}
-                      text="Exact expiration date for this row. Optimizer will query this specific expiry."
-                    >
-                      <label style={labelStyle}>Expiry date</label>
-                    </HelpTooltip>
-                    <input
-                      type="date"
-                      style={{ ...inputStyle, maxWidth: 150 }}
-                      value={row.targetExpiry ?? ""}
-                      onChange={(e) => updatePortfolioRow(row.id, "targetExpiry", e.target.value)}
-                      aria-label="Target expiry date"
-                    />
-                  </div>
-                )}
-              </div>
-              {/* Strike filter: OTM/ITM % band vs absolute strike range */}
-              <div style={{ display: "flex", flexDirection: "column", gap: t.spacing(1.5) }}>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
-                  <HelpTooltip
-                    theme={t}
-                    text="Filter listed strikes by moneyness vs spot (%) or by an explicit min/max strike price."
-                  >
-                    <label style={labelStyle}>Strike filter by</label>
-                  </HelpTooltip>
-                  <OptimizerThemeSelect
-                    theme={t}
-                    value={row.strikeFilterMode ?? "percent"}
-                    options={[
-                      { value: "percent", label: "OTM / ITM %" },
-                      { value: "strike", label: "Strike price" },
-                    ]}
-                    onChange={(v) =>
-                      updatePortfolioRow(row.id, "strikeFilterMode", v as "percent" | "strike")
-                    }
-                    dropdownKey={`${row.id}-strikeFilterMode`}
-                    openId={portfolioDropdownId}
-                    setOpenId={setPortfolioDropdownId}
-                    minWidth={132}
-                  />
-                </div>
-                {(row.strikeFilterMode ?? "percent") === "percent" ? (
-                  <div style={{ display: "flex", gap: t.spacing(2), alignItems: "flex-end", flexWrap: "wrap" }}>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
-                      <HelpTooltip
-                        theme={t}
-                        text="Whether you want strikes out of the money (OTM) or in the money (ITM) relative to current price."
-                      >
-                        <label style={labelStyle}>OTM / ITM</label>
-                      </HelpTooltip>
-                      <OptimizerThemeSelect
-                        theme={t}
-                        value={row.moneyness ?? "OTM"}
-                        options={[
-                          { value: "OTM", label: "OTM" },
-                          { value: "ITM", label: "ITM" },
-                        ]}
-                        onChange={(v) => updatePortfolioRow(row.id, "moneyness", v as "OTM" | "ITM")}
-                        dropdownKey={`${row.id}-moneyness`}
-                        openId={portfolioDropdownId}
-                        setOpenId={setPortfolioDropdownId}
-                        minWidth={72}
-                      />
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
-                      <HelpTooltip
-                        theme={t}
-                        text={`Minimum ${row.moneyness ?? "OTM"} distance as a percent of current price. Only strikes at or beyond this level are included.`}
-                      >
-                        <label style={labelStyle}>Min %</label>
-                      </HelpTooltip>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        style={{ ...inputStyle, maxWidth: 62, minWidth: 52 }}
-                        value={row.otmPctMin > 0 ? `${row.otmPctMin}%` : ""}
-                        onChange={(e) => {
-                          const raw = e.target.value.replace(/%/g, "");
-                          updatePortfolioRow(row.id, "otmPctMin", Number(raw) || 0);
-                        }}
-                        placeholder="0%"
-                        aria-label={`Minimum ${row.moneyness ?? "OTM"} percent`}
-                      />
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
-                      <HelpTooltip
-                        theme={t}
-                        text={`Maximum ${row.moneyness ?? "OTM"} distance as a percent of current price. Only strikes at or within this level are included.`}
-                      >
-                        <label style={labelStyle}>Max %</label>
-                      </HelpTooltip>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        style={{ ...inputStyle, maxWidth: 62, minWidth: 52 }}
-                        value={row.otmPctMax > 0 ? `${row.otmPctMax}%` : ""}
-                        onChange={(e) => {
-                          const raw = e.target.value.replace(/%/g, "");
-                          updatePortfolioRow(row.id, "otmPctMax", Number(raw) || 0);
-                        }}
-                        placeholder="0%"
-                        aria-label={`Maximum ${row.moneyness ?? "OTM"} percent`}
-                      />
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ display: "flex", gap: t.spacing(2), alignItems: "flex-end", flexWrap: "wrap" }}>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
-                      <HelpTooltip
-                        theme={t}
-                        text="Only strikes greater than or equal to this price are included."
-                      >
-                        <label style={labelStyle}>Min strike</label>
-                      </HelpTooltip>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        style={{ ...inputStyle, maxWidth: 88, minWidth: 72 }}
-                        value={
-                          row.strikeMin != null && row.strikeMin > 0
-                            ? String(row.strikeMin)
-                            : ""
-                        }
-                        onChange={(e) => {
-                          const raw = e.target.value.replace(/,/g, "").trim();
-                          updatePortfolioRow(row.id, "strikeMin", raw === "" ? 0 : Number(raw) || 0);
-                        }}
-                        placeholder="e.g. 75"
-                        aria-label="Minimum strike price"
-                      />
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: t.spacing(1) }}>
-                      <HelpTooltip
-                        theme={t}
-                        text="Only strikes less than or equal to this price are included."
-                      >
-                        <label style={labelStyle}>Max strike</label>
-                      </HelpTooltip>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        style={{ ...inputStyle, maxWidth: 88, minWidth: 72 }}
-                        value={
-                          row.strikeMax != null && row.strikeMax > 0
-                            ? String(row.strikeMax)
-                            : ""
-                        }
-                        onChange={(e) => {
-                          const raw = e.target.value.replace(/,/g, "").trim();
-                          updatePortfolioRow(row.id, "strikeMax", raw === "" ? 0 : Number(raw) || 0);
-                        }}
-                        placeholder="e.g. 85"
-                        aria-label="Maximum strike price"
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-            );
-          })}
-        </div>
-        <div
-          style={{
-            ...fixedRails.railFooter,
-            marginTop: t.spacing(3),
-            display: "flex",
-            flexDirection: "column",
-            gap: t.spacing(2),
-            position: "sticky",
-            bottom: 0,
-            zIndex: 2,
-          }}
-        >
-          <button
-            type="button"
-            style={{ ...secondaryBtnStyle, ...getRailFooterActionButtonLayout() }}
-            onClick={addPortfolioRow}
-          >
-            + Add Contract
-          </button>
-          <button
-            type="button"
-            style={{ ...primaryBtn, ...getRailFooterActionButtonLayout() }}
-            onClick={runOptimize}
-            disabled={optimizeLoading}
-            aria-label="Optimize Portfolio"
-          >
-            {optimizeLoading ? (
-              <>
-                <span className="options-pricing-fetch-spinner" aria-hidden />
-                Optimizing…
-              </>
-            ) : (
-              "Optimize Portfolio"
-            )}
-          </button>
-          {optimizeMessage && (
-            <p style={{ margin: 0, fontSize: "0.85rem", color: t.colors.danger }}>
-              {optimizeMessage}{" "}
-              {showSchwabAuthHint && (
-                <a
-                  href={`${SCHWAB_API_BASE}/api/schwab?action=auth`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ color: t.colors.primary, fontWeight: t.typography.headingWeight }}
-                >
-                  Click here to reauthorize Schwab and refresh the token.
-                </a>
-              )}
-            </p>
-          )}
-        </div>
-        </div>
-      </aside>
-
-      <div style={fixedRails.contentWrap}>
-      {/* —— Ranked results —— */}
-      {rankedResults && (
-        <div
-          className="options-optimizer-card"
-          style={{
-            ...cardStyle,
-            position: "relative",
-            zIndex: 1,
-          }}
-        >
-          <h3 style={sectionTitleStyle}>Ranked results (yield + upside + risk)</h3>
-          <p style={{ fontSize: "0.875rem", color: t.colors.textMuted, marginBottom: t.spacing(2) }}>
-            Best options by combined yield and underlying upside. Add any row to your trade list below.{" "}
-            <strong>Tip:</strong> click <strong>Maturity</strong>, <strong>Strike</strong>, <strong>Moneyness</strong>,{" "}
-                    <strong>Limit Px</strong>, <strong>Ann. Yield</strong>, or <strong>Premium</strong> to cycle sort: default
-            order → ascending → descending.
-          </p>
-          {rankedResults.length > 0 && (
-            <p style={{ fontSize: "0.85rem", color: t.colors.text, marginBottom: t.spacing(3) }}>
-              <strong>Top yield:</strong> {Math.max(...rankedResults.map((r) => r.annYield)).toFixed(1)}%
-              {" · "}
-              <strong>Avg yield:</strong> {(rankedResults.reduce((s, r) => s + r.annYield, 0) / rankedResults.length).toFixed(1)}%
-            </p>
-          )}
-          {rankedResults.length === 0 && (
-            <p style={{ fontSize: "0.9rem", color: t.colors.danger, marginBottom: t.spacing(3), fontWeight: 600 }}>
-              {optimizeMessage ?? "No candidates matched your settings."}
-            </p>
-          )}
-          {rankedResults.length > 0 && (
-            <div style={{ overflowX: "auto", borderRadius: t.radius.md, border: `1px solid ${t.colors.border}` }}>
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: "0.875rem",
-                overflow: "hidden",
-                borderRadius: t.radius.md,
-              }}
-            >
-              <thead>
-                <tr style={{ borderBottom: `2px solid ${t.colors.border}`, backgroundColor: t.colors.secondary }}>
-                  <th style={{ textAlign: "left", padding: t.spacing(2), color: t.colors.secondaryText, fontWeight: 600, borderTopLeftRadius: t.radius.md }}>Rank</th>
-                  <th style={{ textAlign: "left", padding: t.spacing(2), color: t.colors.secondaryText, fontWeight: 600 }}>Ticker</th>
-                  <SortableOptimizerTh
-                    theme={t}
-                    sortKey="maturity"
-                    tableSort={optimizerTableSort}
-                    onCycle={cycleOptimizerTableSort}
-                    label="Maturity"
-                    textAlign="left"
-                  />
-                  <th style={{ textAlign: "left", padding: t.spacing(2), color: t.colors.secondaryText, fontWeight: 600 }}>Type</th>
-                  <th style={{ textAlign: "center", padding: t.spacing(2), color: t.colors.secondaryText, fontWeight: 600 }}>
-                    <HelpTooltip
-                      theme={t}
-                      text="1M Return is ~1-month total return: start from Schwab daily history (close on/after ~1 month ago), end from the live equity quote at request time (same snapshot as spot). Used in ranking."
-                    >
-                      <span style={{ cursor: "help" }}>1M Return</span>
-                    </HelpTooltip>
-                  </th>
-                  <SortableOptimizerTh
-                    theme={t}
-                    sortKey="strike"
-                    tableSort={optimizerTableSort}
-                    onCycle={cycleOptimizerTableSort}
-                    label="Strike"
-                    textAlign="right"
-                  />
-                  <SortableOptimizerTh
-                    theme={t}
-                    sortKey="moneyness"
-                    tableSort={optimizerTableSort}
-                    onCycle={cycleOptimizerTableSort}
-                    label="Moneyness"
-                    textAlign="center"
-                  />
-                  <SortableOptimizerTh
-                    theme={t}
-                    sortKey="limitPx"
-                    tableSort={optimizerTableSort}
-                    onCycle={cycleOptimizerTableSort}
-                    label="Limit Px"
-                    textAlign="center"
-                  />
-                  <SortableOptimizerTh
-                    theme={t}
-                    sortKey="annYield"
-                    tableSort={optimizerTableSort}
-                    onCycle={cycleOptimizerTableSort}
-                    label="Ann. Yield"
-                    textAlign="center"
-                    labelHelp={annYieldHeaderHelp}
-                    labelHelpMaxWidth={340}
-                  />
-                  <th style={{ textAlign: "center", padding: t.spacing(2), color: t.colors.secondaryText, fontWeight: 600 }}>
-                    <HelpTooltip
-                      theme={t}
-                      text="Probability of Profit = (1 − |delta|) × 100. Delta is sourced from the Schwab option quote. For a short option, |delta| ≈ probability of expiring in-the-money (against you), so 1 − |delta| is the probability of keeping the full premium."
-                    >
-                      <span style={{ cursor: "help" }}>PoP</span>
-                    </HelpTooltip>
-                  </th>
-                  <SortableOptimizerTh
-                    theme={t}
-                    sortKey="premiumPerContract"
-                    tableSort={optimizerTableSort}
-                    onCycle={cycleOptimizerTableSort}
-                    label="Premium"
-                    textAlign="center"
-                  />
-                  <th style={{ textAlign: "center", padding: t.spacing(2), color: t.colors.secondaryText, fontWeight: 600, borderTopRightRadius: t.radius.md }}>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {displayedRankedResults.map((r) => (
-                  <tr
-                    key={r.trade.id}
-                    style={{ borderBottom: `1px solid ${t.colors.border}` }}
-                  >
-                    <td
-                      style={{
-                        padding: t.spacing(2),
-                        fontWeight: 600,
-                        color:
-                          r.rank === 1
-                            ? rankingColors.gold
-                            : r.rank === 2
-                              ? rankingColors.silver
-                              : r.rank === 3
-                                ? rankingColors.bronze
-                                : t.colors.text,
-                      }}
-                    >
-                      #{r.rank}
-                    </td>
-                    <td style={{ padding: t.spacing(2), fontWeight: 600, color: t.colors.text }}>{r.ticker}</td>
-                    <td style={{ padding: t.spacing(2), fontSize: "0.8rem", color: t.colors.text }}>
-                      {r.trade.maturity}
-                    </td>
-                    <td style={{ padding: t.spacing(2), color: t.colors.text }}>
-                      {r.trade.optionSide.startsWith("PUT") ? "Put" : "Call"}
-                    </td>
-                    <td
-                      style={{
-                        padding: t.spacing(2),
-                        textAlign: "center",
-                        color: r.upsidePct >= 0 ? t.colors.success : t.colors.danger,
-                      }}
-                    >
-                      {r.upsidePct >= 0 ? "+" : ""}{r.upsidePct}%
-                    </td>
-                    <td style={{ padding: t.spacing(2), textAlign: "right" }}>{formatPrice(r.strike)}</td>
-                    <td
-                      style={{
-                        padding: t.spacing(2),
-                        textAlign: "center",
-                        color: (() => {
-                          const m = r.trade.moneynessPct;
-                          if (!Number.isFinite(m)) return t.colors.textMuted;
-                          const isPut = r.trade.optionSide.startsWith("PUT");
-                          // Ratio moneyness: OTM put = m < 100, OTM call = m > 100
-                          const otm = isPut ? m < 100 : m > 100;
-                          return otm ? t.colors.success : t.colors.danger;
-                        })(),
-                        fontWeight: 600,
-                      }}
-                    >
-                      {Number.isFinite(r.trade.moneynessPct)
-                        ? `${r.trade.moneynessPct.toFixed(2)}%`
-                        : "—"}
-                    </td>
-                    <td style={{ padding: t.spacing(2), textAlign: "center" }}>${r.limitPrice.toFixed(2)}</td>
-                    <td
-                      style={{
-                        padding: t.spacing(2),
-                        textAlign: "center",
-                        fontWeight: 600,
-                        color: r.annYield >= 0 ? t.colors.success : t.colors.danger,
-                      }}
-                    >
-                      {r.annYield}%
-                    </td>
-                    <td style={{ padding: t.spacing(2), textAlign: "center", fontWeight: 600, color: t.colors.textMuted }}>
-                      {r.delta != null
-                        ? `${((1 - Math.abs(r.delta)) * 100).toFixed(0)}%`
-                        : "—"}
-                    </td>
-                    <td
-                      style={{
-                        padding: t.spacing(2),
-                        textAlign: "center",
-                        color: r.premiumPerContract >= 0 ? t.colors.success : t.colors.danger,
-                        fontWeight: 600,
-                      }}
-                    >
-                      {formatMoneyFull(r.premiumPerContract)}
-                    </td>
-                    <td style={{ padding: t.spacing(2), textAlign: "center" }}>
-                      <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: t.spacing(3) }}>
-                        <button
-                          type="button"
-                          onClick={() => addToTradeList(r)}
-                          title="Add to trade list"
-                          aria-label="Add to trade list"
-                          className="options-optimizer-add-trade"
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            width: 34,
-                            height: 34,
-                            padding: 0,
-                            border: "none",
-                            background: "none",
-                            cursor: "pointer",
-                            color: t.colors.primary,
-                            borderRadius: "50%",
-                            position: "relative",
+                  {(row.targetMode ?? "month") === "month" ? (
+                    <>
+                      <div style={inputFieldCol}>
+                        <label style={labelStyle}>Month</label>
+                        <OptimizerThemeSelect
+                          theme={t}
+                          value={tmMonth}
+                          options={MONTH_OPTIONS}
+                          onChange={(v) => {
+                            const year = tmYear || String(new Date().getFullYear());
+                            updateDraftRow("targetMonth", `${year}-${v}`);
                           }}
-                        >
-                          <span
-                            className="material-symbols-outlined"
-                            style={{
-                              fontSize: 24,
-                              position: "absolute",
-                              opacity: addedResultIds.has(r.trade.id) ? 0 : 1,
-                              transition: "opacity 0.2s ease",
-                              pointerEvents: "none",
-                            }}
-                            aria-hidden
-                          >
-                            add_circle
-                          </span>
-                          <span
-                            className="material-symbols-outlined"
-                            style={{
-                              fontSize: 24,
-                              position: "absolute",
-                              opacity: addedResultIds.has(r.trade.id) ? 1 : 0,
-                              transition: "opacity 0.2s ease",
-                              pointerEvents: "none",
-                            }}
-                            aria-hidden
-                          >
-                            check_circle
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const text = formatRankedRowForCopy(r);
-                            void navigator.clipboard.writeText(text);
-                            setLastCopiedTradeId(r.trade.id);
-                            window.setTimeout(
-                              () =>
-                                setLastCopiedTradeId((prev) =>
-                                  prev === r.trade.id ? null : prev
-                                ),
-                              1200
-                            );
-                          }}
-                          title="Copy row details"
-                          aria-label="Copy row details"
-                          className="options-optimizer-copy-symbol"
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            width: 34,
-                            height: 34,
-                            padding: 0,
-                            border: "none",
-                            background: "none",
-                            cursor: "pointer",
-                            color: t.colors.textMuted,
-                            borderRadius: t.radius.sm,
-                            position: "relative",
-                          }}
-                        >
-                          <span
-                            className="material-symbols-outlined"
-                            style={{
-                              fontSize: 22,
-                              position: "absolute",
-                              opacity: lastCopiedTradeId === r.trade.id ? 0 : 1,
-                              transition: "opacity 0.2s ease",
-                              pointerEvents: "none",
-                            }}
-                            aria-hidden
-                          >
-                            content_copy
-                          </span>
-                          <span
-                            className="material-symbols-outlined"
-                            style={{
-                              fontSize: 22,
-                              position: "absolute",
-                              opacity: lastCopiedTradeId === r.trade.id ? 1 : 0,
-                              transition: "opacity 0.2s ease",
-                              pointerEvents: "none",
-                            }}
-                            aria-hidden
-                          >
-                            check
-                          </span>
-                        </button>
+                          dropdownKey={`${row.id}-tmMonth`}
+                          openId={portfolioDropdownId}
+                          setOpenId={setPortfolioDropdownId}
+                          fixedWidth={MONTH_SELECT_WIDTH}
+                          dropdownMaxHeight={220}
+                        />
                       </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </div>
-          )}
-        </div>
-      )}
+                      <div style={inputFieldCol}>
+                        <label style={labelStyle}>Year</label>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          maxLength={4}
+                          style={fieldInput({ maxWidth: 72, minWidth: 72 })}
+                          value={tmYear}
+                          onChange={(e) => {
+                            const yr = e.target.value.replace(/\D/g, "").slice(0, 4);
+                            const mo = tmMonth || "01";
+                            updateDraftRow("targetMonth", `${yr}-${mo}`);
+                          }}
+                          placeholder={String(new Date().getFullYear())}
+                          aria-label="Expiry year"
+                        />
+                      </div>
+                      <div style={inputFieldCol}>
+                        <label style={labelStyle} aria-hidden>
+                          &nbsp;
+                        </label>
+                        <label
+                          htmlFor={`monthly-${row.id}`}
+                          title="Standard monthly expiry only (3rd Friday)"
+                          style={{
+                            ...getDropdownTriggerStyle(t),
+                            minWidth: 112,
+                            maxWidth: 112,
+                            justifyContent: "flex-start",
+                            gap: t.spacing(1.5),
+                            fontSize: t.typography.baseFontSize,
+                            fontWeight: 500,
+                            cursor: "pointer",
+                            userSelect: "none",
+                            backgroundColor: row.monthly ? `${t.colors.primary}12` : t.colors.surface,
+                            borderColor: row.monthly ? t.colors.primary : t.colors.border,
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            id={`monthly-${row.id}`}
+                            checked={row.monthly}
+                            onChange={(e) => updateDraftRow("monthly", e.target.checked)}
+                            aria-label="Monthly expiration only"
+                            style={{ margin: 0, cursor: "pointer", accentColor: t.colors.primary }}
+                          />
+                          Monthly
+                        </label>
+                      </div>
+                    </>
+                  ) : (row.targetMode ?? "month") === "days" ? (
+                    <div style={inputFieldCol}>
+                      <label style={labelStyle}>Days</label>
+                      <input
+                        type="number"
+                        min={1}
+                        style={fieldInput({ maxWidth: 72, minWidth: 72 })}
+                        value={row.days || ""}
+                        onChange={(e) => updateDraftRow("days", Number(e.target.value) || 0)}
+                        placeholder="30"
+                        aria-label="Days to expiration"
+                      />
+                    </div>
+                  ) : (
+                    <div style={inputFieldCol}>
+                      <label style={labelStyle}>Expiry</label>
+                      <input
+                        type="date"
+                        style={fieldInput({ maxWidth: 140, minWidth: 140 })}
+                        value={row.targetExpiry ?? ""}
+                        onChange={(e) => updateDraftRow("targetExpiry", e.target.value)}
+                        aria-label="Target expiry date"
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
 
-      {!rankedResults && (
-        <div
-          className="options-optimizer-card"
-          style={{
-            ...cardStyle,
-            position: "relative",
-            zIndex: 1,
-            padding: t.spacing(5),
-          }}
-        >
-          <h3 style={sectionTitleStyle}>Ranked results (yield + upside + risk)</h3>
-          <div
-            style={{
-              marginTop: t.spacing(3),
-              padding: t.spacing(6),
-              textAlign: "center",
-              color: t.colors.textMuted,
-              border: `1px dashed ${t.colors.border}`,
-              borderRadius: t.radius.md,
-              backgroundColor: t.colors.background,
-            }}
-          >
-            Run Optimize to see ranked options candidates here.
-          </div>
+              <div style={inputSectionDivider} aria-hidden />
+
+              <div style={inputSectionBlockAuto}>
+                <HelpTooltip
+                  theme={t}
+                  text="OTM/ITM filter by percent from spot, or an explicit strike price range."
+                >
+                  <span style={inputSectionLabel}>Strike filter</span>
+                </HelpTooltip>
+                <div style={inputFieldsRow}>
+                  <div style={inputFieldCol}>
+                    <label style={labelStyle}>Filter by</label>
+                    <OptimizerThemeSelect
+                      theme={t}
+                      value={getStrikeFilterKind(row)}
+                      options={[
+                        { value: "OTM", label: "OTM" },
+                        { value: "ITM", label: "ITM" },
+                        { value: "strike", label: "Strike price" },
+                      ]}
+                      onChange={(v) => setDraftRow((prev) => applyStrikeFilterKind(prev, v as StrikeFilterKind))}
+                      dropdownKey={`${row.id}-strikeFilterKind`}
+                      openId={portfolioDropdownId}
+                      setOpenId={setPortfolioDropdownId}
+                      minWidth={108}
+                    />
+                  </div>
+                  {getStrikeFilterKind(row) !== "strike" ? (
+                    <>
+                      <div style={inputFieldCol}>
+                        <label style={labelStyle}>Min %</label>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          style={fieldInput({ maxWidth: 64, minWidth: 64 })}
+                          value={row.otmPctMin > 0 ? `${row.otmPctMin}%` : ""}
+                          onChange={(e) => {
+                            const raw = e.target.value.replace(/%/g, "");
+                            updateDraftRow("otmPctMin", Number(raw) || 0);
+                          }}
+                          placeholder="5%"
+                          aria-label="Minimum OTM/ITM percent"
+                        />
+                      </div>
+                      <div style={inputFieldCol}>
+                        <label style={labelStyle}>Max %</label>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          style={fieldInput({ maxWidth: 64, minWidth: 64 })}
+                          value={row.otmPctMax > 0 ? `${row.otmPctMax}%` : ""}
+                          onChange={(e) => {
+                            const raw = e.target.value.replace(/%/g, "");
+                            updateDraftRow("otmPctMax", Number(raw) || 0);
+                          }}
+                          placeholder="15%"
+                          aria-label="Maximum OTM/ITM percent"
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div style={inputFieldCol}>
+                        <label style={labelStyle}>Min $</label>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          style={fieldInput({ maxWidth: 72, minWidth: 72 })}
+                          value={row.strikeMin != null && row.strikeMin > 0 ? String(row.strikeMin) : ""}
+                          onChange={(e) => {
+                            const raw = e.target.value.replace(/,/g, "").trim();
+                            updateDraftRow("strikeMin", raw === "" ? 0 : Number(raw) || 0);
+                          }}
+                          placeholder="75"
+                          aria-label="Minimum strike price"
+                        />
+                      </div>
+                      <div style={inputFieldCol}>
+                        <label style={labelStyle}>Max $</label>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          style={fieldInput({ maxWidth: 72, minWidth: 72 })}
+                          value={row.strikeMax != null && row.strikeMax > 0 ? String(row.strikeMax) : ""}
+                          onChange={(e) => {
+                            const raw = e.target.value.replace(/,/g, "").trim();
+                            updateDraftRow("strikeMax", raw === "" ? 0 : Number(raw) || 0);
+                          }}
+                          placeholder="85"
+                          aria-label="Maximum strike price"
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+              </div>
+
+              <div className="options-optimizer-action-btns" style={actionBtnRow}>
+                <button
+                  type="button"
+                  className="options-optimizer-add-contract-btn"
+                  style={addContractBtn}
+                  onClick={addQueryContract}
+                  aria-label="Add Contract"
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 20 }} aria-hidden>
+                    add
+                  </span>
+                  Add Contract
+                </button>
+                <button
+                  type="button"
+                  style={optimizeBtnWide}
+                  onClick={runOptimize}
+                  disabled={optimizeLoading}
+                  aria-label="Optimize Portfolio"
+                >
+                  {optimizeLoading ? (
+                    <>
+                      <span className="options-pricing-fetch-spinner" aria-hidden />
+                      Optimizing…
+                    </>
+                  ) : (
+                    "Optimize Portfolio"
+                  )}
+                </button>
+              </div>
+            </>
+            );
+          })() : (() => {
+            const cd = collarDraft;
+            const tmParts = (cd.targetMonth ?? "").split("-");
+            const tmYear = tmParts[0] ?? "";
+            const tmMonth = tmParts[1] ?? "";
+            return (
+            <>
+              <div style={inputSectionBlockAuto}>
+                <span style={inputSectionLabel}>Collar setup</span>
+                <div style={inputFieldsRowInline}>
+                  <div style={inputFieldCol}>
+                    <label style={labelStyle}>Ticker</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. SPCX"
+                      style={fieldInput({ maxWidth: 96, minWidth: 96 })}
+                      value={cd.ticker}
+                      onChange={(e) => updateCollarDraft("ticker", e.target.value)}
+                      aria-label="Ticker"
+                    />
+                  </div>
+                  <div style={inputFieldCol}>
+                    <HelpTooltip theme={t} text="Share count converts to contracts (÷ 100, rounded down) when adding to trade list.">
+                      <label style={labelStyle}>Shares</label>
+                    </HelpTooltip>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      style={fieldInput({ maxWidth: 120, minWidth: 120 })}
+                      value={cd.shareCount > 0 ? cd.shareCount.toLocaleString("en-US") : ""}
+                      onChange={(e) => {
+                        const raw = e.target.value.replace(/,/g, "").trim();
+                        updateCollarDraft("shareCount", raw === "" ? 0 : Number(raw) || 0);
+                      }}
+                      placeholder="39,148"
+                      aria-label="Share count"
+                    />
+                  </div>
+                  <div style={inputFieldCol}>
+                    <label style={labelStyle}>Rank by</label>
+                    <OptimizerThemeSelect
+                      theme={t}
+                      value={cd.rankBy}
+                      options={[
+                        { value: "even", label: "Nearest Even" },
+                        { value: "widest", label: "Widest band" },
+                        { value: "best_floor", label: "Best floor" },
+                      ]}
+                      onChange={(v) => updateCollarDraft("rankBy", v as CollarRankBy)}
+                      dropdownKey="collar-rankBy"
+                      openId={portfolioDropdownId}
+                      setOpenId={setPortfolioDropdownId}
+                      minWidth={130}
+                    />
+                  </div>
+                </div>
+              </div>
+              <div style={inputSectionDivider} aria-hidden />
+              <div style={inputSectionBlockAuto}>
+                <span style={inputSectionLabel}>Expiration</span>
+                <div style={inputFieldsRowInline}>
+                  <div style={inputFieldCol}>
+                    <label style={labelStyle}>Target</label>
+                    <OptimizerThemeSelect
+                      theme={t}
+                      value={cd.targetMode}
+                      options={[
+                        { value: "month", label: "Month" },
+                        { value: "days", label: "Days" },
+                        { value: "expiry", label: "Exact date" },
+                      ]}
+                      onChange={(v) => updateCollarDraft("targetMode", v as CollarDraft["targetMode"])}
+                      dropdownKey="collar-targetMode"
+                      openId={portfolioDropdownId}
+                      setOpenId={setPortfolioDropdownId}
+                      minWidth={108}
+                    />
+                  </div>
+                  {cd.targetMode === "month" ? (
+                    <>
+                      <div style={inputFieldCol}>
+                        <label style={labelStyle}>Month</label>
+                        <OptimizerThemeSelect
+                          theme={t}
+                          value={tmMonth}
+                          options={MONTH_OPTIONS}
+                          onChange={(v) => {
+                            const year = tmYear || String(new Date().getFullYear());
+                            updateCollarDraft("targetMonth", `${year}-${v}`);
+                          }}
+                          dropdownKey="collar-tmMonth"
+                          openId={portfolioDropdownId}
+                          setOpenId={setPortfolioDropdownId}
+                          fixedWidth={MONTH_SELECT_WIDTH}
+                          dropdownMaxHeight={220}
+                        />
+                      </div>
+                      <div style={inputFieldCol}>
+                        <label style={labelStyle}>Year</label>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          maxLength={4}
+                          style={fieldInput({ maxWidth: 72, minWidth: 72 })}
+                          value={tmYear}
+                          onChange={(e) => {
+                            const yr = e.target.value.replace(/\D/g, "").slice(0, 4);
+                            const mo = tmMonth || "01";
+                            updateCollarDraft("targetMonth", `${yr}-${mo}`);
+                          }}
+                          placeholder={String(new Date().getFullYear())}
+                          aria-label="Expiry year"
+                        />
+                      </div>
+                      <div style={inputFieldCol}>
+                        <label style={labelStyle} aria-hidden>&nbsp;</label>
+                        <label
+                          htmlFor="collar-monthly"
+                          style={{
+                            ...getDropdownTriggerStyle(t),
+                            minWidth: 112,
+                            maxWidth: 112,
+                            justifyContent: "flex-start",
+                            gap: t.spacing(1.5),
+                            fontSize: t.typography.baseFontSize,
+                            fontWeight: 500,
+                            cursor: "pointer",
+                            userSelect: "none",
+                            backgroundColor: cd.monthly ? `${t.colors.primary}12` : t.colors.surface,
+                            borderColor: cd.monthly ? t.colors.primary : t.colors.border,
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            id="collar-monthly"
+                            checked={cd.monthly}
+                            onChange={(e) => updateCollarDraft("monthly", e.target.checked)}
+                            aria-label="Monthly expiration only"
+                            style={{ margin: 0, cursor: "pointer", accentColor: t.colors.primary }}
+                          />
+                          Monthly
+                        </label>
+                      </div>
+                    </>
+                  ) : cd.targetMode === "days" ? (
+                    <div style={inputFieldCol}>
+                      <label style={labelStyle}>Days</label>
+                      <input
+                        type="number"
+                        min={1}
+                        style={fieldInput({ maxWidth: 72, minWidth: 72 })}
+                        value={cd.days || ""}
+                        onChange={(e) => updateCollarDraft("days", Number(e.target.value) || 0)}
+                        placeholder="365"
+                        aria-label="Days to expiration"
+                      />
+                    </div>
+                  ) : (
+                    <div style={inputFieldCol}>
+                      <label style={labelStyle}>Expiry</label>
+                      <input
+                        type="date"
+                        style={fieldInput({ maxWidth: 140, minWidth: 140 })}
+                        value={cd.targetExpiry ?? ""}
+                        onChange={(e) => updateCollarDraft("targetExpiry", e.target.value)}
+                        aria-label="Target expiry date"
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div style={inputSectionDivider} aria-hidden />
+              <div style={inputSectionBlockAuto}>
+                <HelpTooltip theme={t} text="Optional — leave blank to scan all strikes. Fill both to quote a specific collar (e.g. 125 put / 165 call).">
+                  <span style={inputSectionLabel}>Custom strikes (optional)</span>
+                </HelpTooltip>
+                <div style={inputFieldsRowInline}>
+                  <div style={inputFieldCol}>
+                    <label style={labelStyle}>Buy put $</label>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      style={fieldInput({ maxWidth: 88, minWidth: 88 })}
+                      value={cd.customPutStrike}
+                      onChange={(e) => updateCollarDraft("customPutStrike", e.target.value)}
+                      placeholder="125"
+                      aria-label="Custom put strike"
+                    />
+                  </div>
+                  <div style={inputFieldCol}>
+                    <label style={labelStyle}>Sell call $</label>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      style={fieldInput({ maxWidth: 88, minWidth: 88 })}
+                      value={cd.customCallStrike}
+                      onChange={(e) => updateCollarDraft("customCallStrike", e.target.value)}
+                      placeholder="165"
+                      aria-label="Custom call strike"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="options-optimizer-action-btns" style={actionBtnRow}>
+                <button
+                  type="button"
+                  style={optimizeBtnWide}
+                  onClick={runCollarScan}
+                  disabled={collarLoading}
+                  aria-label="Find best collar"
+                >
+                  {collarLoading ? (
+                    <>
+                      <span className="options-pricing-fetch-spinner" aria-hidden />
+                      Scanning…
+                    </>
+                  ) : (
+                    "Find Best Collar"
+                  )}
+                </button>
+              </div>
+            </>
+            );
+          })()}
+          <div style={{ flexShrink: 0, width: inputsBarPaddingX, minWidth: inputsBarPaddingX }} aria-hidden />
         </div>
-      )}
-      <footer
-        style={{
-          marginTop: t.spacing(6),
-          paddingTop: t.spacing(3),
-          paddingBottom: t.spacing(6),
-          borderTop: `1px solid ${t.colors.border}`,
-          fontSize: "0.75rem",
-          color: t.colors.textMuted,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: t.spacing(2),
-        }}
-      >
-        <span>Market data provided by Charles Schwab.</span>
-        {lastUpdated && (
-          <span>
-            Data as of{" "}
-            {lastUpdated.toLocaleString(undefined, {
-              year: "numeric",
-              month: "short",
-              day: "2-digit",
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
-          </span>
+        {optimizerMode === "leg-finder" && optimizeMessage && (
+          <p style={{ margin: `${t.spacing(1)} 0 0`, paddingBottom: 0, fontSize: "0.8rem", color: t.colors.danger }}>
+            {optimizeMessage}{" "}
+            {showSchwabAuthHint && (
+              <a
+                href={`${SCHWAB_API_BASE}/api/schwab?action=auth`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: t.colors.primary, fontWeight: t.typography.headingWeight }}
+              >
+                Click here to reauthorize Schwab and refresh the token.
+              </a>
+            )}
+          </p>
         )}
-      </footer>
+        {optimizerMode === "collar" && collarMessage && (
+          <p style={{ margin: `${t.spacing(1)} 0 0`, paddingBottom: 0, fontSize: "0.8rem", color: collarResults?.length ? t.colors.textMuted : t.colors.danger }}>
+            {collarMessage}{" "}
+            {showCollarAuthHint && (
+              <a
+                href={`${SCHWAB_API_BASE}/api/schwab?action=auth`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: t.colors.primary, fontWeight: t.typography.headingWeight }}
+              >
+                Click here to reauthorize Schwab and refresh the token.
+              </a>
+            )}
+          </p>
+        )}
       </div>
 
-      <aside style={fixedRails.rightRail}>
+      <div className="options-optimizer-main-below-inputs" style={{ marginRight: tradeListClearance }}>
+        <div aria-hidden style={{ height: contentTop, pointerEvents: "none" }} />
+
+        {optimizerMode === "leg-finder" && queryContracts.length > 0 && (
+          <div
+            className="options-optimizer-query-contracts"
+            style={{
+              padding: `${t.spacing(2)} ${inputsBarPaddingX}`,
+              backgroundColor: t.colors.surface,
+              borderBottom: `1px solid ${t.colors.border}`,
+              boxSizing: "border-box",
+              position: "relative",
+              zIndex: 1,
+            }}
+          >
+            <span style={{ ...inputSectionLabel, display: "block", marginBottom: t.spacing(1) }}>
+              Optimizer queries
+              <span style={{ marginLeft: t.spacing(1), color: t.colors.textMuted, fontWeight: 600 }}>
+                ({queryContracts.length})
+              </span>
+            </span>
+            <div className="options-optimizer-query-contracts-scroll">
+              {queryContracts.map((qc) => (
+                <div
+                  key={qc.id}
+                  className="options-optimizer-card options-optimizer-query-chip"
+                  style={{
+                    display: "inline-flex",
+                    flexDirection: "column",
+                    gap: 3,
+                    padding: `${t.spacing(1.25)} ${t.spacing(2)}`,
+                    backgroundColor: t.colors.background,
+                    border: `1px solid ${t.colors.border}`,
+                    borderRadius: t.radius.md,
+                    boxSizing: "border-box",
+                    flexShrink: 0,
+                    width: 248,
+                    minWidth: 248,
+                    maxWidth: 248,
+                    minHeight: 74,
+                    height: 74,
+                    fontSize: "0.78rem",
+                    lineHeight: 1.35,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: t.spacing(1),
+                      minWidth: 0,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontWeight: 700,
+                        color: t.colors.text,
+                        flexShrink: 0,
+                        letterSpacing: "0.02em",
+                      }}
+                    >
+                      {qc.ticker}
+                    </span>
+                    <span
+                      style={{
+                        color: t.colors.textMuted,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        minWidth: 0,
+                        flex: 1,
+                      }}
+                    >
+                      {formatQueryExpiryHeadline(qc)}
+                    </span>
+                    {qc.monthly && (
+                      <span
+                        style={{
+                          flexShrink: 0,
+                          fontSize: "0.62rem",
+                          fontWeight: 700,
+                          letterSpacing: "0.04em",
+                          textTransform: "uppercase",
+                          color: t.colors.primary,
+                          backgroundColor: `${t.colors.primary}14`,
+                          borderRadius: t.radius.sm,
+                          padding: "2px 5px",
+                        }}
+                      >
+                        Mo
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => removeQueryContract(qc.id)}
+                      aria-label={`Remove ${qc.ticker} query`}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        width: 24,
+                        height: 24,
+                        padding: 0,
+                        marginLeft: t.spacing(0.5),
+                        border: "none",
+                        background: "none",
+                        cursor: "pointer",
+                        color: t.colors.textMuted,
+                        flexShrink: 0,
+                        borderRadius: t.radius.sm,
+                      }}
+                    >
+                      <span className="material-symbols-outlined" style={{ fontSize: 18 }} aria-hidden>
+                        remove
+                      </span>
+                    </button>
+                  </div>
+                  <div
+                    style={{
+                      color: t.colors.textMuted,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      fontSize: "0.72rem",
+                      flex: 1,
+                      minHeight: "1.35em",
+                    }}
+                  >
+                    {formatQueryChipSecondary(qc)}
+                  </div>
+                  <div
+                    style={{
+                      color: t.colors.text,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      fontSize: "0.72rem",
+                      fontWeight: 600,
+                      flex: 1,
+                      minHeight: "1.35em",
+                    }}
+                  >
+                    {formatQueryPositionLabel(qc)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div
+          style={{
+            minHeight: centerPanelMinHeight,
+          }}
+        >
+        <div
+          className="options-optimizer-center-panel"
+          style={{
+            backgroundColor: activeResultsTable ? t.colors.surface : t.colors.background,
+            overflow: "hidden",
+            minHeight: centerPanelMinHeight,
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          {optimizerMode === "leg-finder" && (showResultsTable || rankedResults) && (
+            <div
+              style={{
+                padding: `${t.spacing(2)} ${t.spacing(3)}`,
+                borderBottom: showResultsTable ? `1px solid ${t.colors.border}` : "none",
+                backgroundColor: t.colors.surface,
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  justifyContent: "space-between",
+                  gap: t.spacing(3),
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <h3 style={{ ...sectionTitleStyle, marginTop: 0, marginBottom: t.spacing(1) }}>
+                    Ranked results (yield + upside + risk)
+                  </h3>
+                  {showResultsTable && (
+                    <p style={{ fontSize: "0.8rem", color: t.colors.textMuted, margin: 0 }}>
+                      Add rows to your trade list with the + action. Click column headers to sort.
+                    </p>
+                  )}
+                </div>
+                {showResultsTable && (
+                  <div style={{ textAlign: "right", flexShrink: 0, alignSelf: "flex-start" }}>
+                    <p style={{ margin: 0, fontSize: "0.9rem", lineHeight: 1.45, color: t.colors.text }}>
+                      <strong>Top yield:</strong> {Math.max(...rankedResults!.map((r) => r.annYield)).toFixed(2)}%
+                    </p>
+                    <p style={{ margin: `${t.spacing(0.5)} 0 0`, fontSize: "0.9rem", lineHeight: 1.45, color: t.colors.text }}>
+                      <strong>Avg yield:</strong>{" "}
+                      {(rankedResults!.reduce((s, r) => s + r.annYield, 0) / rankedResults!.length).toFixed(2)}%
+                    </p>
+                  </div>
+                )}
+              </div>
+              {rankedResults && rankedResults.length === 0 && (
+                <p style={{ fontSize: "0.85rem", color: t.colors.danger, margin: `${t.spacing(1)} 0 0`, fontWeight: 600 }}>
+                  {optimizeMessage ?? "No candidates matched your settings."}
+                </p>
+              )}
+            </div>
+          )}
+
+          {optimizerMode === "leg-finder" && showResultsTable && (
+            <>
+            <div style={{ overflowX: "auto", backgroundColor: t.colors.surface }}>
+              <table
+                className="options-optimizer-results-table"
+                style={{
+                  borderCollapse: "collapse",
+                  fontSize: tableFontSize,
+                  width: "100%",
+                  tableLayout: "fixed",
+                  backgroundColor: t.colors.surface,
+                }}
+              >
+                <colgroup>
+                  {Array.from({ length: 16 }, (_, i) => (
+                    <col key={i} style={{ width: `${100 / 16}%` }} />
+                  ))}
+                </colgroup>
+                <thead>
+                  <tr style={{ borderBottom: `2px solid ${t.colors.border}`, backgroundColor: t.colors.secondary }}>
+                    <th style={tableThStyle}>Rank</th>
+                    <th style={tableThStyle}>Ticker</th>
+                    <SortableOptimizerTh theme={t} sortKey="maturity" tableSort={optimizerTableSort} onCycle={cycleOptimizerTableSort} label="Maturity" textAlign="center" cellPadding={tableCellPadding} thStyle={{ whiteSpace: "nowrap", verticalAlign: "middle" }} />
+                    <th style={tableThStyle}>Type</th>
+                    <SortableOptimizerTh theme={t} sortKey="strike" tableSort={optimizerTableSort} onCycle={cycleOptimizerTableSort} label="Strike" textAlign="center" cellPadding={tableCellPadding} thStyle={{ whiteSpace: "nowrap", verticalAlign: "middle" }} />
+                    <SortableOptimizerTh theme={t} sortKey="moneyness" tableSort={optimizerTableSort} onCycle={cycleOptimizerTableSort} label="Moneyness" textAlign="center" cellPadding={tableCellPadding} thStyle={{ whiteSpace: "nowrap", verticalAlign: "middle" }} />
+                    <SortableOptimizerTh theme={t} sortKey="limitPx" tableSort={optimizerTableSort} onCycle={cycleOptimizerTableSort} label="Limit" textAlign="center" cellPadding={tableCellPadding} thStyle={{ whiteSpace: "nowrap", verticalAlign: "middle" }} />
+                    <SortableOptimizerTh theme={t} sortKey="periodYield" tableSort={optimizerTableSort} onCycle={cycleOptimizerTableSort} label="Yield" textAlign="center" labelHelp={periodYieldHeaderHelp} labelHelpMaxWidth={320} cellPadding={tableCellPadding} thStyle={{ whiteSpace: "nowrap", verticalAlign: "middle" }} />
+                    <SortableOptimizerTh theme={t} sortKey="annYield" tableSort={optimizerTableSort} onCycle={cycleOptimizerTableSort} label="Ann. Yield" textAlign="center" labelHelp={annYieldHeaderHelp} labelHelpMaxWidth={340} cellPadding={tableCellPadding} thStyle={{ whiteSpace: "nowrap", verticalAlign: "middle" }} />
+                    <th style={tableNumThStyle}>
+                      <HelpTooltip theme={t} text="Probability of Profit = (1 − |delta|) × 100 from Schwab option quote.">
+                        <span style={{ cursor: "help" }}>PoP</span>
+                      </HelpTooltip>
+                    </th>
+                    <th style={tableNumThStyle}>
+                      <HelpTooltip
+                        theme={t}
+                        text="Implied volatility from the Schwab option quote, shown as a percentage. Higher IV generally means richer option premiums."
+                      >
+                        <span style={{ cursor: "help" }}>IV</span>
+                      </HelpTooltip>
+                    </th>
+                    <th style={tableNumThStyle}>
+                      <HelpTooltip
+                        theme={t}
+                        text="Option delta from Schwab — sensitivity to a $1 move in the underlying. Also used to derive PoP for short premium."
+                      >
+                        <span style={{ cursor: "help" }}>Δ</span>
+                      </HelpTooltip>
+                    </th>
+                    <th style={tableNumThStyle}>
+                      <HelpTooltip
+                        theme={t}
+                        text="Open interest: total outstanding contracts at this strike and expiry. Higher OI often indicates better liquidity."
+                      >
+                        <span style={{ cursor: "help" }}>OI</span>
+                      </HelpTooltip>
+                    </th>
+                    <th style={tableNumThStyle}>
+                      <HelpTooltip
+                        theme={t}
+                        text="Today's total option volume at this strike and expiry. Higher volume suggests more active trading."
+                      >
+                        <span style={{ cursor: "help" }}>Vol</span>
+                      </HelpTooltip>
+                    </th>
+                    <SortableOptimizerTh theme={t} sortKey="premiumPerContract" tableSort={optimizerTableSort} onCycle={cycleOptimizerTableSort} label="Premium" textAlign="center" cellPadding={tableCellPadding} thStyle={{ whiteSpace: "nowrap", verticalAlign: "middle" }} />
+                    <th style={{ ...tableNumThStyle, padding: tableActionCellPadding }}>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {displayedRankedResults.map((r) => (
+                    <tr key={r.trade.id} style={{ borderBottom: `1px solid ${t.colors.border}`, backgroundColor: t.colors.surface }}>
+                      <td style={{ ...tableTdStyle, fontWeight: 600, color: r.rank === 1 ? rankingColors.gold : r.rank === 2 ? rankingColors.silver : r.rank === 3 ? rankingColors.bronze : t.colors.text }}>#{r.rank}</td>
+                      <td style={{ ...tableTdStyle, fontWeight: 600, color: t.colors.text }}>{r.ticker}</td>
+                      <td style={{ ...tableTdStyle, color: t.colors.text }}>
+                        <div style={{ whiteSpace: "nowrap", lineHeight: 1.3 }}>{r.trade.maturity}</div>
+                        <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, lineHeight: 1.25, marginTop: 2 }}>
+                          {r.trade.daysToMaturity} DTE
+                        </div>
+                      </td>
+                      <td style={{ ...tableTdStyle, color: t.colors.text }}>{r.trade.optionSide.startsWith("PUT") ? "Put" : "Call"}</td>
+                      <td style={{ ...tableNumTdStyle, fontWeight: 700 }}>{formatPrice(r.strike)}</td>
+                      <td style={{ ...tableNumTdStyle, color: (() => { const m = r.trade.moneynessPct; if (!Number.isFinite(m)) return t.colors.textMuted; const isPut = r.trade.optionSide.startsWith("PUT"); const otm = isPut ? m < 100 : m > 100; return otm ? t.colors.success : t.colors.danger; })(), fontWeight: 600 }}>{Number.isFinite(r.trade.moneynessPct) ? `${r.trade.moneynessPct.toFixed(1)}%` : "—"}</td>
+                      <td style={{ ...tableNumTdStyle }}>
+                        <div style={{ fontWeight: 700, lineHeight: 1.3 }}>${r.limitPrice.toFixed(2)}</div>
+                        <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, lineHeight: 1.25, marginTop: 2, whiteSpace: "nowrap" }}>
+                          {r.trade.currentBid.toFixed(2)}/{r.trade.currentAsk.toFixed(2)}
+                        </div>
+                      </td>
+                      <td style={{ ...tableNumTdStyle, fontWeight: 600, color: r.trade.yieldAtCurrentPrice >= 0 ? t.colors.success : t.colors.danger }}>{r.trade.yieldAtCurrentPrice}%</td>
+                      <td style={{ ...tableNumTdStyle, fontWeight: 600, color: r.annYield >= 0 ? t.colors.success : t.colors.danger }}>{r.annYield}%</td>
+                      <td style={{ ...tableNumTdStyle, fontWeight: 600, color: t.colors.textMuted }}>{r.delta != null ? `${((1 - Math.abs(r.delta)) * 100).toFixed(0)}%` : "—"}</td>
+                      <td style={{ ...tableNumTdStyle, color: t.colors.textMuted }}>{r.ivPct != null ? `${r.ivPct.toFixed(1)}%` : "—"}</td>
+                      <td style={{ ...tableNumTdStyle, color: t.colors.textMuted }}>{r.delta != null ? r.delta.toFixed(2) : "—"}</td>
+                      <td style={{ ...tableNumTdStyle, color: t.colors.textMuted }}>{r.openInterest != null ? r.openInterest.toLocaleString() : "—"}</td>
+                      <td style={{ ...tableNumTdStyle, color: t.colors.textMuted }}>{r.totalVolume != null ? r.totalVolume.toLocaleString() : "—"}</td>
+                      <td style={{ ...tableNumTdStyle, color: r.premiumPerContract >= 0 ? t.colors.success : t.colors.danger, fontWeight: 600 }}>{formatMoneyFull(r.premiumPerContract)}</td>
+                      <td style={{ ...tableNumTdStyle, padding: tableActionCellPadding }}>
+                        <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: t.spacing(1) }}>
+                          <button type="button" onClick={() => addToTradeList(r)} title="Add to trade list" aria-label="Add to trade list" className="options-optimizer-add-trade" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, padding: 0, border: "none", background: "none", cursor: "pointer", color: t.colors.primary, borderRadius: "50%", position: "relative" }}>
+                            <span className="material-symbols-outlined" style={{ fontSize: 22, position: "absolute", opacity: addedResultIds.has(r.trade.id) ? 0 : 1, transition: "opacity 0.2s ease", pointerEvents: "none" }} aria-hidden>add_circle</span>
+                            <span className="material-symbols-outlined" style={{ fontSize: 22, position: "absolute", opacity: addedResultIds.has(r.trade.id) ? 1 : 0, transition: "opacity 0.2s ease", pointerEvents: "none" }} aria-hidden>check_circle</span>
+                          </button>
+                          <button type="button" onClick={() => { const text = formatRankedRowForCopy(r); void navigator.clipboard.writeText(text); setLastCopiedTradeId(r.trade.id); window.setTimeout(() => setLastCopiedTradeId((prev) => (prev === r.trade.id ? null : prev)), 1200); }} title="Copy row details" aria-label="Copy row details" className="options-optimizer-copy-symbol" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, padding: 0, border: "none", background: "none", cursor: "pointer", color: t.colors.textMuted, borderRadius: t.radius.sm, position: "relative" }}>
+                            <span className="material-symbols-outlined" style={{ fontSize: 20, position: "absolute", opacity: lastCopiedTradeId === r.trade.id ? 0 : 1, transition: "opacity 0.2s ease", pointerEvents: "none" }} aria-hidden>content_copy</span>
+                            <span className="material-symbols-outlined" style={{ fontSize: 20, position: "absolute", opacity: lastCopiedTradeId === r.trade.id ? 1 : 0, transition: "opacity 0.2s ease", pointerEvents: "none" }} aria-hidden>check</span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <footer
+              style={{
+                padding: `${t.spacing(2)} ${tableCellPadX}`,
+                paddingRight: tableEdgePadRight,
+                fontSize: "0.78rem",
+                color: t.colors.textMuted,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: t.spacing(2),
+                flexWrap: "wrap",
+                backgroundColor: t.colors.surface,
+              }}
+            >
+              {schwabAttribution}
+            </footer>
+            </>
+          )}
+
+          {optimizerMode === "collar" && (showCollarResultsTable || collarResults) && (
+            <div
+              style={{
+                padding: `${t.spacing(2)} ${t.spacing(3)}`,
+                borderBottom: showCollarResultsTable ? `1px solid ${t.colors.border}` : "none",
+                backgroundColor: t.colors.surface,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: t.spacing(3) }}>
+                <div style={{ minWidth: 0 }}>
+                  <h3 style={{ ...sectionTitleStyle, marginTop: 0, marginBottom: t.spacing(1) }}>
+                    Collar scan results
+                  </h3>
+                  {showCollarResultsTable && (
+                    <p style={{ fontSize: "0.8rem", color: t.colors.textMuted, margin: 0 }}>
+                      Buy put + sell call pairs ranked by your criteria. Net cost uses put ask − call bid (executable collar).
+                    </p>
+                  )}
+                </div>
+                {showCollarResultsTable && collarSpot != null && (
+                  <div style={{ textAlign: "right", flexShrink: 0, alignSelf: "flex-start" }}>
+                    <p style={{ margin: 0, fontSize: "0.9rem", lineHeight: 1.45, color: t.colors.text }}>
+                      <strong>Spot:</strong> ${collarSpot.toFixed(2)}
+                    </p>
+                    {collarResults!.some((r) => r.isEven) && (
+                      <p style={{ margin: `${t.spacing(0.5)} 0 0`, fontSize: "0.9rem", lineHeight: 1.45, color: t.colors.success }}>
+                        <strong>Even collars found</strong>
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+              {collarResults && collarResults.length === 0 && (
+                <p style={{ fontSize: "0.85rem", color: t.colors.danger, margin: `${t.spacing(1)} 0 0`, fontWeight: 600 }}>
+                  {collarMessage ?? "No collar pairs matched your settings."}
+                </p>
+              )}
+            </div>
+          )}
+
+          {optimizerMode === "collar" && showCollarResultsTable && (
+            <>
+            <div style={{ overflowX: "auto", backgroundColor: t.colors.surface }}>
+              <table
+                className="options-optimizer-results-table"
+                style={{
+                  borderCollapse: "collapse",
+                  fontSize: tableFontSize,
+                  width: "100%",
+                  tableLayout: "fixed",
+                  backgroundColor: t.colors.surface,
+                }}
+              >
+                <colgroup>
+                  {Array.from({ length: 11 }, (_, i) => (
+                    <col key={i} style={{ width: `${100 / 11}%` }} />
+                  ))}
+                </colgroup>
+                <thead>
+                  <tr style={{ borderBottom: `2px solid ${t.colors.border}`, backgroundColor: t.colors.secondary }}>
+                    <th style={tableThStyle}>Rank</th>
+                    <th style={tableThStyle}>Expiry</th>
+                    <th style={tableThStyle}>Put</th>
+                    <th style={tableThStyle}>Call</th>
+                    <th style={tableThStyle}>Net/sh</th>
+                    <th style={tableThStyle}>Floor</th>
+                    <th style={tableThStyle}>Cap</th>
+                    <th style={tableThStyle}>Band</th>
+                    <th style={tableThStyle}>Even</th>
+                    <th style={tableThStyle}>DTE</th>
+                    <th style={{ ...tableNumThStyle, padding: tableActionCellPadding }}>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {collarResults!.map((r) => (
+                    <tr key={collarPairKey(r)} style={{ borderBottom: `1px solid ${t.colors.border}`, backgroundColor: t.colors.surface }}>
+                      <td style={{ ...tableTdStyle, fontWeight: 600, color: r.rank === 1 ? rankingColors.gold : r.rank === 2 ? rankingColors.silver : r.rank === 3 ? rankingColors.bronze : t.colors.text }}>#{r.rank}</td>
+                      <td style={{ ...tableTdStyle, color: t.colors.text }}>{r.expiry}</td>
+                      <td style={{ ...tableNumTdStyle }}>
+                        <div style={{ fontWeight: 700 }}>{formatPrice(r.putStrike)}</div>
+                        <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, marginTop: 2 }}>{r.put.bid.toFixed(2)}/{r.put.ask.toFixed(2)}</div>
+                      </td>
+                      <td style={{ ...tableNumTdStyle }}>
+                        <div style={{ fontWeight: 700 }}>{formatPrice(r.callStrike)}</div>
+                        <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, marginTop: 2 }}>{r.call.bid.toFixed(2)}/{r.call.ask.toFixed(2)}</div>
+                      </td>
+                      <td style={{ ...tableNumTdStyle, fontWeight: 600, color: Math.abs(r.netCostPerShare) <= 0.15 ? t.colors.success : r.netCostPerShare > 0 ? t.colors.danger : t.colors.text }}>
+                        {r.netCostPerShare >= 0 ? "+" : "−"}${Math.abs(r.netCostPerShare).toFixed(2)}
+                      </td>
+                      <td style={{ ...tableNumTdStyle, color: t.colors.danger, fontWeight: 600 }}>{r.floorPct}%</td>
+                      <td style={{ ...tableNumTdStyle, color: t.colors.success, fontWeight: 600 }}>+{r.capPct}%</td>
+                      <td style={{ ...tableNumTdStyle, color: t.colors.textMuted }}>{r.bandWidthPct}%</td>
+                      <td style={{ ...tableNumTdStyle, color: r.isEven ? t.colors.success : t.colors.textMuted, fontWeight: 600 }}>{r.isEven ? "✓" : "—"}</td>
+                      <td style={{ ...tableNumTdStyle, color: t.colors.textMuted }}>{r.daysToMaturity}</td>
+                      <td style={{ ...tableNumTdStyle, padding: tableActionCellPadding }}>
+                        <button
+                          type="button"
+                          onClick={() => addCollarToTradeList(r)}
+                          title="Add collar legs to trade list"
+                          aria-label="Add collar to trade list"
+                          className="options-optimizer-add-trade"
+                          style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, padding: 0, border: "none", background: "none", cursor: "pointer", color: t.colors.primary, borderRadius: "50%", position: "relative" }}
+                        >
+                          <span className="material-symbols-outlined" style={{ fontSize: 22, position: "absolute", opacity: addedCollarKeys.has(collarPairKey(r)) ? 0 : 1, transition: "opacity 0.2s ease", pointerEvents: "none" }} aria-hidden>add_circle</span>
+                          <span className="material-symbols-outlined" style={{ fontSize: 22, position: "absolute", opacity: addedCollarKeys.has(collarPairKey(r)) ? 1 : 0, transition: "opacity 0.2s ease", pointerEvents: "none" }} aria-hidden>check_circle</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <footer
+              style={{
+                padding: `${t.spacing(2)} ${tableCellPadX}`,
+                paddingRight: tableEdgePadRight,
+                fontSize: "0.78rem",
+                color: t.colors.textMuted,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: t.spacing(2),
+                flexWrap: "wrap",
+                backgroundColor: t.colors.surface,
+              }}
+            >
+              {schwabAttribution}
+            </footer>
+            </>
+          )}
+
+          {((optimizerMode === "leg-finder" && !showResultsTable) ||
+            (optimizerMode === "collar" && !showCollarResultsTable && !collarLoading)) && (
+            <div
+              style={{
+                flex: queryContracts.length > 0 ? "0 0 auto" : 1,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: t.spacing(6),
+                textAlign: "center",
+                color: t.colors.textMuted,
+                minHeight: queryContracts.length > 0 ? 200 : 280,
+              }}
+            >
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: 40, opacity: 0.35, marginBottom: t.spacing(2) }}
+                aria-hidden
+              >
+                {optimizerMode === "leg-finder"
+                  ? queryContracts.length === 0
+                    ? "playlist_add"
+                    : rankedResults
+                      ? "search_off"
+                      : "tune"
+                  : collarResults
+                    ? "search_off"
+                    : "shield"}
+              </span>
+              <p style={{ margin: 0, fontSize: "0.95rem", fontWeight: 600, color: t.colors.text }}>
+                {optimizerMode === "leg-finder"
+                  ? queryContracts.length === 0
+                    ? "No contracts in query"
+                    : rankedResults
+                      ? "No ranked candidates"
+                      : "Ready to optimize"
+                  : collarResults
+                    ? "No collar pairs found"
+                    : "Ready to scan collars"}
+              </p>
+              <p style={{ margin: `${t.spacing(1.5)} 0 0`, fontSize: "0.875rem", maxWidth: 420, lineHeight: 1.5 }}>
+                {optimizerMode === "leg-finder"
+                  ? queryContracts.length === 0
+                    ? "Fill in the inputs above, then click Add Contract to build your query."
+                    : rankedResults
+                      ? optimizeMessage ?? "No options matched your query settings. Try widening the strike band or expiry window."
+                      : "Click Optimize Portfolio to fetch live Schwab chains and rank results here."
+                  : collarResults
+                    ? collarMessage ?? "Try another month, turn off Monthly-only, or enter custom put/call strikes."
+                    : "Enter a ticker and expiry, then click Find Best Collar to scan live chains for protective collar pairs."}
+              </p>
+              <p
+                style={{
+                  margin: `${t.spacing(2)} 0 0`,
+                  fontSize: "0.75rem",
+                  color: t.colors.textMuted,
+                  lineHeight: 1.4,
+                }}
+              >
+                Market data provided by Charles Schwab.
+                {lastUpdated && (
+                  <>
+                    {" "}
+                    · Data as of{" "}
+                    {lastUpdated.toLocaleString(undefined, {
+                      year: "numeric",
+                      month: "short",
+                      day: "2-digit",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </>
+                )}
+              </p>
+            </div>
+          )}
+        </div>
+
+        </div>
+      </div>
+
+      <button
+        type="button"
+        onClick={() => setTradeListPanelOpen(true)}
+        aria-label="Open trade list"
+        className="options-optimizer-trade-tab"
+        style={{
+          position: "fixed",
+          right: 0,
+          top: mainTop,
+          bottom: 0,
+          width: 40,
+          zIndex: 22,
+          border: "none",
+          borderLeft: `1px solid ${t.colors.border}`,
+          backgroundColor: t.colors.surface,
+          cursor: "pointer",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "flex-start",
+          paddingTop: t.spacing(3),
+          gap: t.spacing(1.5),
+          fontFamily: t.typography.fontFamily,
+          opacity: tradeListPanelOpen ? 0 : 1,
+          pointerEvents: tradeListPanelOpen ? "none" : "auto",
+        }}
+      >
+          <span className="material-symbols-outlined" style={{ fontSize: 20, color: t.colors.textMuted }} aria-hidden>
+            chevron_left
+          </span>
+          <span
+            style={{
+              writingMode: "vertical-rl",
+              transform: "rotate(180deg)",
+              fontSize: "0.68rem",
+              fontWeight: 700,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              color: t.colors.secondary,
+            }}
+          >
+            Trade list
+          </span>
+          {trades.length > 0 && (
+            <span
+              className="options-optimizer-trade-tab-count"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 24,
+                height: 24,
+                minWidth: 24,
+                minHeight: 24,
+                borderRadius: "50%",
+                fontSize: "0.68rem",
+                fontWeight: 700,
+                color: t.colors.surface,
+                backgroundColor: t.colors.primary,
+                lineHeight: 1,
+                flexShrink: 0,
+                boxShadow: "0 1px 3px rgba(15, 42, 54, 0.18)",
+              }}
+            >
+              {trades.length}
+            </span>
+          )}
+        </button>
+
+      <div
+        role="presentation"
+        className="options-optimizer-trade-backdrop"
+        onClick={() => setTradeListPanelOpen(false)}
+        style={{
+          position: "fixed",
+          left: sidebarWidth,
+          right: 0,
+          top: mainTop,
+          bottom: 0,
+          zIndex: 19,
+          backgroundColor: "rgba(15, 42, 54, 0.12)",
+          opacity: tradeListPanelOpen ? 1 : 0,
+          pointerEvents: tradeListPanelOpen ? "auto" : "none",
+        }}
+      />
+      <aside
+        className="options-optimizer-trade-drawer"
+        aria-hidden={!tradeListPanelOpen}
+        inert={!tradeListPanelOpen ? true : undefined}
+        style={{
+          position: "fixed",
+          right: 0,
+          top: mainTop,
+          width: tradeListPanelWidth,
+          height: `calc(100vh - ${mainTop}px)`,
+          zIndex: 20,
+          borderLeft: `1px solid ${t.colors.border}`,
+          backgroundColor: t.colors.surface,
+          boxShadow: "-8px 0 24px rgba(15, 42, 54, 0.12)",
+          display: "flex",
+          flexDirection: "column",
+          transform: tradeListPanelOpen ? "translateX(0)" : `translateX(${tradeListPanelWidth}px)`,
+          pointerEvents: tradeListPanelOpen ? "auto" : "none",
+        }}
+      >
         <div
           className="page-card"
           style={{
             ...fixedRails.railPanel,
             gap: t.spacing(2),
+            height: "100%",
+            boxSizing: "border-box",
           }}
         >
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: t.spacing(1) }}>
-            <h3 style={{ ...sectionTitleStyle, marginBottom: t.spacing(1) }}>Trade list</h3>
+            <div style={{ display: "flex", alignItems: "center", gap: t.spacing(1.5), minWidth: 0 }}>
+              <h3 style={{ ...sectionTitleStyle, marginBottom: 0 }}>Trade list</h3>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: t.spacing(1) }}>
             <button
               type="button"
               onClick={() => void exportTradesForSheets()}
@@ -2073,6 +3121,30 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                 </>
               )}
             </button>
+            <button
+              type="button"
+              onClick={() => setTradeListPanelOpen(false)}
+              aria-label="Close trade list"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 30,
+                height: 30,
+                padding: 0,
+                border: "none",
+                background: "none",
+                cursor: "pointer",
+                color: t.colors.textMuted,
+                borderRadius: t.radius.sm,
+                flexShrink: 0,
+              }}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 22 }} aria-hidden>
+                chevron_right
+              </span>
+            </button>
+            </div>
           </div>
           {trades.length > 0 && (
             <span style={{ fontSize: "0.875rem", color: t.colors.textMuted }}>
@@ -2155,11 +3227,11 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: `${t.spacing(2)} ${t.spacing(3)}` }}>
                         <div><div style={labelStyle}>Maturity</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{tr.maturity}</div></div>
                         <div><div style={labelStyle}>DTE</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{tr.daysToMaturity}</div></div>
-                        <div><div style={labelStyle}>Strike</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>${tr.strikePrice.toFixed(2)}</div></div>
+                        <div><div style={labelStyle}>Strike</div><div style={{ fontSize: "0.8rem", fontWeight: 700, color: t.colors.text }}>${tr.strikePrice.toFixed(2)}</div></div>
                         <div><div style={labelStyle}>Spot</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>${tr.currentPrice.toFixed(2)}</div></div>
-                        <div><div style={labelStyle}>Limit Px</div><div style={{ fontSize: "0.8rem", color: t.colors.primary }}>${tr.optionLimitPrice.toFixed(2)}</div></div>
+                        <div><div style={labelStyle}>Limit Px</div><div style={{ fontSize: "0.8rem", fontWeight: 700, color: t.colors.primary }}>${tr.optionLimitPrice.toFixed(2)}</div></div>
                         <div><div style={labelStyle}>Bid / Ask</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>${tr.currentBid.toFixed(2)} / ${tr.currentAsk.toFixed(2)}</div></div>
-                        <div><div style={labelStyle}>Contracts</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{tr.contracts}</div></div>
+                        <div><div style={labelStyle}>Contracts</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{tr.contracts.toLocaleString()}</div></div>
                         <div><div style={labelStyle}>Moneyness</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{Number.isFinite(tr.moneynessPct) ? `${tr.moneynessPct.toFixed(2)}%` : "—"}</div></div>
                         <div><div style={labelStyle}>Yield</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{tr.yieldAtCurrentPrice}%</div></div>
                         <div><div style={labelStyle}>Notional</div><div style={{ fontSize: "0.8rem", color: t.colors.text }}>{formatNotionalCompact(tr.valueOfSharesAtStrike)}</div></div>

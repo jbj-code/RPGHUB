@@ -171,21 +171,14 @@ export function NavBar({
       icon: "schedule",
     },
     { page: "extractor", label: "Extractor", icon: "document_scanner" },
-    { page: "todos", label: "To-Dos", icon: "checklist" },
     {
       page: "rankinator",
       label: "Rankinator",
       icon: "leaderboard",
       externalUrl: "https://lookerstudio.google.com/s/rvxCmaxCAYc",
     },
-    {
-      page: "raise-ai",
-      label: "Raise.ai",
-      icon: "rocket_launch",
-      externalUrl: "https://lookerstudio.google.com/s/vnU0N-aINPg",
-    },
+    { page: "raise-ai", label: "Raise.ai", icon: "rocket_launch" },
     { page: "schwab", label: "Schwab Explorer", icon: "api" },
-    { page: "website", label: "Website", icon: "language" },
   ];
 
   return (

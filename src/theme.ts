@@ -12,8 +12,8 @@ export const zIndex = {
   railsHeader: 8,
   railDropdown: 3000,
   dropdown: 4000,
-  modalBackdrop: 1000,
-  modal: 1001,
+  modalBackdrop: 9000,
+  modal: 9001,
   nav: 10000,
   /** Full-screen click-away behind portaled dropdowns in fixed rails. */
   dropdownPortalBackdrop: 10500,
@@ -28,47 +28,7 @@ export const shadows = {
   card: "0 1px 3px rgba(0,0,0,0.06)",
   modal: "0 12px 40px rgba(15, 42, 54, 0.2)",
   dropdown: "0 4px 12px rgba(0,0,0,0.15)",
-  elevatedCardLight: "0 2px 8px rgba(0,0,0,0.06)",
-  elevatedCardDark: "0 2px 8px rgba(0,0,0,0.2)",
   stickyFooterLight: "0 -2px 8px rgba(0,0,0,0.06)",
-} as const;
-
-/** Client / assignee / status chip colors for the Todos board. */
-export const todoPalette = {
-  neutral: "#9ca3af",
-  blue: "#3b82f6",
-  green: "#22c55e",
-  orange: "#f97316",
-  pink: "#ec4899",
-  status: {
-    notStarted: "#6b7280",
-    inProgress: "#2563eb",
-    waiting: "#eab308",
-    done: "#16a34a",
-  },
-} as const;
-
-/** Marketing hero page (Website) — dark immersive shell separate from app chrome. */
-export const websiteHeroTokens = {
-  shellBg: "#041518",
-  menuText: "#e8fcff",
-  titleText: "#ecfeff",
-  ctaText: "#0f2a36",
-  menuBtnBg: "rgba(4, 20, 26, 0.60)",
-  menuBtnBorder: "rgba(255,255,255,0.28)",
-  dropdownBg: "rgba(4, 18, 26, 0.92)",
-  dropdownBorder: "rgba(68, 193, 193, 0.22)",
-  dropdownShadow: "0 16px 40px rgba(0,0,0,0.45)",
-  menuItemActiveBg: "rgba(68, 193, 193, 0.14)",
-  menuItemActiveText: "#7de8e8",
-  menuItemText: "rgba(220, 247, 250, 0.80)",
-  titleShadow: "0 8px 32px rgba(0,0,0,0.5)",
-  ctaBg: "rgba(240, 253, 255, 0.94)",
-  ctaBorder: "rgba(255, 255, 255, 0.28)",
-  ctaShadow: "0 10px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(68,193,193,0.2)",
-  footerMuted: "rgba(180, 230, 230, 0.50)",
-  linkAccent: "rgba(68, 193, 193, 0.70)",
-  logoDropShadow: "drop-shadow(0 3px 10px rgba(0,0,0,0.35))",
 } as const;
 
 /** Third-party brand accents used on Home quick links. */
@@ -284,26 +244,13 @@ export function getPageCardStyle(t: Theme, overrides?: CSSProperties): CSSProper
   };
 }
 
-/** Elevated card with stronger shadow — Todos panels and similar dense layouts. */
-export function getElevatedCardStyle(t: Theme, overrides?: CSSProperties): CSSProperties {
-  return {
-    backgroundColor: t.colors.surface,
-    borderRadius: t.radius.lg,
-    padding: t.spacing(4),
-    marginBottom: t.spacing(4),
-    boxShadow: t.mode === "light" ? shadows.elevatedCardLight : shadows.elevatedCardDark,
-    border: `1px solid ${t.colors.border}`,
-    ...overrides,
-  };
-}
-
 /** Fixed full-screen backdrop for modals and info panels. */
-export function getModalBackdropStyle(t: Theme, zIndex = 1000): CSSProperties {
+export function getModalBackdropStyle(t: Theme, backdropZIndex = zIndex.modalBackdrop): CSSProperties {
   return {
     position: "fixed",
     inset: 0,
     backgroundColor: t.colors.overlay,
-    zIndex,
+    zIndex: backdropZIndex,
   };
 }
 
@@ -375,6 +322,40 @@ export function getDropdownTriggerStyle(t: Theme): CSSProperties {
     height: 40,
     cursor: "pointer",
     fontFamily: t.typography.fontFamily,
+  };
+}
+
+/** Text / date / number field — matches dropdown trigger height and border. */
+export function getFieldInputStyle(t: Theme, overrides?: CSSProperties): CSSProperties {
+  return {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: `${t.spacing(2)} ${t.spacing(3)}`,
+    fontSize: t.typography.baseFontSize,
+    fontFamily: t.typography.fontFamily,
+    border: `1px solid ${t.colors.border}`,
+    borderRadius: t.radius.md,
+    backgroundColor: t.colors.surface,
+    color: t.colors.text,
+    height: 40,
+    ...overrides,
+  };
+}
+
+/** Compact cell input for spreadsheet-style grids. */
+export function getGridCellInputStyle(t: Theme, overrides?: CSSProperties): CSSProperties {
+  return {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: `${t.spacing(1.5)} ${t.spacing(2)}`,
+    fontSize: "0.875rem",
+    fontFamily: t.typography.fontFamily,
+    border: "none",
+    borderBottom: `1px solid ${t.colors.border}`,
+    backgroundColor: "transparent",
+    color: t.colors.text,
+    minHeight: 36,
+    ...overrides,
   };
 }
 

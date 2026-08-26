@@ -4,7 +4,7 @@
 
 ## What this is
 
-**RPG H.U.B** (Resolute Partners Group Hub) is an internal web app for Resolute Partners Group. It bundles financial and operations tools in one password-protected SPA: options research, stock comparison, assignment monitoring, Schwab market-data access, AI assistant, document extraction, todos, and more.
+**RPG H.U.B** (Resolute Partners Group Hub) is an internal web app for Resolute Partners Group. It bundles financial and operations tools in one password-protected SPA: options research, stock comparison, assignment monitoring, Schwab market-data access, AI assistant, document extraction, and more.
 
 **Users:** firm staff (not public). **Hosting:** Vercel (`therpghub.vercel.app`).
 
@@ -17,7 +17,7 @@
 | Frontend | React 18, TypeScript, Vite |
 | Styling | `src/theme.ts` (light/dark tokens + helpers), `src/index.css` (global classes) |
 | Charts | Recharts |
-| Database | Supabase (service role on API routes only — no browser Supabase client) |
+| Database | Supabase — **service role** on Vercel API routes (Schwab, site password, settings); **Raise.ai** will use **Data API** (anon key + RLS) from the browser |
 | Hosting | Vercel — static `dist/` + `api/` serverless functions |
 | Market data | Charles Schwab API (OAuth, server-side token refresh) |
 | Other APIs | Anthropic (Agent), OpenFIGI, Google Sheets, Addepar (assignment check) |
@@ -39,10 +39,9 @@ api/                    Vercel serverless entrypoints
   sourcing.ts           POST form4_scan (maxDuration 120 via export config)
   agent.ts              Anthropic streaming agent
   site-password.ts      Site gate password check
-  app-settings.ts       Supabase key/value settings (e.g. home todos URL)
 src/
   App.tsx               Root: password gate, theme, nav, page routing
-  components/           NavBar, PasswordGate
+  components/           NavBar, PasswordGate, raise-ai/*
   pages/                One file per tool (OptionsOptimizer, OptionsScreener, …)
   theme.ts              Colors, spacing, z-index scale, shared UI helpers
   constants.ts          SCHWAB_API_BASE (single source)
@@ -65,22 +64,47 @@ src/
 
 | Nav label | `Page` id | File | Purpose |
 |-----------|-----------|------|---------|
-| Home | `home` | `Home.tsx` | Quick links (Drive, Schwab, Addepar, etc.), market snapshot, editable To-Dos URL |
+| Home | `home` | `Home.tsx` | Tool launcher — Stock Comparison, Options Optimizer, Options Screener |
 | Agent | `agent` | `Agent.tsx` | Streaming chat with Anthropic; Schwab-aware tools |
 | Stock Comparison | `stock-comparison` | `StockComparison.tsx` | Compare returns/metrics across tickers |
-| Options Optimizer | `put-optimizer` | `OptionsOptimizer.tsx` | Define portfolio rows → rank strikes by yield, momentum, PoP |
+| Options Optimizer | `put-optimizer` | `OptionsOptimizer.tsx` | **Two modes:** Leg Finder (rank single-leg ideas) + **Collar** (scan protective collar pairs). Trade list drawer on the right. |
 | Options Screener | `options-screener` | `OptionsScreener.tsx` | Scan universe for top OTM puts/calls by yield band |
 | Options Pricing | `options-pricing` | `OptionsPricing.tsx` | Price individual option legs |
 | Sourcing | `sourcing` | `Sourcing.tsx` | SEC Form 4 insider sale scans; prospects tracked in **Google Sheets** (not Supabase) |
 | Assignment Check | `assignment-check` | `AssignmentCheck.tsx` | Schwab + Addepar assignment monitoring |
 | Extractor | `extractor` | `Extractor.tsx` | PDF/OCR fund schedule extraction |
-| To-Dos | `todos` | `Todos.tsx` | Client-scoped task board (localStorage) |
 | Rankinator | `rankinator` | `Rankinator.tsx` | Stub; external Looker link in nav |
-| Raise.ai | `raise-ai` | `RaiseAi.tsx` | External Looker embed |
+| Raise.ai | `raise-ai` | `RaiseAi.tsx` | FoF + direct portfolio dashboard; SOI spreadsheet entry; Looker via **Link** |
 | Schwab Explorer | `schwab` | `Schwab.tsx` | Raw Schwab API explorer / debugger |
-| Website | `website` | `Website.tsx` | Marketing site preview (hero page) |
 
-**Layout patterns:** Optimizer, Screener, **Sourcing**, Schwab, Stock Comparison, Todos use **fixed rails** (`getFixedRailsLayoutStyles`) — left control panel, center table, optional right rail. Width accounts for `SIDEBAR_WIDTH` from `NavBar`.
+**Layout patterns:** Optimizer, Screener, **Sourcing**, Schwab, Stock Comparison use **fixed rails** (`getFixedRailsLayoutStyles`) — left control panel, center table, optional right rail. Width accounts for `SIDEBAR_WIDTH` from `NavBar`.
+
+---
+
+## Raise.ai (in progress)
+
+**Purpose:** Pilot for the full Rankinator vision — track **Raise.ai** (fund-of-funds + ~5 direct investments, ~12 underlying funds). Goals: manager/fund performance by quarter, MOIC rankings, SOI look-through. **Not** client look-through yet (that is full Rankinator + Addepar later).
+
+**Current UI (`RaiseAi.tsx`):**
+- Dashboard with mock fund/direct tables and summary metrics (MOIC, IRR, DPI).
+- **`+` menu** (`AddScheduleMenu.tsx`): **Fund** · **Direct** · **Add fund** · **Add direct**
+- **`SoiEntryModal.tsx`** — spreadsheet grid. Metadata: fund, **year + quarter** (standardized as `2025-Q3`), unaudited/audited. As-of date auto-derived from quarter-end. Cost/fair value comma-formatted; currency from fund. CSV upload with row animation; save shows spinner → checkmark (DB hookup next).
+- **`AddEntityModal.tsx`** — add fund (name, manager, **currency**, vintage) or direct name. Funds you create appear in the schedule fund dropdown.
+- **Link** button opens legacy Looker dashboard.
+
+**Planned data layer (Supabase — one project, `raise_*` tables):**
+- `raise_managers`, `raise_funds`, `raise_companies`, `raise_periods` (as_of_date, reporting_period, audit_status)
+- `raise_fund_holdings` (SOI lines), `raise_direct_holdings`, optional `raise_fund_positions` (Raise stake in each fund per quarter)
+- MOIC / unrealized gain **computed**, not stored.
+
+**Access model:**
+- **Schwab / secrets:** Vercel API + service role (unchanged).
+- **Raise.ai CRUD/reads:** Browser → Supabase **Data API** with anon key + RLS on `raise_*` tables only. Site password gate for app access today; optional **Supabase Auth** (staff emails) later for DB-level lockdown.
+- No Vercel middleware for Raise.ai data.
+
+**Entry workflow:** Quarterly fund statement → extract via Claude/NotebookLM to CSV → upload or paste into spreadsheet modal → review → save to Supabase.
+
+**Full Rankinator later:** Same snapshot pattern at scale (~73K rows, all client funds); Raise.ai validates schema and UX first.
 
 ---
 
@@ -96,13 +120,14 @@ src/
 | `returns` | `_handlers/returns.ts` | Historical returns |
 | `figi` | `_handlers/figi.ts` | OCC / FIGI lookup |
 | `prices` | `_handlers/prices.ts` | Options pricing |
-| `optimize` | `_handlers/optimize.ts` | Options Optimizer |
+| `optimize` | `_handlers/optimize.ts` | Options Optimizer (Leg Finder mode) |
+| `collar` | `_handlers/collar.ts` | Options Optimizer (Collar mode — scan put/call pairs) |
 | `screener` | `_handlers/screener.ts` | Options Screener |
 | `explorer` | `_handlers/explorer.ts` | Schwab Explorer |
 | `sheetQuote` | `_handlers/sheetQuote.ts` | Google Sheets `SCHWAB_OPT()` |
 | `sheetStock` | `_handlers/sheetStock.ts` | Google Sheets `SCHWAB_STOCK()` |
 
-**Other routes:** `api/agent.ts`, `api/sourcing.ts`, `api/site-password.ts`, `api/app-settings.ts`, `api/schwab-auth-callback.ts`, `api/addepar-assignment-check.ts`.
+**Other routes:** `api/agent.ts`, `api/sourcing.ts`, `api/site-password.ts`, `api/schwab-auth-callback.ts`, `api/addepar-assignment-check.ts`.
 
 **Sourcing API** (`POST /api/sourcing`, body `{ action: "form4_scan", days, minValueUsd, maxFilingsToParse }`):
 - Handler: `api/sourcing.ts` → `api/_edgar-utils.ts` (`scanForm4Sales`)
@@ -160,12 +185,29 @@ Team spreadsheets use **Apps Script** bound to the sheet (not in this repo). Fun
 
 ## Options Optimizer (behavior)
 
+Two modes on the same page (header toggle: **Leg Finder** | **Collar**). Switching modes **keeps each mode’s state in memory** (query contracts, ranked results, collar draft, collar scan results) until refresh.
+
+### Leg Finder
+
 - User defines **portfolio rows** (ticker, expiry, put/call, OTM band, trade type, contracts).
-- Backend fetches Schwab chains + quotes; ranks up to **100 strikes per row** in the OTM band.
+- Backend `action=optimize`: Schwab chains + quotes; ranks up to **100 strikes per row** in the OTM band.
 - If more than 100 strikes qualify, keeps those **closest to band center**; API returns a truncation warning.
 - **Ranking prices:** bid for sell legs, ask for buy legs; table **Limit Px** stays bid/ask midpoint.
 - Score blends annualized yield, 1M momentum (direction-adjusted), PoP / long-premium factors.
-- **Trade list** in right rail; export/copy; FIGI fetch per trade.
+- Results table: Yield (period) + **Ann. Yield** columns.
+
+### Collar
+
+- **Use case:** Protective collar on held shares (e.g. SPCX) — **buy put** (floor) + **sell call** (cap). Often structured as **Even** (call premium ≈ put cost).
+- Inputs: ticker, expiry (month/days/exact), share count → contracts, rank by (**Nearest Even** default | Widest band | Best floor), optional custom put/call strikes.
+- Backend `action=collar`: fetches put + call chains for the expiry window, pairs strikes where **put &lt; spot &lt; call**, quotes legs, computes **net cost** (put ask − call bid), **floor %** and **cap %** from spot.
+- Returns top **30** ranked pairs; **+** adds both legs to the trade list.
+- Custom strikes: fill put + call to quote one structure without full scan.
+
+### Shared UI
+
+- Fixed inputs bar (above trade-list tab); query chips + results table end at collapsed **Trade list** tab (40px clearance).
+- **Trade list** drawer; export/copy; FIGI fetch per trade.
 
 ---
 
@@ -181,7 +223,7 @@ Team spreadsheets use **Apps Script** bound to the sheet (not in this repo). Fun
 
 ## UI patterns
 
-- **Theme:** Never hardcode colors in pages — use `t.colors.*`, `shadows`, `rankingColors`, `todoPalette`, `websiteHeroTokens` from `theme.ts`.
+- **Theme:** Never hardcode colors in pages — use `t.colors.*`, `shadows`, `rankingColors` from `theme.ts`.
 - **HelpTooltip:** Hover/focus explainer; dark secondary bubble via `getTooltipBubbleStyle`; rendered in `document.body` portal. Used heavily in Optimizer and Screener.
 - **Z-index scale** (`theme.ts` → `zIndex`): rails (6) → dropdowns (4000) → modals (1000–1001) → **nav (10000)** → portaled dropdowns (10500+) → **help tooltips (11000)**. Do not put tooltips below 11000 or the nav covers them.
 - **Interactive cards:** `INTERACTIVE_CARD_CLASS` in `index.css`.
@@ -224,7 +266,7 @@ npx tsc --noEmit # Typecheck (requires vite-env.d.ts)
 ## Gotchas
 
 - **Local dev hits production API** unless `VITE_SCHWAB_API_BASE` points elsewhere.
-- **All Supabase access is server-side** — site password, app settings, Schwab tokens. No browser Supabase client.
+- **All Supabase access is server-side** for Schwab tokens, site password, app settings — **except Raise.ai** (planned browser client + RLS on `raise_*` only).
 - **SEC EDGAR / Sourcing:** `SEC_EDGAR_USER_AGENT` on Vercel; User-Agent required for automated requests. Sourcing scans hit production API from `npm run dev` by default. Cannot pre-filter Form 4 by dollar amount via free SEC search — parse-then-filter only.
 - **vercel.json:** Only `api/**/*.ts` maxDuration 60 — per-route overrides for single files can fail deploy; use `export const config` in the route file instead (`sourcing.ts` uses 120s).
 - **Windows/PowerShell:** `$env:VAR`; chain with `;` not `&&` (see `GUIDELINES.md` §15).

@@ -9,12 +9,10 @@ import {
   Home,
   OptionsOptimizer,
   StockComparison,
-  Todos,
   OptionsScreener,
   Rankinator,
   RaiseAi,
   AssignmentCheck,
-  Website,
   Extractor,
   Agent,
   Schwab,
@@ -27,12 +25,10 @@ export type Page =
   | "put-optimizer"
   | "stock-comparison"
   | "options-pricing"
-  | "todos"
   | "options-screener"
   | "rankinator"
   | "raise-ai"
   | "assignment-check"
-  | "website"
   | "extractor"
   | "agent"
   | "schwab"
@@ -110,9 +106,7 @@ function App() {
         }}
       />
       <main ref={mainRef} className="app-main" style={mainStyle}>
-        {page === "todos" ? (
-          <Todos theme={t} sidebarWidth={sidebarWidth} />
-        ) : page === "stock-comparison" ? (
+        {page === "stock-comparison" ? (
           <StockComparison theme={t} sidebarWidth={sidebarWidth} />
         ) : page === "put-optimizer" ? (
           <OptionsOptimizer theme={t} sidebarWidth={sidebarWidth} />
@@ -124,11 +118,9 @@ function App() {
           <Sourcing theme={t} sidebarWidth={sidebarWidth} />
         ) : page === "schwab" ? (
           <Schwab theme={t} sidebarWidth={sidebarWidth} />
-        ) : page === "website" ? (
-          <Website theme={t} />
         ) : (
           <div className="app-main-inner" style={mainInnerStyle}>
-            {page === "home" && <Home theme={t} />}
+            {page === "home" && <Home theme={t} onNavigate={handleNavigate} />}
             {page === "options-pricing" && <OptionsPricing theme={t} />}
             {page === "rankinator" && <Rankinator theme={t} />}
             {page === "raise-ai" && <RaiseAi theme={t} />}

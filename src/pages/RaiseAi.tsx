@@ -1,9 +1,14 @@
 // RaiseAi.tsx
 // Private-markets portfolio dashboard with fund holdings and MOIC rankings.
 
-import React, { useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import type { Theme } from "../theme";
-import { PAGE_LAYOUT, getPageCardStyle } from "../theme";
+import { PAGE_LAYOUT, getPageCardStyle, getPrimaryActionButtonStyle } from "../theme";
+import { SoiEntryModal, type RaiseFundOption, type SoiScheduleBatch } from "../components/raise-ai/SoiEntryModal";
+import { AddScheduleMenu, type AddMenuAction } from "../components/raise-ai/AddScheduleMenu";
+import { AddEntityModal, type RaiseDirectRecord, type RaiseFundRecord } from "../components/raise-ai/AddEntityModal";
+
+const RAISE_AI_LOOKER_URL = "https://lookerstudio.google.com/s/vnU0N-aINPg";
 
 // --- Types & mock data ---
 
@@ -100,7 +105,31 @@ export function RaiseAi({ theme: t }: RaiseAiProps) {
   const [directSortBy, setDirectSortBy] = useState<SortKey | null>("moic");
   const [directSortDir, setDirectSortDir] = useState<SortDir>("desc");
   const [moicPopupOpen, setMoicPopupOpen] = useState(false);
+  const [soiModalType, setSoiModalType] = useState<"fund" | "direct" | null>(null);
+  const [entityModalType, setEntityModalType] = useState<"fund" | "direct" | null>(null);
+  const [customFunds, setCustomFunds] = useState<RaiseFundRecord[]>([]);
+  const [customDirects, setCustomDirects] = useState<RaiseDirectRecord[]>([]);
+  const [savedSchedules, setSavedSchedules] = useState<SoiScheduleBatch[]>([]);
   const top10Moic = getTop10CompaniesByMoic();
+  const linkBtnStyle = getPrimaryActionButtonStyle(t);
+
+  const fundOptions = useMemo<RaiseFundOption[]>(() => {
+    const fromMock = MOCK_FUNDS.map((f) => ({ id: f.id, name: f.name, currency: "USD" }));
+    const fromCustom = customFunds.map((f) => ({ id: f.id, name: f.name, currency: f.currency }));
+    return [...fromMock, ...fromCustom];
+  }, [customFunds]);
+
+  const handleAddMenu = useCallback((item: AddMenuAction) => {
+    if (item.action === "schedule") setSoiModalType(item.target);
+    else setEntityModalType(item.target);
+  }, []);
+
+  const handleSaveSchedule = useCallback((batch: SoiScheduleBatch) => {
+    setSavedSchedules((prev) => [batch, ...prev]);
+    if (batch.targetType === "fund") {
+      setExpandedFundIds((prev) => new Set(prev).add(batch.fundId));
+    }
+  }, []);
 
   const pageStyle: React.CSSProperties = {
     maxWidth: PAGE_LAYOUT.maxWidth,
@@ -276,21 +305,117 @@ export function RaiseAi({ theme: t }: RaiseAiProps) {
 
   return (
     <section className="raise-ai-page" style={pageStyle}>
-      <h2 style={titleStyle}>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
-          <span
-            className="material-symbols-outlined"
-            style={{ fontSize: "1.5rem", color: t.colors.secondary, lineHeight: 1, display: "inline-flex" }}
-            aria-hidden
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: t.spacing(3),
+          marginBottom: t.spacing(PAGE_LAYOUT.descMarginBottom),
+        }}
+      >
+        <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+          <h2 style={{ ...titleStyle, marginBottom: t.spacing(2) }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: t.spacing(2) }}>
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: "1.5rem", color: t.colors.secondary, lineHeight: 1, display: "inline-flex" }}
+                aria-hidden
+              >
+                rocket_launch
+              </span>
+              Raise.ai
+            </span>
+          </h2>
+          <p style={{ ...descStyle, marginBottom: 0 }}>
+            Our personal fund — fund of funds plus direct investments. Summary below; expand a fund to see its holdings.
+          </p>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: t.spacing(2), flexShrink: 0, alignItems: "center" }}>
+          <AddScheduleMenu theme={t} onSelect={handleAddMenu} />
+          <a
+            href={RAISE_AI_LOOKER_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              ...linkBtnStyle,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: t.spacing(1),
+              textDecoration: "none",
+              backgroundColor: "transparent",
+              color: t.colors.primary,
+              border: `1px solid ${t.colors.primary}`,
+            }}
           >
-            rocket_launch
-          </span>
-          Raise.ai
-        </span>
-      </h2>
-      <p style={descStyle}>
-        Our personal fund — fund of funds plus direct investments. Summary below; expand a fund to see its holdings.
-      </p>
+            <span className="material-symbols-outlined" style={{ fontSize: 18 }} aria-hidden>
+              open_in_new
+            </span>
+            Link
+          </a>
+        </div>
+      </div>
+
+      <AddEntityModal
+        theme={t}
+        open={entityModalType != null}
+        mode={entityModalType ?? "fund"}
+        onClose={() => setEntityModalType(null)}
+        onSaveFund={(fund) => setCustomFunds((prev) => [...prev, fund])}
+        onSaveDirect={(direct) => setCustomDirects((prev) => [...prev, direct])}
+      />
+
+      <SoiEntryModal
+        theme={t}
+        open={soiModalType != null}
+        targetType={soiModalType ?? "fund"}
+        onClose={() => setSoiModalType(null)}
+        funds={fundOptions}
+        onSave={handleSaveSchedule}
+      />
+
+      {savedSchedules.length > 0 && (
+        <div className="page-card" style={cardStyle}>
+          <h3 style={cardTitleStyle}>Saved schedules (preview — not in database yet)</h3>
+          <div style={tableWrapStyle}>
+            <table style={tableStyle}>
+              <thead>
+                <tr>
+                  <th style={thStyle}>Fund / type</th>
+                  <th style={thStyle}>Period</th>
+                  <th style={thStyle}>Status</th>
+                  <th style={{ ...thStyle, textAlign: "right" }}>Holdings</th>
+                  <th style={{ ...thStyle, textAlign: "right" }}>Total cost</th>
+                  <th style={{ ...thStyle, textAlign: "right" }}>Total fair value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {savedSchedules.map((batch) => {
+                  const totalCost = batch.holdings.reduce((s, h) => s + h.cost, 0);
+                  const totalFv = batch.holdings.reduce((s, h) => s + h.fairValue, 0);
+                  return (
+                    <tr key={batch.id} style={{ backgroundColor: t.colors.surface }}>
+                      <td style={tdStyle}>{batch.fundName}</td>
+                      <td style={tdStyle}>
+                        {batch.reportingPeriod}
+                        <span style={{ display: "block", fontSize: "0.75rem", color: t.colors.textMuted }}>
+                          As of {batch.asOfDate}
+                          {batch.currency ? ` · ${batch.currency}` : ""}
+                        </span>
+                      </td>
+                      <td style={tdStyle}>{batch.auditStatus === "audited" ? "Audited" : "Unaudited"}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{batch.holdings.length}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>${totalCost.toLocaleString()}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>${totalFv.toLocaleString()}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Key metrics — overall summary */}
       <div className="page-card" style={cardStyle}>
