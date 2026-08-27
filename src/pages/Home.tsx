@@ -56,8 +56,7 @@ export function Home({ theme: t, onNavigate }: HomeProps) {
     alignItems: "center",
     textAlign: "center",
     gap: t.spacing(3),
-    marginBottom: t.spacing(8),
-    paddingTop: t.spacing(4),
+    marginBottom: t.spacing(6),
   };
 
   const logoStyle: React.CSSProperties = {
@@ -65,22 +64,6 @@ export function Home({ theme: t, onNavigate }: HomeProps) {
     width: "auto",
     maxWidth: 260,
     objectFit: "contain",
-  };
-
-  const taglineStyle: React.CSSProperties = {
-    fontWeight: t.typography.headingWeight,
-    fontSize: "1.5rem",
-    letterSpacing: "0.02em",
-    color: t.colors.textMuted,
-    margin: 0,
-  };
-
-  const introStyle: React.CSSProperties = {
-    margin: 0,
-    maxWidth: 520,
-    color: t.colors.textMuted,
-    fontSize: t.typography.baseFontSize,
-    lineHeight: 1.55,
   };
 
   const gridStyle: React.CSSProperties = {
@@ -108,10 +91,6 @@ export function Home({ theme: t, onNavigate }: HomeProps) {
           style={logoStyle}
           aria-hidden
         />
-        <p className="home-hero-tagline" style={taglineStyle}>
-          Home of Useful Bits
-        </p>
-        <p style={introStyle}>Jump into the tools you use most.</p>
       </header>
 
       <div className="home-tools-grid" style={gridStyle}>

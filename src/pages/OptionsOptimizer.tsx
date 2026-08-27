@@ -20,6 +20,8 @@ import {
 } from "../theme";
 import { SIDEBAR_WIDTH } from "../components/NavBar";
 import { SCHWAB_API_BASE } from "../constants";
+import { PayoffPanel } from "../components/options/PayoffPanel";
+import type { PayoffLegInput } from "../lib/payoff";
 
 // --- Types & exports ---
 
@@ -88,8 +90,6 @@ export type PortfolioRow = {
 
 type OptimizerMode = "leg-finder" | "collar";
 
-type CollarRankBy = "even" | "widest" | "best_floor";
-
 type CollarLegQuote = {
   strike: number;
   bid: number;
@@ -109,6 +109,9 @@ export type CollarResult = {
   call: CollarLegQuote;
   netCostPerShare: number;
   netCostPerContract: number;
+  /** Put mid − call mid (Schwab Even estimate). */
+  netMidPerShare: number;
+  netMidPerContract: number;
   floorPct: number;
   capPct: number;
   bandWidthPct: number;
@@ -125,9 +128,14 @@ type CollarDraft = {
   targetMonth: string;
   monthly: boolean;
   shareCount: number;
-  rankBy: CollarRankBy;
+  /** "goal" auto-finds the best-even call for a target floor; "exact" quotes one specific put/call pair. */
+  searchMode: "goal" | "exact";
   customPutStrike: string;
   customCallStrike: string;
+  /** Desired downside floor, % from spot (negative), e.g. -15. Stored as text so "-" is typable. */
+  targetFloorPctText: string;
+  /** Desired net $/sh at mid; 0 = even. Optional, tucked behind "Advanced". */
+  targetNetPerShare: number;
 };
 
 /** One row in the ranked optimization results */
@@ -360,6 +368,46 @@ const MONTH_OPTIONS = [
   { value: "12", label: "December" },
 ];
 
+function parseTargetFloorPct(text: string): number {
+  const n = Number(text.trim());
+  if (Number.isFinite(n)) return n;
+  return -15;
+}
+
+function formatCollarPositionTotal(r: CollarResult, shareCount: number): { label: string; value: number } {
+  const netMid = collarNetMidPerShare(r);
+  const netMidContract = collarNetMidPerContract(r);
+  if (shareCount > 0) {
+    return { label: "Total $", value: netMid * shareCount };
+  }
+  const contracts = r.contractsFromShares > 0 ? r.contractsFromShares : 1;
+  return { label: "Net/ctr", value: netMidContract * contracts };
+}
+
+function legMid(leg: CollarLegQuote): number | null {
+  if (Number.isFinite(leg.mid) && leg.mid > 0) return leg.mid;
+  if (Number.isFinite(leg.bid) && Number.isFinite(leg.ask) && (leg.bid > 0 || leg.ask > 0)) {
+    if (leg.bid > 0 && leg.ask > 0) return (leg.bid + leg.ask) / 2;
+    return leg.bid > 0 ? leg.bid : leg.ask;
+  }
+  return null;
+}
+
+/** Schwab Even mid (put mid − call mid), with fallbacks when API omits computed fields. */
+function collarNetMidPerShare(r: CollarResult): number {
+  if (Number.isFinite(r.netMidPerShare)) return r.netMidPerShare;
+  const putMid = legMid(r.put);
+  const callMid = legMid(r.call);
+  if (putMid != null && callMid != null) return putMid - callMid;
+  if (Number.isFinite(r.netCostPerShare)) return r.netCostPerShare;
+  return 0;
+}
+
+function collarNetMidPerContract(r: CollarResult): number {
+  if (Number.isFinite(r.netMidPerContract)) return r.netMidPerContract;
+  return collarNetMidPerShare(r) * 100;
+}
+
 const defaultCollarDraft = (): CollarDraft => {
   const now = new Date();
   const targetMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -371,9 +419,11 @@ const defaultCollarDraft = (): CollarDraft => {
     targetMonth,
     monthly: true,
     shareCount: 0,
-    rankBy: "even",
+    searchMode: "goal",
     customPutStrike: "",
     customCallStrike: "",
+    targetFloorPctText: "-15",
+    targetNetPerShare: 0,
   };
 };
 
@@ -847,6 +897,14 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
   const [optimizerMode, setOptimizerMode] = useState<OptimizerMode>("leg-finder");
   const [draftRow, setDraftRow] = useState<PortfolioRow>(defaultPortfolioRow());
   const [collarDraft, setCollarDraft] = useState<CollarDraft>(defaultCollarDraft());
+  const [collarAdvancedOpen, setCollarAdvancedOpen] = useState(false);
+  const [payoffModal, setPayoffModal] = useState<{
+    title: string;
+    subtitle?: string;
+    input: PayoffLegInput;
+    shares: number;
+    daysToMaturity: number;
+  } | null>(null);
   const [queryContracts, setQueryContracts] = useState<PortfolioRow[]>([]);
   const [portfolioDropdownId, setPortfolioDropdownId] = useState<string | null>(null);
   const [rankedResults, setRankedResults] = useState<RankedResult[] | null>(null);
@@ -871,7 +929,9 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
   const [exportingTradeList, setExportingTradeList] = useState(false);
   const [tradeListExportCopied, setTradeListExportCopied] = useState(false);
   const inputsBarRef = useRef<HTMLDivElement>(null);
+  const resultsTitleRef = useRef<HTMLDivElement>(null);
   const [contentTop, setContentTop] = useState(224);
+  const [resultsTitleHeight, setResultsTitleHeight] = useState(0);
 
   useLayoutEffect(() => {
     const node = inputsBarRef.current;
@@ -889,6 +949,23 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
       window.removeEventListener("resize", measure);
     };
   }, [draftRow, optimizeMessage, queryContracts.length, optimizerMode, collarDraft, sidebarWidth]);
+
+  useLayoutEffect(() => {
+    const node = resultsTitleRef.current;
+    if (!node) {
+      setResultsTitleHeight(0);
+      return;
+    }
+    const measure = () => setResultsTitleHeight(Math.ceil(node.getBoundingClientRect().height));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [optimizerMode, rankedResults, collarResults, optimizeMessage, collarMessage]);
 
   useEffect(() => {
     if (showOptimizeForModal) setPortfolioDropdownId(null);
@@ -1012,6 +1089,15 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
     return () => document.removeEventListener("keydown", onKey);
   }, [showOptimizeForModal]);
 
+  useEffect(() => {
+    if (!payoffModal) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPayoffModal(null);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [payoffModal]);
+
   const addQueryContract = useCallback(() => {
     const ticker = draftRow.ticker.trim().toUpperCase();
     if (!ticker) {
@@ -1122,6 +1208,23 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
         return;
       }
     }
+    if (collarDraft.searchMode === "goal") {
+      const floor = parseTargetFloorPct(collarDraft.targetFloorPctText);
+      if (!Number.isFinite(floor) || floor >= 0) {
+        setCollarMessage("Enter a target floor below spot (e.g. -15 for 15% downside protection).");
+        setCollarResults(null);
+        return;
+      }
+    }
+    if (collarDraft.searchMode === "exact") {
+      const put = Number(collarDraft.customPutStrike.replace(/,/g, ""));
+      const call = Number(collarDraft.customCallStrike.replace(/,/g, ""));
+      if (!Number.isFinite(put) || put <= 0 || !Number.isFinite(call) || call <= 0) {
+        setCollarMessage("Enter both a put strike and a call strike to quote an exact collar.");
+        setCollarResults(null);
+        return;
+      }
+    }
     setCollarLoading(true);
     setCollarMessage(null);
     try {
@@ -1135,10 +1238,15 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
         targetExpiry: collarDraft.targetExpiry,
         targetMonth: collarDraft.targetMonth,
         monthly: collarDraft.monthly,
-        rankBy: collarDraft.rankBy,
         shareCount: collarDraft.shareCount,
+        targetFloorPct: parseTargetFloorPct(collarDraft.targetFloorPctText),
+        targetNetPerShare: collarDraft.targetNetPerShare,
       };
-      if (Number.isFinite(customPut) && customPut > 0 && Number.isFinite(customCall) && customCall > 0) {
+      if (
+        collarDraft.searchMode === "exact" &&
+        Number.isFinite(customPut) && customPut > 0 &&
+        Number.isFinite(customCall) && customCall > 0
+      ) {
         body.customPutStrike = customPut;
         body.customCallStrike = customCall;
       }
@@ -1160,10 +1268,38 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
         setCollarResults(null);
         return;
       }
-      setCollarResults(Array.isArray(data.results) ? data.results : []);
       setCollarSpot(typeof data.spot === "number" ? data.spot : null);
-      setCollarMessage(data.message ?? null);
       setLastUpdated(new Date());
+
+      const rawResults: CollarResult[] = Array.isArray(data.results) ? data.results : [];
+      if (collarDraft.searchMode === "goal") {
+        const targetFloor = parseTargetFloorPct(collarDraft.targetFloorPctText);
+        const floorTolerance = 10;
+        const nearTarget = rawResults.filter(
+          (r) => Math.abs(r.floorPct - targetFloor) <= floorTolerance
+        );
+        if (rawResults.length > 3) {
+          setCollarResults(null);
+          setCollarMessage(
+            "Collar scan returned too many rows — the deployed API may be outdated. Deploy the latest code (goal-driven collar), then retry."
+          );
+          return;
+        }
+        if (rawResults.length > 0 && nearTarget.length === 0) {
+          setCollarResults(null);
+          setCollarMessage(
+            typeof data.message === "string" && data.message.length > 0
+              ? data.message
+              : `No puts found near a ${targetFloor}% floor for that expiry. Try another month or adjust the floor target.`
+          );
+          return;
+        }
+        setCollarResults(nearTarget.length > 0 ? nearTarget : rawResults);
+        setCollarMessage(data.message ?? null);
+      } else {
+        setCollarResults(rawResults);
+        setCollarMessage(data.message ?? null);
+      }
     } catch {
       setCollarMessage("Network error. Try again.");
       setCollarResults(null);
@@ -1402,10 +1538,11 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
     alignSelf: "stretch",
     justifyContent: "center",
     gap: t.spacing(1),
-    flex: "1 1 auto",
+    flex: "0 0 auto",
     minWidth: 260,
     marginLeft: t.spacing(2.5),
     paddingLeft: t.spacing(2.5),
+    paddingRight: t.spacing(2),
     borderLeft: `1px solid ${t.colors.border}`,
   };
 
@@ -1506,6 +1643,15 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
   const activeResultsTable = optimizerMode === "leg-finder" ? showResultsTable : showCollarResultsTable;
   const centerPanelMinHeight = `calc(100vh - ${contentTop}px)`;
   const mainTop = contentTop;
+  const resultsStickyTop = contentTop;
+  const resultsTheadStickyTop = contentTop + resultsTitleHeight;
+
+  const resultsPanelStickyStyle: React.CSSProperties = {
+    ["--optimizer-sticky-top" as string]: `${resultsStickyTop}px`,
+    ["--optimizer-thead-sticky-top" as string]: `${resultsTheadStickyTop}px`,
+    ["--optimizer-sticky-bg" as string]: t.colors.surface,
+    ["--optimizer-thead-bg" as string]: t.colors.secondary,
+  };
 
   const schwabAttribution = (
     <>
@@ -1616,7 +1762,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
         <p style={{ ...descStyle, marginTop: t.spacing(1), marginBottom: 0 }}>
           {optimizerMode === "leg-finder"
             ? "Define the tickers and parameters you want, run Optimize to fetch live options from Schwab, then add ideas to your trade list."
-            : "Scan live Schwab chains for protective collars (buy put + sell call). Rank by nearest-to-even net cost, or test your own strike pair."}
+            : "Scan live Schwab chains for protective collars (buy put + sell call). Returns a small set of tradeable recommendations — not every theoretical pair."}
         </p>
       </div>
 
@@ -1711,6 +1857,18 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
         </>
       )}
 
+      {payoffModal && (
+        <PayoffPanel
+          theme={t}
+          title={payoffModal.title}
+          subtitle={payoffModal.subtitle}
+          input={payoffModal.input}
+          shares={payoffModal.shares}
+          daysToMaturity={payoffModal.daysToMaturity}
+          onClose={() => setPayoffModal(null)}
+        />
+      )}
+
       {/* —— Horizontal inputs bar —— */}
       <div
         ref={inputsBarRef}
@@ -1718,7 +1876,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
         style={{
           position: "fixed",
           left: sidebarWidth,
-          right: 0,
+          right: tradeListTabWidth,
           top: fixedRails.headerHeight,
           zIndex: zIndex.railDropdown,
           backgroundColor: t.colors.surface,
@@ -2155,21 +2313,51 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                     />
                   </div>
                   <div style={inputFieldCol}>
-                    <label style={labelStyle}>Rank by</label>
-                    <OptimizerThemeSelect
-                      theme={t}
-                      value={cd.rankBy}
-                      options={[
-                        { value: "even", label: "Nearest Even" },
-                        { value: "widest", label: "Widest band" },
-                        { value: "best_floor", label: "Best floor" },
-                      ]}
-                      onChange={(v) => updateCollarDraft("rankBy", v as CollarRankBy)}
-                      dropdownKey="collar-rankBy"
-                      openId={portfolioDropdownId}
-                      setOpenId={setPortfolioDropdownId}
-                      minWidth={130}
-                    />
+                    <label style={labelStyle}>Mode</label>
+                    <div
+                      role="tablist"
+                      aria-label="Collar search mode"
+                      style={{
+                        display: "inline-flex",
+                        border: `1px solid ${t.colors.border}`,
+                        borderRadius: t.radius.md,
+                        overflow: "hidden",
+                        height: 40,
+                        boxSizing: "border-box",
+                      }}
+                    >
+                      {(
+                        [
+                          { id: "goal" as const, label: "Find best" },
+                          { id: "exact" as const, label: "Exact strikes" },
+                        ] as const
+                      ).map((m) => {
+                        const active = cd.searchMode === m.id;
+                        return (
+                          <button
+                            key={m.id}
+                            type="button"
+                            role="tab"
+                            aria-selected={active}
+                            onClick={() => updateCollarDraft("searchMode", m.id)}
+                            style={{
+                              border: "none",
+                              background: active ? t.colors.secondary : t.colors.surface,
+                              color: active ? t.colors.surface : t.colors.textMuted,
+                              fontWeight: 600,
+                              fontSize: "0.78rem",
+                              padding: `0 ${t.spacing(2.5)}`,
+                              cursor: "pointer",
+                              fontFamily: t.typography.fontFamily,
+                              whiteSpace: "nowrap",
+                              height: "100%",
+                            }}
+                          >
+                            {m.label}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2288,37 +2476,117 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                 </div>
               </div>
               <div style={inputSectionDivider} aria-hidden />
-              <div style={inputSectionBlockAuto}>
-                <HelpTooltip theme={t} text="Optional — leave blank to scan all strikes. Fill both to quote a specific collar (e.g. 125 put / 165 call).">
-                  <span style={inputSectionLabel}>Custom strikes (optional)</span>
-                </HelpTooltip>
-                <div style={inputFieldsRowInline}>
-                  <div style={inputFieldCol}>
-                    <label style={labelStyle}>Buy put $</label>
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      style={fieldInput({ maxWidth: 88, minWidth: 88 })}
-                      value={cd.customPutStrike}
-                      onChange={(e) => updateCollarDraft("customPutStrike", e.target.value)}
-                      placeholder="125"
-                      aria-label="Custom put strike"
-                    />
-                  </div>
-                  <div style={inputFieldCol}>
-                    <label style={labelStyle}>Sell call $</label>
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      style={fieldInput({ maxWidth: 88, minWidth: 88 })}
-                      value={cd.customCallStrike}
-                      onChange={(e) => updateCollarDraft("customCallStrike", e.target.value)}
-                      placeholder="165"
-                      aria-label="Custom call strike"
-                    />
+              {cd.searchMode === "goal" ? (
+                <div style={inputSectionBlockAuto}>
+                  <HelpTooltip
+                    theme={t}
+                    text="How much downside protection do you want? We find the call strike that pairs closest to even (Schwab-style), given the expiry above."
+                  >
+                    <span style={inputSectionLabel}>Protection goal</span>
+                  </HelpTooltip>
+                  <div style={inputFieldsRowInline}>
+                    <div style={inputFieldCol}>
+                      <label style={labelStyle}>Target floor %</label>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          style={fieldInput({ maxWidth: 68, minWidth: 68 })}
+                          value={cd.targetFloorPctText}
+                          onChange={(e) => {
+                            const raw = e.target.value.replace(/,/g, "");
+                            if (raw === "" || /^-?\d*\.?\d*$/.test(raw)) {
+                              updateCollarDraft("targetFloorPctText", raw);
+                            }
+                          }}
+                          placeholder="-15"
+                          aria-label="Target floor percent"
+                        />
+                        <span style={{ color: t.colors.textMuted, fontSize: "0.78rem" }}>from spot</span>
+                      </div>
+                    </div>
+                    <div style={inputFieldCol}>
+                      <label style={labelStyle} aria-hidden>&nbsp;</label>
+                      <button
+                        type="button"
+                        onClick={() => setCollarAdvancedOpen((o) => !o)}
+                        aria-expanded={collarAdvancedOpen}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 2,
+                          border: "none",
+                          background: "none",
+                          color: t.colors.primary,
+                          fontSize: "0.78rem",
+                          fontWeight: 600,
+                          cursor: "pointer",
+                          padding: 0,
+                          height: 40,
+                          fontFamily: t.typography.fontFamily,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {collarAdvancedOpen ? "Hide advanced" : "Advanced"}
+                        <span className="material-symbols-outlined" style={{ fontSize: 18 }} aria-hidden>
+                          {collarAdvancedOpen ? "expand_less" : "expand_more"}
+                        </span>
+                      </button>
+                    </div>
+                    {collarAdvancedOpen && (
+                      <div style={inputFieldCol}>
+                        <HelpTooltip theme={t} text="Leave at 0 for even ($0 net). Positive = you're willing to pay a debit; negative = you want a credit.">
+                          <label style={labelStyle}>Target net $/sh</label>
+                        </HelpTooltip>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          style={fieldInput({ maxWidth: 72, minWidth: 72 })}
+                          value={cd.targetNetPerShare !== 0 ? String(cd.targetNetPerShare) : ""}
+                          onChange={(e) => {
+                            const raw = e.target.value.replace(/,/g, "").trim();
+                            updateCollarDraft("targetNetPerShare", raw === "" ? 0 : Number(raw) || 0);
+                          }}
+                          placeholder="0 (even)"
+                          aria-label="Target net dollars per share"
+                        />
+                      </div>
+                    )}
                   </div>
                 </div>
-              </div>
+              ) : (
+                <div style={inputSectionBlockAuto}>
+                  <HelpTooltip theme={t} text="Quotes exactly this put/call pair — bypasses the floor-goal search.">
+                    <span style={inputSectionLabel}>Exact strikes</span>
+                  </HelpTooltip>
+                  <div style={inputFieldsRowInline}>
+                    <div style={inputFieldCol}>
+                      <label style={labelStyle}>Buy put $</label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        style={fieldInput({ maxWidth: 88, minWidth: 88 })}
+                        value={cd.customPutStrike}
+                        onChange={(e) => updateCollarDraft("customPutStrike", e.target.value)}
+                        placeholder="120"
+                        aria-label="Custom put strike"
+                      />
+                    </div>
+                    <div style={inputFieldCol}>
+                      <label style={labelStyle}>Sell call $</label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        style={fieldInput({ maxWidth: 88, minWidth: 88 })}
+                        value={cd.customCallStrike}
+                        onChange={(e) => updateCollarDraft("customCallStrike", e.target.value)}
+                        placeholder="190"
+                        aria-label="Custom call strike"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="options-optimizer-action-btns" style={actionBtnRow}>
                 <button
                   type="button"
@@ -2340,7 +2608,6 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
             </>
             );
           })()}
-          <div style={{ flexShrink: 0, width: inputsBarPaddingX, minWidth: inputsBarPaddingX }} aria-hidden />
         </div>
         {optimizerMode === "leg-finder" && optimizeMessage && (
           <p style={{ margin: `${t.spacing(1)} 0 0`, paddingBottom: 0, fontSize: "0.8rem", color: t.colors.danger }}>
@@ -2534,39 +2801,40 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
           className="options-optimizer-center-panel"
           style={{
             backgroundColor: activeResultsTable ? t.colors.surface : t.colors.background,
-            overflow: "hidden",
             minHeight: centerPanelMinHeight,
             display: "flex",
             flexDirection: "column",
+            ...resultsPanelStickyStyle,
           }}
         >
-          {optimizerMode === "leg-finder" && (showResultsTable || rankedResults) && (
-            <div
-              style={{
-                padding: `${t.spacing(2)} ${t.spacing(3)}`,
-                borderBottom: showResultsTable ? `1px solid ${t.colors.border}` : "none",
-                backgroundColor: t.colors.surface,
-              }}
-            >
+          {optimizerMode === "leg-finder" && showResultsTable && (
+            <>
+            <div style={{ backgroundColor: t.colors.surface }}>
               <div
+                ref={resultsTitleRef}
+                className="options-optimizer-results-title-sticky"
                 style={{
-                  display: "flex",
-                  alignItems: "flex-start",
-                  justifyContent: "space-between",
-                  gap: t.spacing(3),
+                  padding: `${t.spacing(2)} ${t.spacing(3)}`,
+                  borderBottom: `1px solid ${t.colors.border}`,
+                  backgroundColor: t.colors.surface,
                 }}
               >
-                <div style={{ minWidth: 0 }}>
-                  <h3 style={{ ...sectionTitleStyle, marginTop: 0, marginBottom: t.spacing(1) }}>
-                    Ranked results (yield + upside + risk)
-                  </h3>
-                  {showResultsTable && (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    justifyContent: "space-between",
+                    gap: t.spacing(3),
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <h3 style={{ ...sectionTitleStyle, marginTop: 0, marginBottom: t.spacing(1) }}>
+                      Ranked results (yield + upside + risk)
+                    </h3>
                     <p style={{ fontSize: "0.8rem", color: t.colors.textMuted, margin: 0 }}>
                       Add rows to your trade list with the + action. Click column headers to sort.
                     </p>
-                  )}
-                </div>
-                {showResultsTable && (
+                  </div>
                   <div style={{ textAlign: "right", flexShrink: 0, alignSelf: "flex-start" }}>
                     <p style={{ margin: 0, fontSize: "0.9rem", lineHeight: 1.45, color: t.colors.text }}>
                       <strong>Top yield:</strong> {Math.max(...rankedResults!.map((r) => r.annYield)).toFixed(2)}%
@@ -2576,19 +2844,8 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                       {(rankedResults!.reduce((s, r) => s + r.annYield, 0) / rankedResults!.length).toFixed(2)}%
                     </p>
                   </div>
-                )}
+                </div>
               </div>
-              {rankedResults && rankedResults.length === 0 && (
-                <p style={{ fontSize: "0.85rem", color: t.colors.danger, margin: `${t.spacing(1)} 0 0`, fontWeight: 600 }}>
-                  {optimizeMessage ?? "No candidates matched your settings."}
-                </p>
-              )}
-            </div>
-          )}
-
-          {optimizerMode === "leg-finder" && showResultsTable && (
-            <>
-            <div style={{ overflowX: "auto", backgroundColor: t.colors.surface }}>
               <table
                 className="options-optimizer-results-table"
                 style={{
@@ -2604,7 +2861,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                     <col key={i} style={{ width: `${100 / 16}%` }} />
                   ))}
                 </colgroup>
-                <thead>
+                <thead className="options-optimizer-results-thead">
                   <tr style={{ borderBottom: `2px solid ${t.colors.border}`, backgroundColor: t.colors.secondary }}>
                     <th style={tableThStyle}>Rank</th>
                     <th style={tableThStyle}>Ticker</th>
@@ -2686,6 +2943,28 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                       <td style={{ ...tableNumTdStyle, color: r.premiumPerContract >= 0 ? t.colors.success : t.colors.danger, fontWeight: 600 }}>{formatMoneyFull(r.premiumPerContract)}</td>
                       <td style={{ ...tableNumTdStyle, padding: tableActionCellPadding }}>
                         <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: t.spacing(1) }}>
+                          {(r.trade.optionSide === "PUT - SELL to OPEN" || r.trade.optionSide === "CALL - SELL to OPEN") && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const isPut = r.trade.optionSide === "PUT - SELL to OPEN";
+                                setPayoffModal({
+                                  title: `${r.trade.ticker} ${isPut ? "cash-secured put" : "covered call"}`,
+                                  subtitle: `${formatPrice(r.trade.strikePrice)} ${isPut ? "put" : "call"} · ${r.trade.maturity} · ${r.trade.daysToMaturity} DTE`,
+                                  input: isPut
+                                    ? { kind: "cashSecuredPut", spot: r.trade.currentPrice, putStrike: r.trade.strikePrice, premiumPerShare: r.trade.optionLimitPrice }
+                                    : { kind: "coveredCall", spot: r.trade.currentPrice, callStrike: r.trade.strikePrice, premiumPerShare: r.trade.optionLimitPrice },
+                                  shares: 0,
+                                  daysToMaturity: r.trade.daysToMaturity,
+                                });
+                              }}
+                              title="View payoff chart"
+                              aria-label="View payoff chart"
+                              style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, padding: 0, border: "none", background: "none", cursor: "pointer", color: t.colors.textMuted, borderRadius: "50%" }}
+                            >
+                              <span className="material-symbols-outlined" style={{ fontSize: 20 }} aria-hidden>show_chart</span>
+                            </button>
+                          )}
                           <button type="button" onClick={() => addToTradeList(r)} title="Add to trade list" aria-label="Add to trade list" className="options-optimizer-add-trade" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, padding: 0, border: "none", background: "none", cursor: "pointer", color: t.colors.primary, borderRadius: "50%", position: "relative" }}>
                             <span className="material-symbols-outlined" style={{ fontSize: 22, position: "absolute", opacity: addedResultIds.has(r.trade.id) ? 0 : 1, transition: "opacity 0.2s ease", pointerEvents: "none" }} aria-hidden>add_circle</span>
                             <span className="material-symbols-outlined" style={{ fontSize: 22, position: "absolute", opacity: addedResultIds.has(r.trade.id) ? 1 : 0, transition: "opacity 0.2s ease", pointerEvents: "none" }} aria-hidden>check_circle</span>
@@ -2720,49 +2999,36 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
             </>
           )}
 
-          {optimizerMode === "collar" && (showCollarResultsTable || collarResults) && (
-            <div
-              style={{
-                padding: `${t.spacing(2)} ${t.spacing(3)}`,
-                borderBottom: showCollarResultsTable ? `1px solid ${t.colors.border}` : "none",
-                backgroundColor: t.colors.surface,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: t.spacing(3) }}>
-                <div style={{ minWidth: 0 }}>
-                  <h3 style={{ ...sectionTitleStyle, marginTop: 0, marginBottom: t.spacing(1) }}>
-                    Collar scan results
-                  </h3>
-                  {showCollarResultsTable && (
-                    <p style={{ fontSize: "0.8rem", color: t.colors.textMuted, margin: 0 }}>
-                      Buy put + sell call pairs ranked by your criteria. Net cost uses put ask − call bid (executable collar).
-                    </p>
-                  )}
-                </div>
-                {showCollarResultsTable && collarSpot != null && (
-                  <div style={{ textAlign: "right", flexShrink: 0, alignSelf: "flex-start" }}>
-                    <p style={{ margin: 0, fontSize: "0.9rem", lineHeight: 1.45, color: t.colors.text }}>
-                      <strong>Spot:</strong> ${collarSpot.toFixed(2)}
-                    </p>
-                    {collarResults!.some((r) => r.isEven) && (
-                      <p style={{ margin: `${t.spacing(0.5)} 0 0`, fontSize: "0.9rem", lineHeight: 1.45, color: t.colors.success }}>
-                        <strong>Even collars found</strong>
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-              {collarResults && collarResults.length === 0 && (
-                <p style={{ fontSize: "0.85rem", color: t.colors.danger, margin: `${t.spacing(1)} 0 0`, fontWeight: 600 }}>
-                  {collarMessage ?? "No collar pairs matched your settings."}
-                </p>
-              )}
-            </div>
-          )}
-
           {optimizerMode === "collar" && showCollarResultsTable && (
             <>
-            <div style={{ overflowX: "auto", backgroundColor: t.colors.surface }}>
+            <div style={{ backgroundColor: t.colors.surface }}>
+              <div
+                ref={resultsTitleRef}
+                className="options-optimizer-results-title-sticky"
+                style={{
+                  padding: `${t.spacing(2)} ${t.spacing(3)}`,
+                  borderBottom: `1px solid ${t.colors.border}`,
+                  backgroundColor: t.colors.surface,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: t.spacing(3) }}>
+                  <div style={{ minWidth: 0 }}>
+                    <h3 style={{ ...sectionTitleStyle, marginTop: 0, marginBottom: t.spacing(1) }}>
+                      Collar results
+                    </h3>
+                    <p style={{ fontSize: "0.8rem", color: t.colors.textMuted, margin: 0 }}>
+                      {collarMessage ?? "Net/sh at mid (Schwab Even). Exec subline = put ask − call bid."}
+                    </p>
+                  </div>
+                  {collarSpot != null && (
+                    <div style={{ textAlign: "right", flexShrink: 0, alignSelf: "flex-start" }}>
+                      <p style={{ margin: 0, fontSize: "0.9rem", lineHeight: 1.45, color: t.colors.text }}>
+                        <strong>Spot:</strong> ${collarSpot.toFixed(2)}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
               <table
                 className="options-optimizer-results-table"
                 style={{
@@ -2778,7 +3044,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                     <col key={i} style={{ width: `${100 / 11}%` }} />
                   ))}
                 </colgroup>
-                <thead>
+                <thead className="options-optimizer-results-thead">
                   <tr style={{ borderBottom: `2px solid ${t.colors.border}`, backgroundColor: t.colors.secondary }}>
                     <th style={tableThStyle}>Rank</th>
                     <th style={tableThStyle}>Expiry</th>
@@ -2788,13 +3054,23 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                     <th style={tableThStyle}>Floor</th>
                     <th style={tableThStyle}>Cap</th>
                     <th style={tableThStyle}>Band</th>
-                    <th style={tableThStyle}>Even</th>
+                    <th style={tableThStyle}>
+                      <HelpTooltip
+                        theme={t}
+                        text={collarDraft.shareCount > 0 ? "Total collar cost/credit at mid for your share count." : "Net at mid per option contract (×100 sh)."}
+                      >
+                        <span style={{ cursor: "help" }}>{collarDraft.shareCount > 0 ? "Total $" : "Net/ctr"}</span>
+                      </HelpTooltip>
+                    </th>
                     <th style={tableThStyle}>DTE</th>
                     <th style={{ ...tableNumThStyle, padding: tableActionCellPadding }}>Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {collarResults!.map((r) => (
+                  {collarResults!.map((r) => {
+                    const positionTotal = formatCollarPositionTotal(r, collarDraft.shareCount);
+                    const netMid = collarNetMidPerShare(r);
+                    return (
                     <tr key={collarPairKey(r)} style={{ borderBottom: `1px solid ${t.colors.border}`, backgroundColor: t.colors.surface }}>
                       <td style={{ ...tableTdStyle, fontWeight: 600, color: r.rank === 1 ? rankingColors.gold : r.rank === 2 ? rankingColors.silver : r.rank === 3 ? rankingColors.bronze : t.colors.text }}>#{r.rank}</td>
                       <td style={{ ...tableTdStyle, color: t.colors.text }}>{r.expiry}</td>
@@ -2806,29 +3082,69 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                         <div style={{ fontWeight: 700 }}>{formatPrice(r.callStrike)}</div>
                         <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, marginTop: 2 }}>{r.call.bid.toFixed(2)}/{r.call.ask.toFixed(2)}</div>
                       </td>
-                      <td style={{ ...tableNumTdStyle, fontWeight: 600, color: Math.abs(r.netCostPerShare) <= 0.15 ? t.colors.success : r.netCostPerShare > 0 ? t.colors.danger : t.colors.text }}>
-                        {r.netCostPerShare >= 0 ? "+" : "−"}${Math.abs(r.netCostPerShare).toFixed(2)}
+                      <td style={{ ...tableNumTdStyle }}>
+                        <div style={{ fontWeight: 600, color: r.isEven ? t.colors.success : netMid > 0 ? t.colors.danger : t.colors.text }}>
+                          {netMid >= 0 ? "+" : "−"}${Math.abs(netMid).toFixed(2)}
+                        </div>
+                        <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, marginTop: 2 }} title="Executable: put ask − call bid">
+                          exec {(r.netCostPerShare >= 0 ? "+" : "−")}${Math.abs(r.netCostPerShare).toFixed(2)}
+                        </div>
                       </td>
                       <td style={{ ...tableNumTdStyle, color: t.colors.danger, fontWeight: 600 }}>{r.floorPct}%</td>
                       <td style={{ ...tableNumTdStyle, color: t.colors.success, fontWeight: 600 }}>+{r.capPct}%</td>
                       <td style={{ ...tableNumTdStyle, color: t.colors.textMuted }}>{r.bandWidthPct}%</td>
-                      <td style={{ ...tableNumTdStyle, color: r.isEven ? t.colors.success : t.colors.textMuted, fontWeight: 600 }}>{r.isEven ? "✓" : "—"}</td>
+                      <td style={{
+                        ...tableNumTdStyle,
+                        fontWeight: 600,
+                        color: positionTotal.value > 0 ? t.colors.danger : positionTotal.value < 0 ? t.colors.success : t.colors.text,
+                      }}>
+                        {positionTotal.value >= 0 ? "+" : ""}
+                        {Math.abs(positionTotal.value) >= 1000
+                          ? formatMoney(positionTotal.value)
+                          : formatMoneyFull(positionTotal.value)}
+                      </td>
                       <td style={{ ...tableNumTdStyle, color: t.colors.textMuted }}>{r.daysToMaturity}</td>
                       <td style={{ ...tableNumTdStyle, padding: tableActionCellPadding }}>
-                        <button
-                          type="button"
-                          onClick={() => addCollarToTradeList(r)}
-                          title="Add collar legs to trade list"
-                          aria-label="Add collar to trade list"
-                          className="options-optimizer-add-trade"
-                          style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, padding: 0, border: "none", background: "none", cursor: "pointer", color: t.colors.primary, borderRadius: "50%", position: "relative" }}
-                        >
-                          <span className="material-symbols-outlined" style={{ fontSize: 22, position: "absolute", opacity: addedCollarKeys.has(collarPairKey(r)) ? 0 : 1, transition: "opacity 0.2s ease", pointerEvents: "none" }} aria-hidden>add_circle</span>
-                          <span className="material-symbols-outlined" style={{ fontSize: 22, position: "absolute", opacity: addedCollarKeys.has(collarPairKey(r)) ? 1 : 0, transition: "opacity 0.2s ease", pointerEvents: "none" }} aria-hidden>check_circle</span>
-                        </button>
+                        <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: t.spacing(1) }}>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setPayoffModal({
+                                title: `${r.ticker} collar`,
+                                subtitle: `${formatPrice(r.putStrike)} put / ${formatPrice(r.callStrike)} call · ${r.expiry} · ${r.daysToMaturity} DTE`,
+                                input: {
+                                  kind: "collar",
+                                  spot: r.spot,
+                                  putStrike: r.putStrike,
+                                  callStrike: r.callStrike,
+                                  netPerShare: netMid,
+                                },
+                                shares: collarDraft.shareCount,
+                                daysToMaturity: r.daysToMaturity,
+                              })
+                            }
+                            title="View payoff chart"
+                            aria-label="View payoff chart"
+                            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, padding: 0, border: "none", background: "none", cursor: "pointer", color: t.colors.textMuted, borderRadius: "50%" }}
+                          >
+                            <span className="material-symbols-outlined" style={{ fontSize: 20 }} aria-hidden>show_chart</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => addCollarToTradeList(r)}
+                            title="Add collar legs to trade list"
+                            aria-label="Add collar to trade list"
+                            className="options-optimizer-add-trade"
+                            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, padding: 0, border: "none", background: "none", cursor: "pointer", color: t.colors.primary, borderRadius: "50%", position: "relative" }}
+                          >
+                            <span className="material-symbols-outlined" style={{ fontSize: 22, position: "absolute", opacity: addedCollarKeys.has(collarPairKey(r)) ? 0 : 1, transition: "opacity 0.2s ease", pointerEvents: "none" }} aria-hidden>add_circle</span>
+                            <span className="material-symbols-outlined" style={{ fontSize: 22, position: "absolute", opacity: addedCollarKeys.has(collarPairKey(r)) ? 1 : 0, transition: "opacity 0.2s ease", pointerEvents: "none" }} aria-hidden>check_circle</span>
+                          </button>
+                        </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

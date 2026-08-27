@@ -1,10 +1,9 @@
 // collar.ts
-// Protective collar scanner: pairs OTM puts + calls for a ticker/expiry; ranks by net cost (Even).
+// Protective collar finder: given a target downside floor, finds the call strike that pairs
+// closest to even (Schwab "Even" style, priced at mid) — a goal-driven recommendation, not a scanner.
 
 import { createClient } from "@supabase/supabase-js";
 import { toOCCSymbol, getValidAccessToken } from "../_schwab-utils.js";
-
-type CollarRankBy = "even" | "widest" | "best_floor";
 
 type CollarRequest = {
   ticker: string;
@@ -13,11 +12,13 @@ type CollarRequest = {
   targetExpiry?: string;
   targetMonth?: string;
   monthly?: boolean;
-  rankBy?: CollarRankBy;
   shareCount?: number;
-  /** Manual test: skip scan and quote this put/call pair only. */
   customPutStrike?: number;
   customCallStrike?: number;
+  /** Desired downside floor, % from spot (negative), e.g. -15. */
+  targetFloorPct?: number;
+  /** Desired net per share at mid; 0 = even (default). Positive = willing to pay a debit, negative = want a credit. */
+  targetNetPerShare?: number;
 };
 
 export type CollarLegQuote = {
@@ -37,16 +38,42 @@ export type CollarResult = {
   callStrike: number;
   put: CollarLegQuote;
   call: CollarLegQuote;
-  /** Buy put @ ask, sell call @ bid — per share (×100 per contract). Positive = net debit. */
+  /** Put ask − call bid (conservative executable debit). */
   netCostPerShare: number;
   netCostPerContract: number;
+  /** Put mid − call mid — matches Schwab “Even” order estimate. */
+  netMidPerShare: number;
+  netMidPerContract: number;
   floorPct: number;
   capPct: number;
   bandWidthPct: number;
+  /** |net mid − target net| — how close this pairing is to the requested budget. */
   evenScore: number;
   isEven: boolean;
   contractsFromShares: number;
 };
+
+/** Absolute sanity bounds on the floor a user can request. */
+const ABS_FLOOR_PCT_MIN = -75;
+const ABS_FLOOR_PCT_MAX = -1;
+const DEFAULT_TARGET_FLOOR_PCT = -15;
+/** Call strikes are scanned across this OTM band so the nearest-even match can be found. */
+const CALL_OTM_PCT_MIN = 3;
+const CALL_OTM_PCT_MAX = 80;
+/** How many listed put strikes near the target floor to consider (hero + alternates). */
+const PUT_CANDIDATE_COUNT = 3;
+/** Reject put candidates farther than this from the requested floor (percentage points). */
+const FLOOR_TOLERANCE_PCT = 10;
+/** Ignore legs with midpoint below this — penny options create fake "even" collars. */
+const MIN_LEG_MID = 0.15;
+const EVEN_THRESHOLD = 0.15;
+const MAX_RESULTS = 3;
+
+function clampTargetFloorPct(v: unknown): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return DEFAULT_TARGET_FLOOR_PCT;
+  return Math.min(ABS_FLOOR_PCT_MAX, Math.max(ABS_FLOOR_PCT_MIN, n));
+}
 
 function toExpiryYYYYMMDD(expKey: string): string {
   const datePart = expKey.split(":")[0].trim();
@@ -144,6 +171,7 @@ async function fetchChain(
     fromDate: fromStr,
     toDate: toStr,
     strikeCount: "200",
+    range: "ALL",
   });
   const chainResp = await fetch(
     `https://api.schwabapi.com/marketdata/v1/chains?${params}`,
@@ -236,6 +264,8 @@ function pickExpirations(
   opts: {
     monthly: boolean;
     usingExactExpiry: boolean;
+    usingMonthMode: boolean;
+    targetMonth: string | null;
     targetExpDate: Date | null;
     today: Date;
   }
@@ -258,6 +288,15 @@ function pickExpirations(
     }
     return closest ? [closest] : [];
   }
+  if (opts.usingMonthMode && opts.targetMonth) {
+    const monthPrefix = opts.targetMonth.trim();
+    exps = exps.filter((e) => e.startsWith(monthPrefix));
+    if (exps.length === 0) return [];
+    // Prefer the standard monthly in that month; otherwise the latest shared expiry in-range.
+    const monthly = exps.filter(isStandardMonthlyExpiry);
+    const pool = monthly.length > 0 ? monthly : exps;
+    return [pool.sort().at(-1)!];
+  }
   return exps.sort();
 }
 
@@ -274,14 +313,53 @@ function strikesFromMap(
     .sort((a, b) => a - b);
 }
 
-function trimStrikes(strikes: number[], max: number): number[] {
-  if (strikes.length <= max) return strikes;
-  const step = strikes.length / max;
-  const out: number[] = [];
-  for (let i = 0; i < max; i++) {
-    out.push(strikes[Math.min(strikes.length - 1, Math.floor(i * step))]);
+/** Nearest listed put strikes to the target floor % (hero + a couple of alternates). */
+function nearestPutStrikes(strikes: number[], spot: number, targetFloorPct: number, count: number): number[] {
+  const ranked = strikes
+    .map((s) => ({ s, floorPct: ((s - spot) / spot) * 100 }))
+    .filter((x) => x.floorPct < 0)
+    .map((x) => ({ ...x, dist: Math.abs(x.floorPct - targetFloorPct) }))
+    .sort((a, b) => a.dist - b.dist);
+  const within = ranked.filter((x) => x.dist <= FLOOR_TOLERANCE_PCT);
+  if (within.length === 0) return [];
+  return within.slice(0, count).map((x) => x.s);
+}
+
+/** Broad call OTM band so the nearest-even match can be found for whichever put strike was picked. */
+function callStrikesInBand(strikes: number[], spot: number): number[] {
+  const lo = spot * (1 + CALL_OTM_PCT_MIN / 100);
+  const hi = spot * (1 + CALL_OTM_PCT_MAX / 100);
+  return strikes.filter((s) => s > spot && s >= lo && s <= hi);
+}
+
+type RawCollar = Omit<CollarResult, "rank">;
+
+function isMeaningfulCollar(r: RawCollar): boolean {
+  return r.put.mid >= MIN_LEG_MID && r.call.mid >= MIN_LEG_MID;
+}
+
+/** For each candidate put strike, keep only the call strike nearest the target net (i.e. the best-even pairing). */
+function pickGoalCollars(
+  items: RawCollar[],
+  targetFloorPct: number,
+  targetNetPerShare: number
+): RawCollar[] {
+  const bestByPut = new Map<string, RawCollar>();
+  for (const r of items) {
+    const key = `${r.expiry}:${r.putStrike}`;
+    const cur = bestByPut.get(key);
+    if (!cur || Math.abs(r.netMidPerShare - targetNetPerShare) < Math.abs(cur.netMidPerShare - targetNetPerShare)) {
+      bestByPut.set(key, r);
+    }
   }
-  return [...new Set(out)].sort((a, b) => a - b);
+  const bests = Array.from(bestByPut.values());
+  bests.sort((a, b) => {
+    const da = Math.abs(a.floorPct - targetFloorPct);
+    const db = Math.abs(b.floorPct - targetFloorPct);
+    if (da !== db) return da - db;
+    return Math.abs(a.netMidPerShare - targetNetPerShare) - Math.abs(b.netMidPerShare - targetNetPerShare);
+  });
+  return bests.slice(0, MAX_RESULTS);
 }
 
 export async function handler(req: any, res: any): Promise<void> {
@@ -292,10 +370,11 @@ export async function handler(req: any, res: any): Promise<void> {
     return;
   }
 
-  const rankBy: CollarRankBy =
-    body.rankBy === "widest" || body.rankBy === "best_floor" ? body.rankBy : "even";
   const shareCount = Math.max(0, Number(body.shareCount) || 0);
   const contractsFromShares = shareCount > 0 ? Math.max(1, Math.floor(shareCount / 100)) : 0;
+  const targetFloorPct = clampTargetFloorPct(body.targetFloorPct);
+  const targetNetPerShareRaw = Number(body.targetNetPerShare);
+  const targetNetPerShare = Number.isFinite(targetNetPerShareRaw) ? targetNetPerShareRaw : 0;
 
   try {
     const supabaseUrl = process.env.SUPABASE_URL;
@@ -370,6 +449,8 @@ export async function handler(req: any, res: any): Promise<void> {
     const expiries = pickExpirations(putMap, callMap, {
       monthly: !!body.monthly,
       usingExactExpiry,
+      usingMonthMode,
+      targetMonth: usingMonthMode ? body.targetMonth!.trim() : null,
       targetExpDate,
       today,
     });
@@ -382,20 +463,16 @@ export async function handler(req: any, res: any): Promise<void> {
       return;
     }
 
-    type RawCollar = Omit<CollarResult, "rank">;
     const raw: RawCollar[] = [];
 
     for (const expiry of expiries) {
       const dte = daysBetween(today, new Date(expiry + "Z"));
-      let putStrikes = strikesFromMap(putMap, expiry).filter((s) => s < spot);
-      let callStrikes = strikesFromMap(callMap, expiry).filter((s) => s > spot);
+      let putStrikes = nearestPutStrikes(strikesFromMap(putMap, expiry), spot, targetFloorPct, PUT_CANDIDATE_COUNT);
+      let callStrikes = callStrikesInBand(strikesFromMap(callMap, expiry), spot);
 
       if (isCustom) {
-        putStrikes = putStrikes.includes(customPut) ? [customPut] : [customPut];
-        callStrikes = callStrikes.includes(customCall) ? [customCall] : [customCall];
-      } else {
-        putStrikes = trimStrikes(putStrikes, 35);
-        callStrikes = trimStrikes(callStrikes, 35);
+        putStrikes = [customPut];
+        callStrikes = [customCall];
       }
 
       if (putStrikes.length === 0 || callStrikes.length === 0) continue;
@@ -414,12 +491,14 @@ export async function handler(req: any, res: any): Promise<void> {
           const callQ = quotes.get(`C:${callStrike}`);
           if (!callQ || callQ.bid <= 0) continue;
 
+          const netMidPerShare = putQ.mid - callQ.mid;
           const netCostPerShare = putQ.ask - callQ.bid;
+          const netMidPerContract = netMidPerShare * 100;
           const netCostPerContract = netCostPerShare * 100;
           const floorPct = ((putStrike - spot) / spot) * 100;
           const capPct = ((callStrike - spot) / spot) * 100;
           const bandWidthPct = capPct - floorPct;
-          const evenScore = Math.abs(netCostPerShare);
+          const evenScore = Math.abs(netMidPerShare);
 
           raw.push({
             ticker,
@@ -432,11 +511,13 @@ export async function handler(req: any, res: any): Promise<void> {
             call: callQ,
             netCostPerShare: Math.round(netCostPerShare * 100) / 100,
             netCostPerContract: Math.round(netCostPerContract),
+            netMidPerShare: Math.round(netMidPerShare * 100) / 100,
+            netMidPerContract: Math.round(netMidPerContract),
             floorPct: Math.round(floorPct * 10) / 10,
             capPct: Math.round(capPct * 10) / 10,
             bandWidthPct: Math.round(bandWidthPct * 10) / 10,
             evenScore: Math.round(evenScore * 100) / 100,
-            isEven: evenScore <= 0.15,
+            isEven: evenScore <= EVEN_THRESHOLD,
             contractsFromShares,
           });
         }
@@ -448,31 +529,52 @@ export async function handler(req: any, res: any): Promise<void> {
     if (raw.length === 0) {
       res.status(200).json({
         results: [],
-        message: "No collar pairs had usable bid/ask quotes. Try another expiry or strikes.",
+        message: isCustom
+          ? "Could not quote that put/call pair. Check strikes and expiry."
+          : `No strikes found near a ${targetFloorPct}% floor for that expiry. Try a different floor target or expiry.`,
       });
       return;
     }
 
-    raw.sort((a, b) => {
-      if (rankBy === "widest") {
-        if (b.bandWidthPct !== a.bandWidthPct) return b.bandWidthPct - a.bandWidthPct;
-        return a.evenScore - b.evenScore;
-      }
-      if (rankBy === "best_floor") {
-        if (b.floorPct !== a.floorPct) return b.floorPct - a.floorPct;
-        return a.evenScore - b.evenScore;
-      }
-      if (a.evenScore !== b.evenScore) return a.evenScore - b.evenScore;
-      return b.bandWidthPct - a.bandWidthPct;
-    });
+    if (isCustom) {
+      const r = raw[0];
+      const top: CollarResult[] = [{ ...r, rank: 1 }];
+      res.status(200).json({
+        results: top,
+        spot,
+        message: "Custom collar quoted.",
+      });
+      return;
+    }
 
-    const top = raw.slice(0, 30).map((r, i) => ({ ...r, rank: i + 1 }));
+    const meaningful = raw.filter(isMeaningfulCollar);
+    if (meaningful.length === 0) {
+      res.status(200).json({
+        results: [],
+        message: `Scanned ${raw.length} pairs near a ${targetFloorPct}% floor but none had tradeable quotes. Try a different floor target or use custom strikes.`,
+      });
+      return;
+    }
+
+    const picks = pickGoalCollars(meaningful, targetFloorPct, targetNetPerShare);
+    const top: CollarResult[] = picks.map((r, i) => ({
+      ...r,
+      rank: i + 1,
+    }));
+
     res.status(200).json({
       results: top,
       spot,
-      message: isCustom ? "Custom collar quoted." : `Found ${raw.length} collar pairs; showing top ${top.length}.`,
+      message:
+        top.length > 0
+          ? `Best match to a ${targetFloorPct}% floor: ${formatStrike(top[0].putStrike)} put / ${formatStrike(top[0].callStrike)} call.`
+          : "No matches found.",
     });
   } catch (err: any) {
     res.status(500).json({ error: err?.message ?? "Collar scan failed." });
   }
+}
+
+function formatStrike(n: number): string {
+  return Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;
 }

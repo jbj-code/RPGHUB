@@ -317,6 +317,13 @@ body {
 }
 
 /* ---- Home: hero animation ---- */
+.home-page {
+  /* Fill main content area below app-main-inner vertical padding (spacing 6 × 2). */
+  min-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
 .home-hero {
   animation: home-hero-fade 0.8s ease-out both;
 }
@@ -496,7 +503,15 @@ body {
 }
 
 .options-optimizer-inputs-inner {
-  min-width: min-content;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.options-optimizer-inputs-bar {
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
 }
 
 .options-optimizer-query-contracts-scroll {
@@ -525,6 +540,23 @@ body {
   line-height: 1.2;
 }
 
+/** Results title sticks below the fixed inputs bar. */
+.options-optimizer-results-title-sticky {
+  position: sticky;
+  top: var(--optimizer-sticky-top, 0px);
+  z-index: 7;
+  background-color: var(--optimizer-sticky-bg, #fff);
+  box-shadow: 0 2px 8px rgba(15, 42, 54, 0.08);
+}
+
+.options-optimizer-results-thead th {
+  position: sticky;
+  top: var(--optimizer-thead-sticky-top, var(--optimizer-sticky-top, 0px));
+  z-index: 7;
+  background-color: var(--optimizer-thead-bg, inherit);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.08);
+}
+
 .options-optimizer-sort-icon {
   display: inline-flex;
   align-items: center;
@@ -544,14 +576,6 @@ body {
 
   .options-optimizer-main-below-inputs {
     margin-right: 40px !important;
-  }
-}
-
-@media (max-width: 1280px) {
-  .options-optimizer-inputs-bar {
-    overflow-x: auto;
-    overflow-y: visible;
-    -webkit-overflow-scrolling: touch;
   }
 }
 

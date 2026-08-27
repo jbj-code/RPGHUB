@@ -199,10 +199,11 @@ Two modes on the same page (header toggle: **Leg Finder** | **Collar**). Switchi
 ### Collar
 
 - **Use case:** Protective collar on held shares (e.g. SPCX) — **buy put** (floor) + **sell call** (cap). Often structured as **Even** (call premium ≈ put cost).
-- Inputs: ticker, expiry (month/days/exact), share count → contracts, rank by (**Nearest Even** default | Widest band | Best floor), optional custom put/call strikes.
-- Backend `action=collar`: fetches put + call chains for the expiry window, pairs strikes where **put &lt; spot &lt; call**, quotes legs, computes **net cost** (put ask − call bid), **floor %** and **cap %** from spot.
-- Returns top **30** ranked pairs; **+** adds both legs to the trade list.
-- Custom strikes: fill put + call to quote one structure without full scan.
+- **Goal-driven, not a scanner:** user sets a single **Target floor %** (e.g. -15%, how much downside protection they want); backend finds the listed put strike(s) nearest that floor and, for each, the call strike that pairs closest to even at mid (Schwab-style). Returns up to **3 results** (hero + 2 alternates), sorted by closeness to the target floor.
+- Inputs: ticker, shares, mode (**Find best** | **Exact strikes**), expiry (month/days/exact), Target floor %, optional **Advanced** → Target net $/sh (default 0 = even).
+- "Exact strikes" mode bypasses the goal search and quotes one specific put/call pair directly.
+- Backend `action=collar`: fetches put + call chains, quotes only the ~3 nearest put strikes to the target floor × calls in a broad 3–80% OTM band (min $0.15 premium per leg to drop penny-option junk).
+- **Payoff chart:** every collar result (and covered-call/cash-secured-put rows in Leg Finder) has a "view payoff" icon opening a Spiderrock-style return-at-expiration chart + scenario table (`src/components/options/PayoffPanel.tsx`, math in `src/lib/payoff.ts`). Illustrative only — ignores dividends, taxes, early exercise.
 
 ### Shared UI
 
