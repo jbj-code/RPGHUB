@@ -2917,7 +2917,7 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                   {displayedRankedResults.map((r) => (
                     <tr key={r.trade.id} style={{ borderBottom: `1px solid ${t.colors.border}`, backgroundColor: t.colors.surface }}>
                       <td style={{ ...tableTdStyle, fontWeight: 600, color: r.rank === 1 ? rankingColors.gold : r.rank === 2 ? rankingColors.silver : r.rank === 3 ? rankingColors.bronze : t.colors.text }}>#{r.rank}</td>
-                      <td style={{ ...tableTdStyle, fontWeight: 600, color: t.colors.text }}>{r.ticker}</td>
+                      <td style={{ ...tableTdStyle, fontWeight: 700, color: t.colors.text }}>{r.ticker}</td>
                       <td style={{ ...tableTdStyle, color: t.colors.text }}>
                         <div style={{ whiteSpace: "nowrap", lineHeight: 1.3 }}>{r.trade.maturity}</div>
                         <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, lineHeight: 1.25, marginTop: 2 }}>
@@ -2926,21 +2926,21 @@ export function OptionsOptimizer({ theme: t, sidebarWidth = SIDEBAR_WIDTH }: Opt
                       </td>
                       <td style={{ ...tableTdStyle, color: t.colors.text }}>{r.trade.optionSide.startsWith("PUT") ? "Put" : "Call"}</td>
                       <td style={{ ...tableNumTdStyle, fontWeight: 700 }}>{formatPrice(r.strike)}</td>
-                      <td style={{ ...tableNumTdStyle, color: (() => { const m = r.trade.moneynessPct; if (!Number.isFinite(m)) return t.colors.textMuted; const isPut = r.trade.optionSide.startsWith("PUT"); const otm = isPut ? m < 100 : m > 100; return otm ? t.colors.success : t.colors.danger; })(), fontWeight: 600 }}>{Number.isFinite(r.trade.moneynessPct) ? `${r.trade.moneynessPct.toFixed(1)}%` : "—"}</td>
-                      <td style={{ ...tableNumTdStyle }}>
+                      <td style={{ ...tableNumTdStyle, color: (() => { const m = r.trade.moneynessPct; if (!Number.isFinite(m)) return t.colors.textMuted; const isPut = r.trade.optionSide.startsWith("PUT"); const otm = isPut ? m < 100 : m > 100; return otm ? t.colors.success : t.colors.danger; })(), fontWeight: 700 }}>{Number.isFinite(r.trade.moneynessPct) ? `${r.trade.moneynessPct.toFixed(1)}%` : "—"}</td>
+                      <td style={tableNumTdStyle}>
                         <div style={{ fontWeight: 700, lineHeight: 1.3 }}>${r.limitPrice.toFixed(2)}</div>
                         <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, lineHeight: 1.25, marginTop: 2, whiteSpace: "nowrap" }}>
                           {r.trade.currentBid.toFixed(2)}/{r.trade.currentAsk.toFixed(2)}
                         </div>
                       </td>
-                      <td style={{ ...tableNumTdStyle, fontWeight: 600, color: r.trade.yieldAtCurrentPrice >= 0 ? t.colors.success : t.colors.danger }}>{r.trade.yieldAtCurrentPrice}%</td>
-                      <td style={{ ...tableNumTdStyle, fontWeight: 600, color: r.annYield >= 0 ? t.colors.success : t.colors.danger }}>{r.annYield}%</td>
-                      <td style={{ ...tableNumTdStyle, fontWeight: 600, color: t.colors.textMuted }}>{r.delta != null ? `${((1 - Math.abs(r.delta)) * 100).toFixed(0)}%` : "—"}</td>
+                      <td style={{ ...tableNumTdStyle, fontWeight: 700, color: r.trade.yieldAtCurrentPrice >= 0 ? t.colors.success : t.colors.danger }}>{r.trade.yieldAtCurrentPrice}%</td>
+                      <td style={{ ...tableNumTdStyle, fontWeight: 700, color: r.annYield >= 0 ? t.colors.success : t.colors.danger }}>{r.annYield}%</td>
+                      <td style={{ ...tableNumTdStyle, color: t.colors.textMuted }}>{r.delta != null ? `${((1 - Math.abs(r.delta)) * 100).toFixed(0)}%` : "—"}</td>
                       <td style={{ ...tableNumTdStyle, color: t.colors.textMuted }}>{r.ivPct != null ? `${r.ivPct.toFixed(1)}%` : "—"}</td>
                       <td style={{ ...tableNumTdStyle, color: t.colors.textMuted }}>{r.delta != null ? r.delta.toFixed(2) : "—"}</td>
                       <td style={{ ...tableNumTdStyle, color: t.colors.textMuted }}>{r.openInterest != null ? r.openInterest.toLocaleString() : "—"}</td>
                       <td style={{ ...tableNumTdStyle, color: t.colors.textMuted }}>{r.totalVolume != null ? r.totalVolume.toLocaleString() : "—"}</td>
-                      <td style={{ ...tableNumTdStyle, color: r.premiumPerContract >= 0 ? t.colors.success : t.colors.danger, fontWeight: 600 }}>{formatMoneyFull(r.premiumPerContract)}</td>
+                      <td style={{ ...tableNumTdStyle, color: r.premiumPerContract >= 0 ? t.colors.success : t.colors.danger, fontWeight: 700 }}>{formatMoneyFull(r.premiumPerContract)}</td>
                       <td style={{ ...tableNumTdStyle, padding: tableActionCellPadding }}>
                         <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: t.spacing(1) }}>
                           {(r.trade.optionSide === "PUT - SELL to OPEN" || r.trade.optionSide === "CALL - SELL to OPEN") && (
