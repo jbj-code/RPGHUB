@@ -1,5 +1,75 @@
 // _schwab-utils.ts
-// Shared Schwab utilities: OCC symbol builder and OAuth token refresh (not a Vercel route).
+// Shared Schwab utilities: OCC symbol builder, resilient HTTP fetch, and OAuth token refresh.
+
+/** Thrown / compared when Schwab returns HTTP 429 after retries. */
+export const SCHWAB_RATE_LIMIT = "SCHWAB_RATE_LIMIT";
+
+const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
+const DEFAULT_BACKOFF_MS = [0, 800, 2000];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Fetch Schwab market-data endpoints with retries on transient 429/5xx (Akama edge hiccups).
+ * Returns the final Response — callers decide how to handle non-OK statuses.
+ */
+export async function fetchSchwabWithRetry(
+  url: string,
+  init: RequestInit = {},
+  opts?: { maxAttempts?: number; backoffMs?: number[] },
+): Promise<Response> {
+  const maxAttempts = opts?.maxAttempts ?? 3;
+  const backoffMs = opts?.backoffMs ?? DEFAULT_BACKOFF_MS;
+  let last: Response | null = null;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const delay = backoffMs[Math.min(attempt, backoffMs.length - 1)] ?? 2000;
+    if (attempt > 0 && delay > 0) await sleep(delay);
+
+    last = await fetch(url, init);
+    if (last.ok || !RETRYABLE_STATUSES.has(last.status)) return last;
+  }
+
+  return last!;
+}
+
+/** User-facing message for Sheets / API errors — never pass raw HTML through. */
+export function formatSchwabErrorMessage(status: number, bodyText: string): string {
+  if (status === 429) {
+    return "Schwab rate limit reached. Wait 30–60 seconds and try again.";
+  }
+  if (status === 502 || status === 503 || status === 504) {
+    return `Schwab temporarily unavailable (${status}). Try again in a moment.`;
+  }
+
+  const trimmed = bodyText.trim();
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed) as { message?: string; error?: string };
+      const detail = parsed.message ?? parsed.error;
+      if (detail) return `Schwab error: ${detail}`;
+    } catch {
+      /* fall through */
+    }
+  }
+
+  const titleMatch =
+    trimmed.match(/<TITLE>([^<]+)<\/TITLE>/i) ?? trimmed.match(/<title>([^<]+)<\/title>/i);
+  if (titleMatch?.[1]) return `Schwab error: ${titleMatch[1].trim()}`;
+
+  if (trimmed.includes("<html") || trimmed.includes("<HTML")) {
+    return `Schwab error (${status}). Try again in a moment.`;
+  }
+
+  if (trimmed) return `Schwab error: ${trimmed.slice(0, 200)}`;
+  return `Schwab error (${status}).`;
+}
+
+export function throwIfSchwabRateLimited(resp: Response): void {
+  if (resp.status === 429) throw new Error(SCHWAB_RATE_LIMIT);
+}
 
 // --- OCC symbol builder ---
 /** Build an OCC option symbol: 6-char root + YYMMDD + C|P + 8-digit strike (strike × 1000). */

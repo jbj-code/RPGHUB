@@ -2,10 +2,14 @@
 // Options Screener: S&P 500 universe, vol-weighted ranking across OTM buckets.
 
 import { createClient } from "@supabase/supabase-js";
-import { toOCCSymbol, getValidAccessToken } from "../_schwab-utils.js";
+import {
+  fetchSchwabWithRetry,
+  getValidAccessToken,
+  SCHWAB_RATE_LIMIT,
+  throwIfSchwabRateLimited,
+  toOCCSymbol,
+} from "../_schwab-utils.js";
 import { SP500_UNIVERSE_SYMBOLS } from "../_universe-sp500.js";
-
-const RATE_LIMIT_ERR = "SCHWAB_RATE_LIMIT";
 
 type ScanDepth = "quick" | "standard" | "deep";
 type LiquidityMode = "strict" | "relaxed" | "all";
@@ -74,10 +78,6 @@ function sortRankedRows<T extends { score: number; periodYieldPct: number; annYi
 // Default scan universe: S&P 500 (~503) + liquid sector ETFs.
 const UNIVERSE_SYMBOLS: string[] = SP500_UNIVERSE_SYMBOLS;
 
-function throwIfRateLimited(resp: Response, _context: string): void {
-  if (resp.status === 429) throw new Error(RATE_LIMIT_ERR);
-}
-
 // ─── Schwab movers (live volatile stocks) ─────────────────────────────────
 type UniverseRow = { symbol: string; company: string };
 
@@ -133,19 +133,15 @@ async function fetchEquityQuotesBatched(
     const url =
       "https://api.schwabapi.com/marketdata/v1/quotes?" +
       new URLSearchParams({ symbols: batch.join(","), fields: "quote,reference" }).toString();
-    let quotesResp: Response | null = null;
-    // One retry for transient 5xx / gateway errors (Schwab occasionally hiccups).
-    for (let attempt = 0; attempt < 2; attempt++) {
-      if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
-      quotesResp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-      throwIfRateLimited(quotesResp, "equity_quotes");
-      if (quotesResp.ok || quotesResp.status < 500) break; // only retry on 5xx
+    const quotesResp = await fetchSchwabWithRetry(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    throwIfSchwabRateLimited(quotesResp);
+    if (!quotesResp.ok) {
+      const t = await quotesResp.text();
+      throw new Error(`SCHWAB_QUOTES_${quotesResp.status}:${t.slice(0, 240)}`);
     }
-    if (!quotesResp!.ok) {
-      const t = await quotesResp!.text();
-      throw new Error(`SCHWAB_QUOTES_${quotesResp!.status}:${t.slice(0, 240)}`);
-    }
-    const quotesBody = (await quotesResp!.json()) as Record<string, unknown>;
+    const quotesBody = (await quotesResp.json()) as Record<string, unknown>;
     Object.assign(merged, quotesBody);
   }
   return merged;
@@ -747,7 +743,7 @@ export async function handler(req: any, res: any): Promise<void> {
               `https://api.schwabapi.com/marketdata/v1/pricehistory?${params}`,
               { headers: { Authorization: `Bearer ${accessToken}` } }
             );
-            throwIfRateLimited(histResp, "pricehistory");
+            throwIfSchwabRateLimited(histResp);
             if (!histResp.ok) {
               upsideByTicker[symbol] = null;
               realizedVol20dPctByTicker[symbol] = null;
@@ -970,7 +966,7 @@ export async function handler(req: any, res: any): Promise<void> {
         "https://api.schwabapi.com/marketdata/v1/quotes?" +
         new URLSearchParams({ symbols: batch.map((b) => b.occ).join(",") }).toString();
       const qResp = await fetch(qUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
-      throwIfRateLimited(qResp, "option_quotes");
+      throwIfSchwabRateLimited(qResp);
       if (!qResp.ok) continue;
       const qBody: any = await qResp.json();
 
@@ -1277,7 +1273,7 @@ export async function handler(req: any, res: any): Promise<void> {
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
 
-    if (msg === RATE_LIMIT_ERR) {
+    if (msg === SCHWAB_RATE_LIMIT) {
       res.status(503).json({
         error:
           "Schwab rate limit (HTTP 429). Wait a moment and try again.",

@@ -12,7 +12,7 @@
 // Pair with: sheetQuote.ts (SCHWAB_OPT). Auth via same Schwab token as RPG HUB.
 
 import { createClient } from "@supabase/supabase-js";
-import { getValidAccessToken } from "../_schwab-utils.js";
+import { fetchSchwabWithRetry, getValidAccessToken } from "../_schwab-utils.js";
 
 const VALID_FIELDS = ["beta", "rv30", "rv90", "iv30", "iv90", "ivrv30", "ivrv90"] as const;
 
@@ -99,10 +99,10 @@ export async function handler(req: any, res: any): Promise<void> {
 }
 
 async function fetchBeta(symbol: string, token: string): Promise<number | null> {
-  const resp = await fetch(
+  const resp = await fetchSchwabWithRetry(
     "https://api.schwabapi.com/marketdata/v1/instruments?" +
       new URLSearchParams({ symbol, projection: "fundamental" }).toString(),
-    { headers: { Authorization: `Bearer ${token}` } }
+    { headers: { Authorization: `Bearer ${token}` } },
   );
   if (!resp.ok) return null;
   const data: any = await resp.json();
@@ -113,7 +113,7 @@ async function fetchBeta(symbol: string, token: string): Promise<number | null> 
 async function fetchRV(symbol: string, tradingDays: number, token: string): Promise<number | null> {
   const monthsNeeded = Math.ceil((tradingDays + 5) / 21) + 1;
 
-  const resp = await fetch(
+  const resp = await fetchSchwabWithRetry(
     "https://api.schwabapi.com/marketdata/v1/pricehistory?" +
       new URLSearchParams({
         symbol,
@@ -123,7 +123,7 @@ async function fetchRV(symbol: string, tradingDays: number, token: string): Prom
         frequency: "1",
         needExtendedHoursData: "false",
       }).toString(),
-    { headers: { Authorization: `Bearer ${token}` } }
+    { headers: { Authorization: `Bearer ${token}` } },
   );
   if (!resp.ok) return null;
   const data: any = await resp.json();
@@ -153,7 +153,7 @@ async function fetchIV(symbol: string, targetDte: number, token: string): Promis
   const toDate = offsetDate(today, targetDte + windowDays);
   const fmt = (d: Date) => d.toISOString().split("T")[0];
 
-  const resp = await fetch(
+  const resp = await fetchSchwabWithRetry(
     "https://api.schwabapi.com/marketdata/v1/chains?" +
       new URLSearchParams({
         symbol,
@@ -163,7 +163,7 @@ async function fetchIV(symbol: string, targetDte: number, token: string): Promis
         fromDate: fmt(fromDate),
         toDate: fmt(toDate),
       }).toString(),
-    { headers: { Authorization: `Bearer ${token}` } }
+    { headers: { Authorization: `Bearer ${token}` } },
   );
   if (!resp.ok) return null;
   const data: any = await resp.json();

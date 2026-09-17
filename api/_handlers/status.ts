@@ -2,7 +2,7 @@
 // Probes Schwab token validity and returns `{ connected }` for the UI status badge.
 
 import { createClient } from "@supabase/supabase-js";
-import { getValidAccessToken } from "../_schwab-utils.js";
+import { fetchSchwabWithRetry, getValidAccessToken } from "../_schwab-utils.js";
 
 // --- Connection status handler ---
 export async function handler(req: any, res: any): Promise<void> {
@@ -33,10 +33,10 @@ export async function handler(req: any, res: any): Promise<void> {
       return;
     }
 
-    const probeResp = await fetch(
+    const probeResp = await fetchSchwabWithRetry(
       "https://api.schwabapi.com/marketdata/v1/quotes?" +
         new URLSearchParams({ symbols: "SPY" }).toString(),
-      { headers: { Authorization: `Bearer ${accessToken}` } }
+      { headers: { Authorization: `Bearer ${accessToken}` } },
     );
 
     if (!probeResp.ok) {

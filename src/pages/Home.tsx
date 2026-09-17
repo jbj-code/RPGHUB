@@ -3,6 +3,7 @@
 
 import type { Page } from "../App";
 import type { Theme } from "../theme";
+import { RPG_ATLAS_URL } from "../constants";
 import {
   assets,
   getPageCardStyle,
@@ -16,10 +17,11 @@ type HomeProps = {
 };
 
 const TOOLS: {
-  page: Page;
+  page?: Page;
   label: string;
   icon: string;
   description: string;
+  externalUrl?: string;
 }[] = [
   {
     page: "stock-comparison",
@@ -38,6 +40,12 @@ const TOOLS: {
     label: "Options Screener",
     icon: "search",
     description: "Scan the universe for top OTM puts and calls by yield band.",
+  },
+  {
+    label: "RPG Atlas",
+    icon: "leaderboard",
+    description: "Company data and rankings across fund investments.",
+    externalUrl: RPG_ATLAS_URL,
   },
 ];
 
@@ -96,11 +104,17 @@ export function Home({ theme: t, onNavigate }: HomeProps) {
       <div className="home-tools-grid" style={gridStyle}>
         {TOOLS.map((tool) => (
           <button
-            key={tool.page}
+            key={tool.page ?? tool.externalUrl}
             type="button"
             className={`home-tool-card page-card ${INTERACTIVE_CARD_CLASS}`}
             style={cardStyle}
-            onClick={() => onNavigate(tool.page)}
+            onClick={() => {
+              if (tool.externalUrl) {
+                window.open(tool.externalUrl, "_blank", "noopener,noreferrer");
+              } else if (tool.page) {
+                onNavigate(tool.page);
+              }
+            }}
           >
             <span
               className="material-symbols-outlined"

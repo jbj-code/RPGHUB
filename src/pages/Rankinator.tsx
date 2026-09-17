@@ -1,6 +1,7 @@
 // Rankinator.tsx
-// Placeholder page for the Rankinator NotebookLM research tool.
+// Legacy route — RPG Atlas now lives at rpg-atlas.vercel.app (nav opens externally).
 
+import { RPG_ATLAS_URL } from "../constants";
 import type { Theme } from "../theme";
 import { PAGE_LAYOUT, getPageCardStyle } from "../theme";
 
@@ -43,16 +44,21 @@ export function Rankinator({ theme: t }: RankinatorProps) {
           >
             leaderboard
           </span>
-          Rankinator
+          RPG Atlas
         </span>
       </h2>
       <p style={descStyle}>
-        Company data on all our fund investments. Content and functionality will go here.
+        Company data and rankings across fund investments. RPG Atlas now runs as a standalone app.
       </p>
       <div className="page-card" style={cardStyle}>
-        <p style={{ margin: 0, color: t.colors.textMuted, fontSize: t.typography.baseFontSize }}>
-          Placeholder for future content.
-        </p>
+        <a
+          href={RPG_ATLAS_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: t.colors.primary, fontWeight: 600 }}
+        >
+          Open RPG Atlas
+        </a>
       </div>
     </section>
   );

@@ -6,6 +6,7 @@ import type { CSSProperties } from "react";
 import type { Theme, ThemeMode } from "../theme";
 import { assets, zIndex } from "../theme";
 import type { Page } from "../App";
+import { RPG_ATLAS_URL } from "../constants";
 
 export const SIDEBAR_WIDTH = 260;
 /** Compact sidebar: icon-only nav, favicon in header. */
@@ -173,9 +174,9 @@ export function NavBar({
     { page: "extractor", label: "Extractor", icon: "document_scanner" },
     {
       page: "rankinator",
-      label: "Rankinator",
+      label: "RPG Atlas",
       icon: "leaderboard",
-      externalUrl: "https://lookerstudio.google.com/s/rvxCmaxCAYc",
+      externalUrl: RPG_ATLAS_URL,
     },
     { page: "raise-ai", label: "Raise.ai", icon: "rocket_launch" },
     { page: "schwab", label: "Schwab Explorer", icon: "api" },

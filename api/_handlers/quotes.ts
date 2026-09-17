@@ -2,7 +2,7 @@
 // Proxies Schwab `/quotes` for one or more symbols (equity or OCC option).
 
 import { createClient } from "@supabase/supabase-js";
-import { getValidAccessToken } from "../_schwab-utils.js";
+import { fetchSchwabWithRetry, getValidAccessToken } from "../_schwab-utils.js";
 
 // --- Quotes proxy handler ---
 export async function handler(req: any, res: any): Promise<void> {
@@ -38,9 +38,9 @@ export async function handler(req: any, res: any): Promise<void> {
       return;
     }
 
-    const resp = await fetch(
+    const resp = await fetchSchwabWithRetry(
       "https://api.schwabapi.com/marketdata/v1/quotes?" + new URLSearchParams({ symbols }).toString(),
-      { headers: { Authorization: `Bearer ${accessToken}` } }
+      { headers: { Authorization: `Bearer ${accessToken}` } },
     );
     const text = await resp.text();
     res.status(resp.status).setHeader("Content-Type", "application/json").send(text);
