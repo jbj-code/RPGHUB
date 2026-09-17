@@ -3,7 +3,7 @@
 // closest to even (Schwab "Even" style, priced at mid) — a goal-driven recommendation, not a scanner.
 
 import { createClient } from "@supabase/supabase-js";
-import { toOCCSymbol, getValidAccessToken } from "../_schwab-utils.js";
+import { toOCCSymbol, getValidAccessToken, fetchSchwabWithRetry } from "../_schwab-utils.js";
 
 type CollarRequest = {
   ticker: string;
@@ -173,7 +173,7 @@ async function fetchChain(
     strikeCount: "200",
     range: "ALL",
   });
-  const chainResp = await fetch(
+  const chainResp = await fetchSchwabWithRetry(
     `https://api.schwabapi.com/marketdata/v1/chains?${params}`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
@@ -198,7 +198,7 @@ async function quoteLegs(
     const qUrl =
       "https://api.schwabapi.com/marketdata/v1/quotes?" +
       new URLSearchParams({ symbols: occSymbols.join(",") }).toString();
-    const qResp = await fetch(qUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
+    const qResp = await fetchSchwabWithRetry(qUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
     if (!qResp.ok) continue;
     const qBody: any = await qResp.json();
     for (let j = 0; j < batch.length; j++) {
@@ -407,7 +407,7 @@ export async function handler(req: any, res: any): Promise<void> {
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
 
-    const quoteResp = await fetch(
+    const quoteResp = await fetchSchwabWithRetry(
       "https://api.schwabapi.com/marketdata/v1/quotes?" +
         new URLSearchParams({ symbols: ticker, fields: "quote" }).toString(),
       { headers: { Authorization: `Bearer ${accessToken}` } }

@@ -5,6 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import {
   fetchSchwabWithRetry,
   getValidAccessToken,
+  runSchwabPool,
   SCHWAB_RATE_LIMIT,
   throwIfSchwabRateLimited,
   toOCCSymbol,
@@ -94,7 +95,7 @@ async function fetchMovers(accessToken: string): Promise<UniverseRow[]> {
       sorts.map(async (sort) => {
         try {
           const url = `https://api.schwabapi.com/marketdata/v1/movers/${index}?sort=${sort}&frequency=0`;
-          const resp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+          const resp = await fetchSchwabWithRetry(url, { headers: { Authorization: `Bearer ${accessToken}` } });
           if (!resp.ok) return;
           const body: any = await resp.json();
           // Schwab can return { screeners: [...] } or just an array
@@ -285,6 +286,49 @@ function volIvRvMultiplier(isBuyToOpen: boolean, ivPct: number | null, rvPct: nu
   return clamp(1 + coeff * (r - 1), 0.25, 1.0);
 }
 
+/** Ticker slice from client for mode="chain" chunk requests. */
+function parseTickerSlice(raw: unknown): string[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const out: string[] = [];
+  for (const item of raw) {
+    const s = String(item ?? "").trim().toUpperCase();
+    if (s) out.push(s);
+  }
+  return out.length > 0 ? out : null;
+}
+
+function parseNumberRecord(raw: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (raw && typeof raw === "object") {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      const n = Number(v);
+      if (Number.isFinite(n)) out[k.toUpperCase()] = n;
+    }
+  }
+  return out;
+}
+
+function parseNullableNumberRecord(raw: unknown): Record<string, number | null> {
+  const out: Record<string, number | null> = {};
+  if (raw && typeof raw === "object") {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      out[k.toUpperCase()] = typeof v === "number" && Number.isFinite(v) ? v : null;
+    }
+  }
+  return out;
+}
+
+function parseStringRecord(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (raw && typeof raw === "object") {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      const key = k.toUpperCase();
+      out[key] = typeof v === "string" && v.length > 0 ? v : key;
+    }
+  }
+  return out;
+}
+
 /** Non-empty validated list from client → scan only these symbols (no movers merge). */
 function normalizeClientUniverse(raw: unknown): string[] | null {
   if (raw == null) return null;
@@ -334,15 +378,16 @@ async function fetchMarketCapsBatched(
 ): Promise<Record<string, number | null>> {
   const caps: Record<string, number | null> = {};
   const BATCH = 25;
-  for (let i = 0; i < tickers.length; i += BATCH) {
-    if (i > 0) await new Promise((r) => setTimeout(r, 80));
-    const batch = tickers.slice(i, i + BATCH);
+  const batches: string[][] = [];
+  for (let i = 0; i < tickers.length; i += BATCH) batches.push(tickers.slice(i, i + BATCH));
+
+  await runSchwabPool(batches, 4, async (batch) => {
     try {
       const url =
         `https://api.schwabapi.com/marketdata/v1/instruments?` +
         new URLSearchParams({ symbol: batch.join(","), projection: "fundamental" }).toString();
-      const resp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-      if (!resp.ok) continue;
+      const resp = await fetchSchwabWithRetry(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (!resp.ok) return;
       const body: any = await resp.json();
 
       // Normalise to an array of instrument objects
@@ -358,7 +403,7 @@ async function fetchMarketCapsBatched(
           ...((val as any) ?? {}),
         }));
       } else {
-        continue;
+        return;
       }
 
       for (const inst of instruments) {
@@ -373,7 +418,7 @@ async function fetchMarketCapsBatched(
         if (!(ticker in caps)) caps[ticker] = null;
       }
     }
-  }
+  });
   return caps;
 }
 
@@ -516,6 +561,27 @@ export async function handler(req: any, res: any): Promise<void> {
     return;
   }
 
+  // dte/fromStr/toStr only depend on expiryDate, so compute them here — both the "chain"
+  // chunk mode (which skips universe building entirely) and the default flow need them.
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const dte = Math.max(1, daysBetween(today, expiryDate));
+  // Widen the chain date window by ±3 days so holiday-shifted expirations are included
+  // (e.g. Juneteenth shifts the June monthly from the 19th to the 18th in Schwab's chain).
+  // The best-match logic below picks whichever returned expiry is closest to the requested date.
+  const fromDateObj = new Date(expiryDate.getTime() - 3 * 24 * 60 * 60 * 1000);
+  const toDateObj = new Date(expiryDate.getTime() + 3 * 24 * 60 * 60 * 1000);
+  const fromStr = fromDateObj.toISOString().slice(0, 10);
+  const toStr = toDateObj.toISOString().slice(0, 10);
+
+  // Chunked scanning: "prepare" builds + vol-ranks the universe without fetching chains;
+  // "chain" fetches + scores chains for a client-supplied ticker slice only. This lets the
+  // frontend process an unbounded number of tickers across several short requests instead
+  // of one call racing Vercel's timeout — see OptionsScreener.tsx's onScan for the loop.
+  const modeRaw = String(body.mode ?? "full").toLowerCase();
+  const mode: "full" | "prepare" | "chain" =
+    modeRaw === "prepare" || modeRaw === "chain" ? modeRaw : "full";
+
   const otmLayoutRaw = String(body.otmLayout ?? body.otmMode ?? "bands").toLowerCase();
   const otmLayout: "bands" | "range" = otmLayoutRaw === "range" ? "range" : "bands";
 
@@ -576,79 +642,96 @@ export async function handler(req: any, res: any): Promise<void> {
       return;
     }
 
-    let clientUniverse: string[] | null = null;
-    if (body.universeSymbols !== undefined && body.universeSymbols !== null) {
-      if (!Array.isArray(body.universeSymbols)) {
-        res.status(400).json({ error: "universeSymbols must be an array of ticker strings." });
-        return;
-      }
-      clientUniverse = normalizeClientUniverse(body.universeSymbols);
-      if (body.universeSymbols.length > 0 && (clientUniverse == null || clientUniverse.length === 0)) {
-        res.status(400).json({ error: "No valid ticker symbols in universeSymbols." });
-        return;
-      }
-    }
-
+    // Cross-mode state: "chain" mode fills these directly from the client-supplied slice
+    // (see mode==="prepare" response below); "full"/"prepare" build them from scratch.
+    let chainTickers: string[];
+    let currentPriceByTicker: Record<string, number>;
+    let companyBySymbol: Record<string, string>;
+    let upsideByTicker: Record<string, number | null>;
+    let realizedVol20dPctByTicker: Record<string, number | null>;
     const warnings: string[] = [];
-    warnings.push(
-      `Scan depth: ${scanDepth} (vol history on up to ${MAX_HISTORY_UNDERLYINGS} names, option chains on top ${MAX_CHAIN_UNDERLYINGS}).`
-    );
-    if (liquidityMode !== "strict") {
-      warnings.push(
-        `Liquidity mode: ${liquidityMode} — illiquid contracts are ranked lower instead of excluded when possible.`
-      );
-    }
-    if (rankMode === "yield") {
-      warnings.push(
-        "Ranking: yield only — best strike per ticker and table order use period yield (liquidity filters still apply)."
-      );
-    }
 
-    // 1) Build universe: custom ticker list OR S&P 500 base + live Schwab movers
-    let allRows: UniverseRow[];
-    const companyBySymbol: Record<string, string> = {};
-
-    if (clientUniverse && clientUniverse.length > 0) {
-      allRows = clientUniverse.map((s) => ({ symbol: s, company: "" }));
-    } else {
-      const [moversRows] = await Promise.allSettled([fetchMovers(accessToken)]);
-      const moverSymbols: UniverseRow[] =
-        moversRows.status === "fulfilled" ? moversRows.value : [];
-      const baseSet = new Set(UNIVERSE_SYMBOLS);
-      const newMovers = moverSymbols.filter((m) => !baseSet.has(m.symbol));
-      allRows = [
-        ...UNIVERSE_SYMBOLS.map((s) => ({ symbol: s, company: "" })),
-        ...newMovers,
-      ];
-      for (const r of moverSymbols) companyBySymbol[r.symbol] = r.company;
-      if (moverSymbols.length > 0) {
-        warnings.push(
-          `Live Schwab movers: ${moverSymbols.length} fetched, ${newMovers.length} new (not already in base universe).`
-        );
-      } else if (moversRows.status === "rejected") {
-        warnings.push("Schwab movers unavailable — scanning base universe only.");
+    if (mode === "chain") {
+      const suppliedTickers = parseTickerSlice(body.chainTickers);
+      if (!suppliedTickers) {
+        res.status(400).json({
+          error: 'chainTickers is required for mode="chain" (non-empty array of ticker symbols).',
+        });
+        return;
       }
-    }
+      if (suppliedTickers.length > 100) {
+        res.status(400).json({ error: "chainTickers accepts at most 100 tickers per chunk." });
+        return;
+      }
+      chainTickers = suppliedTickers;
+      currentPriceByTicker = parseNumberRecord(body.spotByTicker);
+      companyBySymbol = parseStringRecord(body.companyByTicker);
+      upsideByTicker = parseNullableNumberRecord(body.upsideByTicker);
+      realizedVol20dPctByTicker = parseNullableNumberRecord(body.realizedVol20dPctByTicker);
+    } else {
+      let clientUniverse: string[] | null = null;
+      if (body.universeSymbols !== undefined && body.universeSymbols !== null) {
+        if (!Array.isArray(body.universeSymbols)) {
+          res.status(400).json({ error: "universeSymbols must be an array of ticker strings." });
+          return;
+        }
+        clientUniverse = normalizeClientUniverse(body.universeSymbols);
+        if (body.universeSymbols.length > 0 && (clientUniverse == null || clientUniverse.length === 0)) {
+          res.status(400).json({ error: "No valid ticker symbols in universeSymbols." });
+          return;
+        }
+      }
 
-    const tickers = allRows.map((r) => r.symbol);
+      warnings.push(
+        mode === "prepare"
+          ? `Scan depth: ${scanDepth} (surveying up to ${MAX_HISTORY_UNDERLYINGS} names; chains fetched on all of them, in chunks).`
+          : `Scan depth: ${scanDepth} (vol history on up to ${MAX_HISTORY_UNDERLYINGS} names, option chains on top ${MAX_CHAIN_UNDERLYINGS}).`
+      );
+      if (liquidityMode !== "strict") {
+        warnings.push(
+          `Liquidity mode: ${liquidityMode} — illiquid contracts are ranked lower instead of excluded when possible.`
+        );
+      }
+      if (rankMode === "yield") {
+        warnings.push(
+          "Ranking: yield only — best strike per ticker and table order use period yield (liquidity filters still apply)."
+        );
+      }
 
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    const dte = Math.max(1, daysBetween(today, expiryDate));
-    // Widen the chain date window by ±3 days so holiday-shifted expirations are included
-    // (e.g. Juneteenth shifts the June monthly from the 19th to the 18th in Schwab's chain).
-    // The best-match logic below picks whichever returned expiry is closest to the requested date.
-    const fromDateObj = new Date(expiryDate.getTime() - 3 * 24 * 60 * 60 * 1000);
-    const toDateObj   = new Date(expiryDate.getTime() + 3 * 24 * 60 * 60 * 1000);
-    const fromStr = fromDateObj.toISOString().slice(0, 10);
-    const toStr   = toDateObj.toISOString().slice(0, 10);
+      // 1) Build universe: custom ticker list OR S&P 500 base + live Schwab movers
+      let allRows: UniverseRow[];
+      companyBySymbol = {};
 
-    // 2) Equity quotes: current price + company description
-    const quotesBody: any = await fetchEquityQuotesBatched(tickers, accessToken);
+      if (clientUniverse && clientUniverse.length > 0) {
+        allRows = clientUniverse.map((s) => ({ symbol: s, company: "" }));
+      } else {
+        const [moversRows] = await Promise.allSettled([fetchMovers(accessToken)]);
+        const moverSymbols: UniverseRow[] =
+          moversRows.status === "fulfilled" ? moversRows.value : [];
+        const baseSet = new Set(UNIVERSE_SYMBOLS);
+        const newMovers = moverSymbols.filter((m) => !baseSet.has(m.symbol));
+        allRows = [
+          ...UNIVERSE_SYMBOLS.map((s) => ({ symbol: s, company: "" })),
+          ...newMovers,
+        ];
+        for (const r of moverSymbols) companyBySymbol[r.symbol] = r.company;
+        if (moverSymbols.length > 0) {
+          warnings.push(
+            `Live Schwab movers: ${moverSymbols.length} fetched, ${newMovers.length} new (not already in base universe).`
+          );
+        } else if (moversRows.status === "rejected") {
+          warnings.push("Schwab movers unavailable — scanning base universe only.");
+        }
+      }
 
-    const currentPriceByTicker: Record<string, number> = {};
+      const tickers = allRows.map((r) => r.symbol);
 
-    for (const sym of tickers) {
+      // 2) Equity quotes: current price + company description
+      const quotesBody: any = await fetchEquityQuotesBatched(tickers, accessToken);
+
+      currentPriceByTicker = {};
+
+      for (const sym of tickers) {
       const q = quotesBody[sym] ?? quotesBody[sym.replace(/\s+/g, "")];
       const src = q?.quote ?? q;
       const p =
@@ -724,78 +807,94 @@ export async function handler(req: any, res: any): Promise<void> {
       return;
     }
 
-    // 4) 1-month price performance + ~20d realized vol, parallel batches of 10
-    const upsideByTicker: Record<string, number | null> = {};
-    const realizedVol20dPctByTicker: Record<string, number | null> = {};
-    for (let hi = 0; hi < effectiveTickers.length; hi += HISTORY_CONCURRENCY) {
-      await Promise.allSettled(
-        effectiveTickers.slice(hi, hi + HISTORY_CONCURRENCY).map(async (symbol) => {
-          try {
-            const params = new URLSearchParams({
-              symbol,
-              periodType: "month",
-              period: "2",
-              frequencyType: "daily",
-              frequency: "1",
-              needExtendedHoursData: "false",
-            });
-            const histResp = await fetch(
-              `https://api.schwabapi.com/marketdata/v1/pricehistory?${params}`,
-              { headers: { Authorization: `Bearer ${accessToken}` } }
-            );
-            throwIfSchwabRateLimited(histResp);
-            if (!histResp.ok) {
-              upsideByTicker[symbol] = null;
-              realizedVol20dPctByTicker[symbol] = null;
-              return;
-            }
-            const histBody: any = await histResp.json();
-            const candles = histBody?.candles ?? [];
-            if (!Array.isArray(candles) || candles.length < 2) {
-              upsideByTicker[symbol] = null;
-              realizedVol20dPctByTicker[symbol] = null;
-              return;
-            }
-            const sorted = candles
-              .slice()
-              .sort((a: any, b: any) => (a.datetime ?? 0) - (b.datetime ?? 0));
-            const closes = sorted
-              .map((c: any) => (typeof c?.close === "number" ? c.close : NaN))
-              .filter((x: number) => Number.isFinite(x) && x > 0);
-            realizedVol20dPctByTicker[symbol] = annualizedRealizedVolPctFromCloses(closes);
+    // 4) 1-month price performance + ~20d realized vol, paced by the shared rate limiter.
+    // HISTORY_CONCURRENCY now bounds in-flight requests (latency hiding), not throughput —
+    // fetchSchwabWithRetry's limiter paces actual Schwab call volume across this and every
+    // other concurrent scan.
+    upsideByTicker = {};
+    realizedVol20dPctByTicker = {};
+    await runSchwabPool(effectiveTickers, HISTORY_CONCURRENCY, async (symbol) => {
+      try {
+        const params = new URLSearchParams({
+          symbol,
+          periodType: "month",
+          period: "2",
+          frequencyType: "daily",
+          frequency: "1",
+          needExtendedHoursData: "false",
+        });
+        const histResp = await fetchSchwabWithRetry(
+          `https://api.schwabapi.com/marketdata/v1/pricehistory?${params}`,
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+        if (!histResp.ok) {
+          upsideByTicker[symbol] = null;
+          realizedVol20dPctByTicker[symbol] = null;
+          return;
+        }
+        const histBody: any = await histResp.json();
+        const candles = histBody?.candles ?? [];
+        if (!Array.isArray(candles) || candles.length < 2) {
+          upsideByTicker[symbol] = null;
+          realizedVol20dPctByTicker[symbol] = null;
+          return;
+        }
+        const sorted = candles
+          .slice()
+          .sort((a: any, b: any) => (a.datetime ?? 0) - (b.datetime ?? 0));
+        const closes = sorted
+          .map((c: any) => (typeof c?.close === "number" ? c.close : NaN))
+          .filter((x: number) => Number.isFinite(x) && x > 0);
+        realizedVol20dPctByTicker[symbol] = annualizedRealizedVolPctFromCloses(closes);
 
-            const latest = sorted[sorted.length - 1];
-            const latestClose = latest?.close ?? 0;
-            const oneMonthAgo = new Date(today);
-            oneMonthAgo.setUTCMonth(oneMonthAgo.getUTCMonth() - 1);
-            const targetMs = oneMonthAgo.getTime();
-            const start = sorted.find((c: any) => (c.datetime ?? 0) >= targetMs) ?? sorted[0];
-            const startClose = start?.close ?? 0;
-            const livePx = currentPriceByTicker[symbol];
-            const endPx =
-              typeof livePx === "number" && livePx > 0 ? livePx : latestClose;
-            upsideByTicker[symbol] =
-              startClose > 0 && endPx > 0 ? (endPx / startClose - 1) * 100 : null;
-          } catch {
-            upsideByTicker[symbol] = null;
-            realizedVol20dPctByTicker[symbol] = null;
-          }
-        })
-      );
-    }
+        const latest = sorted[sorted.length - 1];
+        const latestClose = latest?.close ?? 0;
+        const oneMonthAgo = new Date(today);
+        oneMonthAgo.setUTCMonth(oneMonthAgo.getUTCMonth() - 1);
+        const targetMs = oneMonthAgo.getTime();
+        const start = sorted.find((c: any) => (c.datetime ?? 0) >= targetMs) ?? sorted[0];
+        const startClose = start?.close ?? 0;
+        const livePx = currentPriceByTicker[symbol];
+        const endPx =
+          typeof livePx === "number" && livePx > 0 ? livePx : latestClose;
+        upsideByTicker[symbol] =
+          startClose > 0 && endPx > 0 ? (endPx / startClose - 1) * 100 : null;
+      } catch {
+        upsideByTicker[symbol] = null;
+        realizedVol20dPctByTicker[symbol] = null;
+      }
+    });
 
-    // 4b) Re-rank for chain fetching: sort by realized vol descending, cap at MAX_CHAIN_UNDERLYINGS.
-    // Low-vol names (ETFs, utilities) almost never produce competitive options; focusing chain
-    // calls on the most volatile 100 names frees up budget to survey 200 names upfront.
-    const chainTickers = [...effectiveTickers]
-      .sort((a, b) => {
+      // 4b) Re-rank by realized vol descending. Low-vol names (ETFs, utilities) almost
+      // never produce competitive options, so volatile names go first — useful for both
+      // the "full" mode's chainCap slice and as chunk ordering for mode="prepare".
+      const rankedByVol = [...effectiveTickers].sort((a, b) => {
         const ra = realizedVol20dPctByTicker[a] ?? -1;
         const rb = realizedVol20dPctByTicker[b] ?? -1;
         return rb - ra;
-      })
-      .slice(0, MAX_CHAIN_UNDERLYINGS);
+      });
 
-    // ─── Chain fetch ─────────────────────────────────────────────────────────
+      if (mode === "prepare") {
+        res.status(200).json({
+          mode: "prepare",
+          chainTickers: rankedByVol,
+          spotByTicker: currentPriceByTicker,
+          companyByTicker: companyBySymbol,
+          upsideByTicker,
+          realizedVol20dPctByTicker,
+          dte,
+          expiration,
+          warnings,
+        });
+        return;
+      }
+
+      // mode === "full" (default, back-compat with any direct/agent callers): cap chain
+      // fetches at the depth-config limit, same behavior as before chunking existed.
+      chainTickers = rankedByVol.slice(0, MAX_CHAIN_UNDERLYINGS);
+    }
+
+    // ─── Chain fetch (shared by "full" and "chain" modes) ────────────────────
     // Option chains per ticker, parallel batches of 10.
     type OptionSpec = {
       ticker: string;
@@ -829,10 +928,11 @@ export async function handler(req: any, res: any): Promise<void> {
       return best ?? Object.values(expMap)[0] ?? null;
     }
 
+    // Concurrency here bounds in-flight requests for latency hiding; the shared rate
+    // limiter inside fetchSchwabWithRetry paces actual Schwab call volume so this no
+    // longer bursts 10-at-a-time and hopes for the best.
     const CHAIN_CONCURRENCY = 10;
-    for (let ci = 0; ci < chainTickers.length; ci += CHAIN_CONCURRENCY) {
-      await Promise.allSettled(
-        chainTickers.slice(ci, ci + CHAIN_CONCURRENCY).map(async (ticker) => {
+    await runSchwabPool(chainTickers, CHAIN_CONCURRENCY, async (ticker) => {
           const spot = currentPriceByTicker[ticker];
           if (!spot || spot <= 0) return;
 
@@ -848,7 +948,7 @@ export async function handler(req: any, res: any): Promise<void> {
             strikeCount: "80",
           });
 
-          const chainResp = await fetch(
+          const chainResp = await fetchSchwabWithRetry(
             `https://api.schwabapi.com/marketdata/v1/chains?${params}`,
             { headers: { Authorization: `Bearer ${accessToken}` } }
           );
@@ -922,9 +1022,7 @@ export async function handler(req: any, res: any): Promise<void> {
               }
             }
           }
-        })
-      );
-    }
+    });
 
     // Surface chain-level rate limits properly instead of the misleading "no options found".
     if (chainRateLimitHits > 0) {
@@ -960,14 +1058,16 @@ export async function handler(req: any, res: any): Promise<void> {
     }
     const occToSpecKey = Array.from(occToSpecKeyMap.entries()).map(([occ, key]) => ({ occ, key }));
 
+    const optionQuoteBatches: (typeof occToSpecKey)[] = [];
     for (let i = 0; i < occToSpecKey.length; i += BATCH) {
-      const batch = occToSpecKey.slice(i, i + BATCH);
+      optionQuoteBatches.push(occToSpecKey.slice(i, i + BATCH));
+    }
+    await runSchwabPool(optionQuoteBatches, 4, async (batch) => {
       const qUrl =
         "https://api.schwabapi.com/marketdata/v1/quotes?" +
         new URLSearchParams({ symbols: batch.map((b) => b.occ).join(",") }).toString();
-      const qResp = await fetch(qUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
-      throwIfSchwabRateLimited(qResp);
-      if (!qResp.ok) continue;
+      const qResp = await fetchSchwabWithRetry(qUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (!qResp.ok) return;
       const qBody: any = await qResp.json();
 
       for (const { occ, key } of batch) {
@@ -994,7 +1094,7 @@ export async function handler(req: any, res: any): Promise<void> {
           impliedVolPct: impliedVolPercentFromQuote(src),
         };
       }
-    }
+    });
 
     // ─── Liquidity filter ────────────────────────────────────────────────────
     // Build and score candidates; drop wide spreads and low open interest.
@@ -1245,14 +1345,34 @@ export async function handler(req: any, res: any): Promise<void> {
       }
     }
 
-    for (const otmPct of otmLevels) {
+    // Best strike per ticker per bucket — needed either way (a ticker can still have
+    // multiple candidate strikes within one bucket from this chunk's specs).
+    for (const otmPct of Object.keys(resultsByOtmPct).map(Number)) {
       const arr = resultsByOtmPct[otmPct] ?? [];
       const tickerBest = new Map<string, (typeof arr)[0]>();
       for (const row of arr) {
         const ex = tickerBest.get(row.ticker);
         if (!ex || isBetterRankedRow(row, ex, rankMode)) tickerBest.set(row.ticker, row);
       }
-      const deduped = sortRankedRows(Array.from(tickerBest.values()), rankMode);
+      resultsByOtmPct[otmPct] = Array.from(tickerBest.values());
+    }
+
+    if (mode === "chain") {
+      // Chunk response: return the deduped-but-untruncated set for this ticker slice only.
+      // Since chunks cover disjoint tickers, the frontend just concatenates chunk results
+      // per bucket, then applies the same sort + topN truncation once every chunk is in.
+      res.status(200).json({
+        mode: "chain",
+        resultsByOtmPct,
+        warnings,
+        chainRateLimitHits,
+        chainTickersAttempted: chainTickers.length,
+      });
+      return;
+    }
+
+    for (const otmPct of Object.keys(resultsByOtmPct).map(Number)) {
+      const deduped = sortRankedRows(resultsByOtmPct[otmPct] ?? [], rankMode);
       deduped.slice(0, topN).forEach((r, idx) => (r.rank = idx + 1));
       resultsByOtmPct[otmPct] = deduped.slice(0, topN);
     }

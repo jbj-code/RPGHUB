@@ -11,9 +11,87 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// --- Adaptive rate limiter (token bucket, self-tuning via AIMD) ---
+//
+// Schwab does not publish an exact per-app request ceiling (it's gated behind the developer
+// portal login), and community client libraries commonly default to ~120 requests/minute as
+// a guess. Rather than trust that number blindly, this limiter starts conservative and learns
+// this app's real ceiling from live traffic: a long clean streak nudges the rate up, a 429
+// immediately cuts it in half. Every Schwab call in this process shares one limiter instance,
+// so screener, optimizer, sheets, and agent requests all draw from the same paced budget
+// instead of each guessing its own concurrency number.
+class SchwabRateLimiter {
+  private ratePerMin: number;
+  private readonly minRatePerMin: number;
+  private readonly maxRatePerMin: number;
+  private tokens: number;
+  private lastRefill: number;
+  private cleanStreak = 0;
+
+  constructor(startRatePerMin = 100, minRatePerMin = 30, maxRatePerMin = 170) {
+    this.ratePerMin = startRatePerMin;
+    this.minRatePerMin = minRatePerMin;
+    this.maxRatePerMin = maxRatePerMin;
+    this.tokens = startRatePerMin;
+    this.lastRefill = Date.now();
+  }
+
+  private refill(): void {
+    const now = Date.now();
+    const elapsedMin = (now - this.lastRefill) / 60_000;
+    this.tokens = Math.min(this.ratePerMin, this.tokens + elapsedMin * this.ratePerMin);
+    this.lastRefill = now;
+  }
+
+  /** Blocks until a request slot is available, then consumes one. */
+  async acquire(): Promise<void> {
+    this.refill();
+    if (this.tokens >= 1) {
+      this.tokens -= 1;
+      return;
+    }
+    const waitMs = ((1 - this.tokens) / this.ratePerMin) * 60_000;
+    await sleep(Math.max(waitMs, 15));
+    this.refill();
+    this.tokens = Math.max(0, this.tokens - 1);
+  }
+
+  /** Call after a non-429 response. Slowly climbs the rate on a long clean streak. */
+  reportSuccess(): void {
+    this.cleanStreak += 1;
+    if (this.cleanStreak % 50 === 0 && this.ratePerMin < this.maxRatePerMin) {
+      this.ratePerMin = Math.min(this.maxRatePerMin, this.ratePerMin + 10);
+    }
+  }
+
+  /** Call after a 429. Immediately halves the rate and drains the bucket. */
+  reportRateLimited(): void {
+    this.cleanStreak = 0;
+    this.ratePerMin = Math.max(this.minRatePerMin, Math.floor(this.ratePerMin * 0.5));
+    this.tokens = 0;
+  }
+
+  get currentRatePerMin(): number {
+    return this.ratePerMin;
+  }
+}
+
+// One limiter per warm serverless instance, shared across every Schwab call it makes.
+// Note: Vercel functions are per-instance, not globally shared across concurrent cold
+// starts, so this self-tunes per warm lambda rather than app-wide. That's the right
+// tradeoff for RPG HUB's internal, low-concurrency usage — a cross-instance limiter would
+// need an external store (e.g. Upstash Redis), which isn't worth the complexity unless
+// usage grows well beyond a small team.
+let sharedLimiter: SchwabRateLimiter | null = null;
+export function getSchwabRateLimiter(): SchwabRateLimiter {
+  if (!sharedLimiter) sharedLimiter = new SchwabRateLimiter();
+  return sharedLimiter;
+}
+
 /**
- * Fetch Schwab market-data endpoints with retries on transient 429/5xx (Akama edge hiccups).
- * Returns the final Response — callers decide how to handle non-OK statuses.
+ * Fetch Schwab market-data endpoints with rate-limiter pacing and retries on transient
+ * 429/5xx (Akamai edge hiccups). Returns the final Response — callers decide how to
+ * handle non-OK statuses.
  */
 export async function fetchSchwabWithRetry(
   url: string,
@@ -22,17 +100,49 @@ export async function fetchSchwabWithRetry(
 ): Promise<Response> {
   const maxAttempts = opts?.maxAttempts ?? 3;
   const backoffMs = opts?.backoffMs ?? DEFAULT_BACKOFF_MS;
+  const limiter = getSchwabRateLimiter();
   let last: Response | null = null;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const delay = backoffMs[Math.min(attempt, backoffMs.length - 1)] ?? 2000;
     if (attempt > 0 && delay > 0) await sleep(delay);
 
+    await limiter.acquire();
     last = await fetch(url, init);
+
+    if (last.status === 429) {
+      limiter.reportRateLimited();
+    } else {
+      limiter.reportSuccess();
+    }
+
     if (last.ok || !RETRYABLE_STATUSES.has(last.status)) return last;
   }
 
   return last!;
+}
+
+/**
+ * Runs `worker` over every item using up to `concurrency` parallel workers, each pulling
+ * the next item as soon as it finishes (no fixed-size batches waiting on the slowest
+ * request). Pair with `fetchSchwabWithRetry` inside `worker` — the shared rate limiter
+ * paces actual Schwab throughput; this just bounds how many requests are in flight at once.
+ */
+export async function runSchwabPool<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  async function runWorker(): Promise<void> {
+    for (;;) {
+      const index = next++;
+      if (index >= items.length) return;
+      await worker(items[index]!, index);
+    }
+  }
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
 }
 
 /** User-facing message for Sheets / API errors — never pass raw HTML through. */

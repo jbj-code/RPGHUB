@@ -55,15 +55,19 @@ type RankedOption = {
   schwabSymbol: string;
   occSymbol: string;
   liquidityFlags?: string[];
+  /** Backend composite ranking score. Used client-side to merge/re-sort chunked chain results. */
+  score?: number;
 };
 
 type ScanDepth = "quick" | "standard" | "deep";
 type LiquidityMode = "strict" | "relaxed" | "all";
 
+// Chunked chain fetching (see onScan) means every surveyed name gets its chain fetched —
+// depth now only controls how many names are surveyed up front, not a separate chain cap.
 const SCAN_DEPTH_OPTIONS: { value: ScanDepth; label: string; hint: string }[] = [
-  { value: "quick", label: "Quick", hint: "~280 names · 120 chains" },
-  { value: "standard", label: "Standard", hint: "~500 names · 180 chains" },
-  { value: "deep", label: "Deep", hint: "Full S&P · 250 chains" },
+  { value: "quick", label: "Quick", hint: "~280 names, full chain coverage" },
+  { value: "standard", label: "Standard", hint: "~500 names, full chain coverage" },
+  { value: "deep", label: "Deep", hint: "Full S&P + ETFs, full chain coverage" },
 ];
 
 const LIQUIDITY_MODE_OPTIONS: { value: LiquidityMode; label: string }[] = [
@@ -72,18 +76,68 @@ const LIQUIDITY_MODE_OPTIONS: { value: LiquidityMode; label: string }[] = [
   { value: "all", label: "Show all" },
 ];
 
-type ScreenerResponse = {
-  resultsByOtmPct: Record<number, RankedOption[]>;
-  message: string | null;
-  warnings?: string[];
-  expiration?: string;
-  optionType?: "P" | "C";
-  dte?: number;
-  positionSide?: "write" | "buy";
-  otmLayout?: OtmLayout;
-  otmRange?: { min: number; max: number };
-  rankMode?: RankMode;
+/** Response from action=screener, mode="prepare" — universe built + vol-ranked, no chains fetched yet. */
+type PrepareResponse = {
+  mode: "prepare";
+  chainTickers: string[];
+  spotByTicker: Record<string, number>;
+  companyByTicker: Record<string, string>;
+  upsideByTicker: Record<string, number | null>;
+  realizedVol20dPctByTicker: Record<string, number | null>;
+  dte: number;
+  expiration: string;
+  warnings: string[];
+  error?: string;
 };
+
+/** Response from action=screener, mode="chain" — chains fetched + scored for one ticker slice. */
+type ChainChunkResponse = {
+  mode: "chain";
+  resultsByOtmPct: Record<number, RankedOption[]>;
+  warnings: string[];
+  chainRateLimitHits: number;
+  chainTickersAttempted: number;
+  error?: string;
+};
+
+/** Tickers surveyed per chain-fetch request. Small enough to stay well inside Vercel's
+ * per-invocation timeout even for the slowest chunk; the frontend loops to cover the
+ * full surveyed universe instead of capping it. */
+const CHAIN_CHUNK_SIZE = 40;
+
+/**
+ * Mirrors screener.ts's sortRankedRows — the final cross-chunk sort has to happen client
+ * side since chunks arrive independently. Keep this in sync if backend ranking changes.
+ */
+function compareScreenerRows(a: RankedOption, b: RankedOption, rankMode: RankMode): number {
+  const scoreA = a.score ?? 0;
+  const scoreB = b.score ?? 0;
+  const periodA = a.periodYieldPct ?? 0;
+  const periodB = b.periodYieldPct ?? 0;
+  if (rankMode === "yield") {
+    if (periodB !== periodA) return periodB - periodA;
+    if (scoreB !== scoreA) return scoreB - scoreA;
+    return b.annYieldPct - a.annYieldPct;
+  }
+  if (scoreB !== scoreA) return scoreB - scoreA;
+  if (periodB !== periodA) return periodB - periodA;
+  return b.annYieldPct - a.annYieldPct;
+}
+
+/** Sorts + truncates each bucket's merged chunk results to the top N and assigns rank. */
+function finalizeMergedResults(
+  merged: Record<number, RankedOption[]>,
+  rankMode: RankMode,
+  topN: number,
+): Record<number, RankedOption[]> {
+  const out: Record<number, RankedOption[]> = {};
+  for (const [key, rows] of Object.entries(merged)) {
+    const otmPct = Number(key);
+    const sorted = [...rows].sort((a, b) => compareScreenerRows(a, b, rankMode));
+    out[otmPct] = sorted.slice(0, topN).map((r, idx) => ({ ...r, rank: idx + 1 }));
+  }
+  return out;
+}
 
 const OTM_LEVELS = [5, 10, 15, 20] as const;
 /** Backend key for custom min–max OTM range (single results table). */
@@ -620,7 +674,8 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
     return () => window.removeEventListener("keydown", onKey);
   }, [showInfoModal]);
 
-  // Scan button progress bar — animates from 0 → ~88% during scan, then jumps to 100% on finish.
+  // Scan button progress bar — driven by real chunk progress from onScan (chainTickers
+  // processed so far ÷ total). Just handles the "jump to 100% then fade" finish here.
   useEffect(() => {
     if (!scanning) {
       if (scanWasRunning.current) {
@@ -632,15 +687,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
       return;
     }
     scanWasRunning.current = true;
-    setScanProgress(0);
-    const start = Date.now();
-    const estimated = scanDepth === "quick" ? 28_000 : scanDepth === "deep" ? 52_000 : 38_000;
-    const id = setInterval(() => {
-      const ratio = (Date.now() - start) / estimated;
-      setScanProgress(88 * (1 - Math.exp(-2.5 * ratio)));
-    }, 250);
-    return () => clearInterval(id);
-  }, [scanning, scanDepth]);
+  }, [scanning]);
 
   const hasResults = Object.values(resultsByOtmPct).some((rows) => rows.length > 0);
 
@@ -990,63 +1037,135 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
     setResultsByOtmPct({});
     setTableSort({ phase: "none" });
     setScanning(true);
+    setScanProgress(0);
+
     try {
-      const payload: Record<string, unknown> = {
+      const basePayload: Record<string, unknown> = {
         optionType,
         positionSide,
         expiration,
         otmLayout,
         rankMode,
         topN: 10,
-        scanDepth,
         liquidityMode,
         monthlyOnly,
       };
       if (otmLayout === "range") {
-        payload.otmPctMin = otmPctMin;
-        payload.otmPctMax = otmPctMax;
+        basePayload.otmPctMin = otmPctMin;
+        basePayload.otmPctMax = otmPctMax;
       } else {
-        payload.otmLevels = Array.from(OTM_LEVELS);
+        basePayload.otmLevels = Array.from(OTM_LEVELS);
       }
-      if (isFullUniverse) payload.minMarketCap = minMarketCap;
+      if (isFullUniverse) basePayload.minMarketCap = minMarketCap;
       if (activeBucket.symbols.length > 0) {
-        payload.universeSymbols = activeBucket.symbols;
+        basePayload.universeSymbols = activeBucket.symbols;
       }
 
-      const res = await fetch(`${SCHWAB_API_BASE}/api/schwab`, {
+      // 1) Prepare: build + vol-rank the universe. No chain calls yet, so this alone never
+      // gets anywhere near Vercel's timeout even for the full S&P + ETFs.
+      const prepRes = await fetch(`${SCHWAB_API_BASE}/api/schwab`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "screener", ...payload }),
+        body: JSON.stringify({ action: "screener", mode: "prepare", ...basePayload, scanDepth }),
       });
+      let prep: PrepareResponse = {
+        mode: "prepare",
+        chainTickers: [],
+        spotByTicker: {},
+        companyByTicker: {},
+        upsideByTicker: {},
+        realizedVol20dPctByTicker: {},
+        dte: 0,
+        expiration,
+        warnings: [],
+      };
+      try { prep = await prepRes.json(); } catch { /* non-JSON body */ }
 
-      let json: ScreenerResponse & { error?: string } = { resultsByOtmPct: {}, message: null, warnings: [] };
-      try { json = await res.json(); } catch { /* non-JSON body */ }
-
-      if (!res.ok) {
-        const userMsg = typeof json.error === "string" && json.error ? json.error : `Scan failed (HTTP ${res.status})`;
-        const rawDetail = json.message != null ? String(json.message) : null;
-        setScanError(rawDetail ? `${userMsg} — ${rawDetail}` : userMsg);
+      if (!prepRes.ok) {
+        const userMsg = typeof prep.error === "string" && prep.error ? prep.error : `Scan failed (HTTP ${prepRes.status})`;
+        setScanError(userMsg);
         return;
       }
-      setWarnings(json.warnings ?? []);
-      setScanError(json.message ? String(json.message) : null);
-      setResultsByOtmPct(json.resultsByOtmPct ?? {});
-      setLastScanDte(typeof json.dte === "number" && Number.isFinite(json.dte) ? json.dte : null);
-      if (res.ok) {
-        const hasAny = Object.values(json.resultsByOtmPct ?? {}).some((rows) => rows.length > 0);
-        if (hasAny) {
-          setLastScanAt(new Date());
-          setOutcomePositionSide(positionSide);
-          setOutcomeOtmLayout(json.otmLayout === "range" ? "range" : otmLayout);
-          setOutcomeOtmRange(
-            json.otmLayout === "range" && json.otmRange
-              ? { min: json.otmRange.min, max: json.otmRange.max }
-              : otmLayout === "range"
-                ? { min: otmPctMin, max: otmPctMax }
-                : null
-          );
-          setOutcomeRankMode(json.rankMode === "yield" ? "yield" : rankMode);
+      setWarnings(prep.warnings ?? []);
+      setLastScanDte(typeof prep.dte === "number" && Number.isFinite(prep.dte) ? prep.dte : null);
+
+      const chainTickers = Array.isArray(prep.chainTickers) ? prep.chainTickers : [];
+      if (chainTickers.length === 0) {
+        setScanError("No tickers with valid prices found in the universe.");
+        return;
+      }
+
+      // 2) Chain: fetch + score chains in bounded chunks, merging + re-ranking live so the
+      // tables fill in progressively instead of waiting on the whole universe at once.
+      const merged: Record<number, RankedOption[]> = {};
+      let rateLimitHits = 0;
+      let chunkFailures = 0;
+
+      for (let i = 0; i < chainTickers.length; i += CHAIN_CHUNK_SIZE) {
+        const slice = chainTickers.slice(i, i + CHAIN_CHUNK_SIZE);
+        const pick = (record: Record<string, unknown>) =>
+          Object.fromEntries(slice.map((s) => [s, record[s]]));
+
+        try {
+          const chainRes = await fetch(`${SCHWAB_API_BASE}/api/schwab`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "screener",
+              mode: "chain",
+              ...basePayload,
+              chainTickers: slice,
+              spotByTicker: pick(prep.spotByTicker),
+              companyByTicker: pick(prep.companyByTicker),
+              upsideByTicker: pick(prep.upsideByTicker),
+              realizedVol20dPctByTicker: pick(prep.realizedVol20dPctByTicker),
+            }),
+          });
+          let chunk: ChainChunkResponse = {
+            mode: "chain",
+            resultsByOtmPct: {},
+            warnings: [],
+            chainRateLimitHits: 0,
+            chainTickersAttempted: 0,
+          };
+          try { chunk = await chainRes.json(); } catch { /* non-JSON body */ }
+
+          if (chainRes.ok) {
+            for (const [key, rows] of Object.entries(chunk.resultsByOtmPct ?? {})) {
+              const otmPct = Number(key);
+              if (!merged[otmPct]) merged[otmPct] = [];
+              merged[otmPct].push(...rows);
+            }
+            rateLimitHits += chunk.chainRateLimitHits ?? 0;
+          } else {
+            chunkFailures += slice.length;
+          }
+        } catch {
+          chunkFailures += slice.length;
         }
+
+        setScanProgress(Math.round((Math.min(i + CHAIN_CHUNK_SIZE, chainTickers.length) / chainTickers.length) * 100));
+        setResultsByOtmPct(finalizeMergedResults(merged, rankMode, 10));
+      }
+
+      if (rateLimitHits > 0) {
+        setWarnings((w) => [...w, `${rateLimitHits} ticker(s) were rate-limited on chain fetch — results may be missing a few names.`]);
+      }
+      if (chunkFailures > 0) {
+        setWarnings((w) => [...w, `${chunkFailures} ticker(s) failed to fetch and were skipped.`]);
+      }
+
+      const finalResults = finalizeMergedResults(merged, rankMode, 10);
+      setResultsByOtmPct(finalResults);
+      const hasAny = Object.values(finalResults).some((rows) => rows.length > 0);
+      if (hasAny) {
+        setLastScanAt(new Date());
+        setOutcomePositionSide(positionSide);
+        setOutcomeOtmLayout(otmLayout);
+        setOutcomeOtmRange(otmLayout === "range" ? { min: otmPctMin, max: otmPctMax } : null);
+        setOutcomeRankMode(rankMode);
+      } else {
+        setScanError("No options found for the chosen expiration and OTM levels.");
       }
     } catch (err: any) {
       setScanError(err?.message ? String(err.message) : "Unexpected error scanning from Schwab.");

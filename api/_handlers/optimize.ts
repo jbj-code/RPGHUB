@@ -2,7 +2,7 @@
 // Options Optimizer: chains + quotes + price history; ranks candidates by yield and momentum.
 
 import { createClient } from "@supabase/supabase-js";
-import { toOCCSymbol, getValidAccessToken } from "../_schwab-utils.js";
+import { toOCCSymbol, getValidAccessToken, fetchSchwabWithRetry } from "../_schwab-utils.js";
 
 // --- Types and helpers ---
 type PortfolioRow = {
@@ -368,7 +368,7 @@ export async function handler(req: any, res: any): Promise<void> {
     // --- Equity quotes ---
     // Underlying quotes (current price + CUSIP per ticker).
     // fields=quote,reference ensures the reference sub-object (which has cusip for equities) is returned.
-    const quoteResp = await fetch(
+    const quoteResp = await fetchSchwabWithRetry(
       "https://api.schwabapi.com/marketdata/v1/quotes?" +
         new URLSearchParams({ symbols: tickers.join(","), fields: "quote,reference" }).toString(),
       { headers: { Authorization: `Bearer ${accessToken}` } }
@@ -404,7 +404,7 @@ export async function handler(req: any, res: any): Promise<void> {
             frequency: "1",
             needExtendedHoursData: "false",
           });
-          const histResp = await fetch(
+          const histResp = await fetchSchwabWithRetry(
             `https://api.schwabapi.com/marketdata/v1/pricehistory?${params}`,
             { headers: { Authorization: `Bearer ${accessToken}` } }
           );
@@ -506,7 +506,7 @@ export async function handler(req: any, res: any): Promise<void> {
           // Large strikeCount ensures deep OTM and far-out expiry strikes are included.
           strikeCount: "200",
         });
-        const chainResp = await fetch(
+        const chainResp = await fetchSchwabWithRetry(
           `https://api.schwabapi.com/marketdata/v1/chains?${params}`,
           { headers: { Authorization: `Bearer ${accessToken}` } }
         );
@@ -650,7 +650,7 @@ export async function handler(req: any, res: any): Promise<void> {
           const qUrl =
             "https://api.schwabapi.com/marketdata/v1/quotes?" +
             new URLSearchParams({ symbols: occSymbols.join(",") }).toString();
-          const qResp = await fetch(qUrl, {
+          const qResp = await fetchSchwabWithRetry(qUrl, {
             headers: { Authorization: `Bearer ${accessToken}` },
           });
           if (!qResp.ok) return;
