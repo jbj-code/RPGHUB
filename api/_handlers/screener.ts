@@ -1361,12 +1361,16 @@ export async function handler(req: any, res: any): Promise<void> {
       // Chunk response: return the deduped-but-untruncated set for this ticker slice only.
       // Since chunks cover disjoint tickers, the frontend just concatenates chunk results
       // per bucket, then applies the same sort + topN truncation once every chunk is in.
+      // Raw counts (not the formatted `warnings` strings, which only describe this one
+      // chunk) let the frontend sum across every chunk and build one accurate summary.
       res.status(200).json({
         mode: "chain",
         resultsByOtmPct,
         warnings,
         chainRateLimitHits,
         chainTickersAttempted: chainTickers.length,
+        liquidityFiltered,
+        ivCoverage: { withIv: rankedRowsWithIv, withoutIv: rankedRowsWithoutIv },
       });
       return;
     }

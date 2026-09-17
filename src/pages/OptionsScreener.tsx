@@ -97,6 +97,10 @@ type ChainChunkResponse = {
   warnings: string[];
   chainRateLimitHits: number;
   chainTickersAttempted: number;
+  /** Raw counts (not pre-formatted text) so the frontend can sum across every chunk and
+   * build one accurate summary instead of losing or duplicating per-chunk messages. */
+  liquidityFiltered?: { spread: number; oi: number };
+  ivCoverage?: { withIv: number; withoutIv: number };
   error?: string;
 };
 
@@ -1095,11 +1099,23 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
         return;
       }
 
+      // Set the "outcome" labels now (not after the loop) — results stream in
+      // progressively below, so headers need to match this run's settings from the
+      // first row rather than lagging behind until every chunk has finished.
+      setOutcomePositionSide(positionSide);
+      setOutcomeOtmLayout(otmLayout);
+      setOutcomeOtmRange(otmLayout === "range" ? { min: otmPctMin, max: otmPctMax } : null);
+      setOutcomeRankMode(rankMode);
+
       // 2) Chain: fetch + score chains in bounded chunks, merging + re-ranking live so the
       // tables fill in progressively instead of waiting on the whole universe at once.
       const merged: Record<number, RankedOption[]> = {};
       let rateLimitHits = 0;
       let chunkFailures = 0;
+      let spreadFiltered = 0;
+      let oiFiltered = 0;
+      let withIv = 0;
+      let withoutIv = 0;
 
       for (let i = 0; i < chainTickers.length; i += CHAIN_CHUNK_SIZE) {
         const slice = chainTickers.slice(i, i + CHAIN_CHUNK_SIZE);
@@ -1137,6 +1153,10 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
               merged[otmPct].push(...rows);
             }
             rateLimitHits += chunk.chainRateLimitHits ?? 0;
+            spreadFiltered += chunk.liquidityFiltered?.spread ?? 0;
+            oiFiltered += chunk.liquidityFiltered?.oi ?? 0;
+            withIv += chunk.ivCoverage?.withIv ?? 0;
+            withoutIv += chunk.ivCoverage?.withoutIv ?? 0;
           } else {
             chunkFailures += slice.length;
           }
@@ -1148,11 +1168,36 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
         setResultsByOtmPct(finalizeMergedResults(merged, rankMode, 10));
       }
 
+      // Mirrors the summary messages screener.ts used to build in one shot before chunking —
+      // aggregated here since each chunk only sees its own slice of tickers.
+      const finalWarnings: string[] = [];
       if (rateLimitHits > 0) {
-        setWarnings((w) => [...w, `${rateLimitHits} ticker(s) were rate-limited on chain fetch — results may be missing a few names.`]);
+        finalWarnings.push(`${rateLimitHits} ticker(s) were rate-limited on chain fetch — results may be missing a few names.`);
       }
       if (chunkFailures > 0) {
-        setWarnings((w) => [...w, `${chunkFailures} ticker(s) failed to fetch and were skipped.`]);
+        finalWarnings.push(`${chunkFailures} ticker(s) failed to fetch and were skipped.`);
+      }
+      if (withoutIv > 0 && withIv === 0) {
+        finalWarnings.push(
+          "Implied volatility was not available on option quotes or chain contracts; IV vs 20d realized-vol adjustment was skipped."
+        );
+      }
+      if (spreadFiltered > 0) {
+        finalWarnings.push(
+          liquidityMode === "strict"
+            ? `Excluded ${spreadFiltered} illiquid contracts with wide bid/ask spread.`
+            : `${spreadFiltered} contracts flagged wide spread (included with lower rank).`
+        );
+      }
+      if (oiFiltered > 0) {
+        finalWarnings.push(
+          liquidityMode === "strict"
+            ? `Excluded ${oiFiltered} contracts with very low open interest.`
+            : `${oiFiltered} contracts flagged low open interest (included with lower rank).`
+        );
+      }
+      if (finalWarnings.length > 0) {
+        setWarnings((w) => [...w, ...finalWarnings]);
       }
 
       const finalResults = finalizeMergedResults(merged, rankMode, 10);
@@ -1160,10 +1205,6 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
       const hasAny = Object.values(finalResults).some((rows) => rows.length > 0);
       if (hasAny) {
         setLastScanAt(new Date());
-        setOutcomePositionSide(positionSide);
-        setOutcomeOtmLayout(otmLayout);
-        setOutcomeOtmRange(otmLayout === "range" ? { min: otmPctMin, max: otmPctMax } : null);
-        setOutcomeRankMode(rankMode);
       } else {
         setScanError("No options found for the chosen expiration and OTM levels.");
       }
