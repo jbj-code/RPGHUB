@@ -803,6 +803,25 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
       );
   }, [tickerReview]);
 
+  const tickerSummaryYieldLeaders = useMemo(() => {
+    let bestPeriodIdx = -1;
+    let bestAnnIdx = -1;
+    let bestPeriod = -Infinity;
+    let bestAnn = -Infinity;
+    tickerSummaryPicks.forEach(({ row, dte }, i) => {
+      const py = periodYieldFromRow(row, dte);
+      if (py > bestPeriod) {
+        bestPeriod = py;
+        bestPeriodIdx = i;
+      }
+      if (Number.isFinite(row.annYieldPct) && row.annYieldPct > bestAnn) {
+        bestAnn = row.annYieldPct;
+        bestAnnIdx = i;
+      }
+    });
+    return { bestPeriodIdx, bestAnnIdx };
+  }, [tickerSummaryPicks]);
+
   const tickerTableRankOverride =
     tableSort.phase !== "none" ? (idx: number) => idx + 1 : undefined;
 
@@ -2276,33 +2295,182 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
             </div>
 
             {tickerSummaryPicks.length > 0 && (
-              <div style={{ ...cardStyle, marginBottom: t.spacing(4) }}>
-                <div style={{ marginBottom: t.spacing(3) }}>
-                  <h3 style={{ ...sectionTitleStyle, marginBottom: t.spacing(1) }}>#1 per expiration</h3>
-                  <p style={{ margin: 0, fontSize: "0.78rem", color: t.colors.textMuted, lineHeight: 1.5 }}>
-                    One row per expiry — the top-ranked strike for that date (
-                    {outcomeRankMode === "yield" ? "highest period yield" : "highest smart score"}). Expand any
-                    expiration below for ranks #2–#{tickerReview.topPerExpiry ?? topPerExpiry}.
-                  </p>
+              <div
+                style={{
+                  ...cardStyle,
+                  marginBottom: t.spacing(4),
+                  padding: 0,
+                  overflow: "hidden",
+                }}
+              >
+                <div style={{ padding: t.spacing(4), paddingBottom: t.spacing(3) }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      alignItems: "flex-end",
+                      justifyContent: "space-between",
+                      gap: t.spacing(3),
+                    }}
+                  >
+                    <div>
+                      <h3 style={{ ...sectionTitleStyle, marginBottom: t.spacing(1) }}>#1 per expiration</h3>
+                      <p style={{ margin: 0, fontSize: "0.78rem", color: t.colors.textMuted, lineHeight: 1.5, maxWidth: 520 }}>
+                        Best strike on each expiry (
+                        {outcomeRankMode === "yield" ? "ranked by period yield" : "ranked by smart score"}). Gold bar
+                        = highest period or annualized yield in this list. Detail tables below show #
+                        {tickerReview.topPerExpiry ?? topPerExpiry} per date.
+                      </p>
+                    </div>
+                    <span
+                      style={{
+                        fontSize: "0.72rem",
+                        fontWeight: 700,
+                        color: t.colors.textMuted,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.05em",
+                      }}
+                    >
+                      {tickerSummaryPicks.length} expiries
+                    </span>
+                  </div>
                 </div>
-                <div style={tableWrapStyle}>
-                  <table style={tableStyle}>
+                <div
+                  style={{
+                    maxHeight: 440,
+                    overflow: "auto",
+                    borderTop: `1px solid ${t.colors.border}`,
+                  }}
+                >
+                  <table style={{ ...tableStyle, fontSize: "0.82rem" }}>
                     <thead>
-                      <tr style={{ borderBottom: `2px solid ${t.colors.border}` }}>
-                        <th style={{ ...thStyle, textAlign: "left" }}>Expiration</th>
-                        <th style={{ ...thStyle, textAlign: "right" }}>DTE</th>
-                        <th style={{ ...thStyle, textAlign: "right" }}>Strike</th>
-                        <th style={{ ...thStyle, textAlign: "right" }}>OTM</th>
-                        <th style={{ ...thStyle, textAlign: "right" }}>{tablePeriodLabel}</th>
+                      <tr>
+                        <th
+                          style={{
+                            ...thStyle,
+                            position: "sticky",
+                            top: 0,
+                            zIndex: 2,
+                            boxShadow: `0 1px 0 ${t.colors.border}`,
+                          }}
+                        >
+                          Expiration
+                        </th>
+                        <th
+                          style={{
+                            ...thNumStyle,
+                            position: "sticky",
+                            top: 0,
+                            zIndex: 2,
+                            boxShadow: `0 1px 0 ${t.colors.border}`,
+                          }}
+                        >
+                          DTE
+                        </th>
+                        <th
+                          style={{
+                            ...thNumStyle,
+                            position: "sticky",
+                            top: 0,
+                            zIndex: 2,
+                            boxShadow: `0 1px 0 ${t.colors.border}`,
+                          }}
+                        >
+                          Strike
+                        </th>
+                        <th
+                          style={{
+                            ...thNumStyle,
+                            position: "sticky",
+                            top: 0,
+                            zIndex: 2,
+                            boxShadow: `0 1px 0 ${t.colors.border}`,
+                          }}
+                        >
+                          OTM
+                        </th>
+                        <th
+                          style={{
+                            ...thNumStyle,
+                            position: "sticky",
+                            top: 0,
+                            zIndex: 2,
+                            boxShadow: `0 1px 0 ${t.colors.border}`,
+                          }}
+                        >
+                          <HelpTooltip
+                            theme={t}
+                            text={
+                              outcomePositionSide === "buy"
+                                ? "Debit as % of strike notional for this expiry (not annualized)."
+                                : "Premium as % of strike notional if held to expiration (not annualized)."
+                            }
+                          >
+                            <span style={{ cursor: "help" }}>{tablePeriodLabel}</span>
+                          </HelpTooltip>
+                        </th>
+                        <th
+                          style={{
+                            ...thNumStyle,
+                            position: "sticky",
+                            top: 0,
+                            zIndex: 2,
+                            boxShadow: `0 1px 0 ${t.colors.border}`,
+                          }}
+                        >
+                          <HelpTooltip
+                            theme={t}
+                            text={
+                              outcomePositionSide === "buy"
+                                ? "Annualized debit as % of strike (period yield × 365 ÷ DTE). Use this to compare expiries on the same scale."
+                                : "Annualized yield as % of strike (period yield × 365 ÷ DTE). Use this to compare expiries on the same scale."
+                            }
+                          >
+                            <span style={{ cursor: "help" }}>{tableAnnLabel}</span>
+                          </HelpTooltip>
+                        </th>
                         {outcomeRankMode === "score" && (
-                          <th style={{ ...thStyle, textAlign: "right" }}>Score</th>
+                          <th
+                            style={{
+                              ...thNumStyle,
+                              position: "sticky",
+                              top: 0,
+                              zIndex: 2,
+                              boxShadow: `0 1px 0 ${t.colors.border}`,
+                            }}
+                          >
+                            <HelpTooltip
+                              theme={t}
+                              text="Smart score — composite within this expiry only: yield, delta (assignment risk), IV vs 20-day RV, spread/OI liquidity, and put/call skew. Higher = better risk/reward for your side (write or buy). Compare different DTEs with annualized yield, not score."
+                            >
+                              <span style={{ cursor: "help" }}>Score</span>
+                            </HelpTooltip>
+                          </th>
                         )}
-                        <th style={{ ...thStyle, textAlign: "right" }}>Copy</th>
+                        <th
+                          style={{
+                            ...thStyle,
+                            position: "sticky",
+                            top: 0,
+                            zIndex: 2,
+                            boxShadow: `0 1px 0 ${t.colors.border}`,
+                            minWidth: 168,
+                          }}
+                        >
+                          Contract
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
-                      {tickerSummaryPicks.map(({ expiration, dte, row }) => {
-                        const expLabel = new Date(expiration + "T00:00:00Z").toLocaleDateString(undefined, {
+                      {tickerSummaryPicks.map(({ expiration, dte, row }, i) => {
+                        const expDate = new Date(expiration + "T00:00:00Z");
+                        const expShort = expDate.toLocaleDateString(undefined, {
+                          month: "short",
+                          day: "numeric",
+                          year: "2-digit",
+                          timeZone: "UTC",
+                        });
+                        const expLong = expDate.toLocaleDateString(undefined, {
                           weekday: "short",
                           month: "short",
                           day: "numeric",
@@ -2312,34 +2480,58 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                         const periodPct = periodYieldFromRow(row, dte);
                         const copyKey = `ticker-summary-${expiration}-${row.strike}`;
                         const copied = lastCopiedOpportunityKey === copyKey;
+                        const isBestPeriod = i === tickerSummaryYieldLeaders.bestPeriodIdx;
+                        const isBestAnn = i === tickerSummaryYieldLeaders.bestAnnIdx;
+                        const rowBg = i % 2 === 1 ? `${t.colors.primary}06` : t.colors.background;
                         return (
-                          <tr key={expiration} style={{ borderBottom: `1px solid ${t.colors.border}` }}>
-                            <td style={{ ...tdStyle, fontWeight: 600 }}>{expLabel}</td>
-                            <td style={{ ...tdStyle, textAlign: "right" }}>{dte}</td>
-                            <td style={{ ...tdStyle, textAlign: "right", fontWeight: 700 }}>
-                              {formatStrikePrice(row.strike)}
+                          <tr
+                            key={expiration}
+                            style={{
+                              backgroundColor: rowBg,
+                              borderBottom: `1px solid ${t.colors.border}`,
+                            }}
+                          >
+                            <td style={{ ...tdStyle, fontWeight: 600 }} title={expLong}>
+                              <span style={{ display: "block" }}>{expShort}</span>
+                              <span style={{ fontSize: "0.68rem", color: t.colors.textMuted, fontWeight: 500 }}>
+                                {expDate.toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" })}
+                              </span>
                             </td>
-                            <td style={{ ...tdStyle, textAlign: "right" }}>{row.actualOtmPct?.toFixed(1) ?? "—"}%</td>
+                            <td style={tdNumStyle}>{dte}</td>
+                            <td style={{ ...tdNumStyle, fontWeight: 800 }}>{formatStrikePrice(row.strike)}</td>
+                            <td style={{ ...tdNumStyle, color: t.colors.textMuted, fontWeight: 500 }}>
+                              {row.actualOtmPct?.toFixed(1) ?? "—"}%
+                            </td>
                             <td
                               style={{
-                                ...tdStyle,
-                                textAlign: "right",
-                                fontWeight: 700,
+                                ...tdNumStyle,
                                 color: outcomePositionSide === "buy" ? t.colors.text : t.colors.success,
+                                ...(isBestPeriod
+                                  ? { boxShadow: `inset 3px 0 0 ${rankingColors.gold}` }
+                                  : {}),
                               }}
                             >
                               {periodPct.toFixed(2)}%
                             </td>
+                            <td
+                              style={{
+                                ...tdNumStyle,
+                                fontWeight: 700,
+                                ...(isBestAnn ? { boxShadow: `inset 3px 0 0 ${rankingColors.gold}` } : {}),
+                              }}
+                            >
+                              {row.annYieldPct.toFixed(1)}%
+                            </td>
                             {outcomeRankMode === "score" && (
-                              <td style={{ ...tdStyle, textAlign: "right", fontWeight: 600 }}>
+                              <td style={{ ...tdNumStyle, color: t.colors.textMuted }}>
                                 {row.score?.toFixed(1) ?? "—"}
                               </td>
                             )}
-                            <td style={{ ...tdStyle, textAlign: "right" }}>
+                            <td style={{ ...tdStyle, maxWidth: 220 }}>
                               <button
                                 type="button"
-                                aria-label={`Copy ${row.schwabSymbol}`}
-                                title={`Copy: ${row.schwabSymbol}`}
+                                title={copied ? "Copied" : "Click to copy"}
+                                aria-label={`Copy contract ${row.schwabSymbol}`}
                                 onClick={() => {
                                   void navigator.clipboard.writeText(row.schwabSymbol);
                                   setLastCopiedOpportunityKey(copyKey);
@@ -2349,17 +2541,21 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                                   );
                                 }}
                                 style={{
-                                  border: `1px solid ${copied ? t.colors.success : t.colors.border}`,
-                                  borderRadius: t.radius.sm,
-                                  background: copied ? `${t.colors.success}12` : "none",
+                                  background: "none",
+                                  border: "none",
+                                  padding: 0,
+                                  margin: 0,
                                   cursor: "pointer",
-                                  padding: `${t.spacing(1)} ${t.spacing(2)}`,
+                                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
                                   fontSize: "0.72rem",
                                   fontWeight: 600,
-                                  color: copied ? t.colors.success : t.colors.textMuted,
+                                  color: copied ? t.colors.success : t.colors.text,
+                                  textAlign: "left",
+                                  lineHeight: 1.35,
+                                  wordBreak: "break-word",
                                 }}
                               >
-                                {copied ? "Copied" : "Symbol"}
+                                {copied ? `${row.schwabSymbol} ✓` : row.schwabSymbol}
                               </button>
                             </td>
                           </tr>
