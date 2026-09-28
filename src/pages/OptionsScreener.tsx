@@ -746,7 +746,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
   const [scanDepth, setScanDepth] = useState<ScanDepth>("standard");
   const [liquidityMode, setLiquidityMode] = useState<LiquidityMode>("strict");
   const [otmLayout, setOtmLayout] = useState<OtmLayout>("bands");
-  const [otmPctMin, setOtmPctMin] = useState(5);
+  const [otmPctMin, setOtmPctMin] = useState(10);
   const [otmPctMax, setOtmPctMax] = useState(15);
   const [rankMode, setRankMode] = useState<RankMode>("score");
   const [resultsView, setResultsView] = useState<ResultsView>("bands");
@@ -1535,7 +1535,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
             <>
               Review one symbol across expirations: fixed OTM columns, one row per expiry, detail tables below.
               {" "}
-              <strong>Info</strong> explains the grid and gold border.
+              <strong>Info</strong> explains the grid and gold highlight.
             </>
           ) : (
             <>
@@ -2394,7 +2394,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                     <div
                       style={{
                         padding: t.spacing(4),
-                        background: `linear-gradient(180deg, ${t.colors.secondary}10 0%, ${t.colors.background} 72%)`,
+                        backgroundColor: t.colors.background,
                         borderBottom: `1px solid ${t.colors.border}`,
                       }}
                     >
@@ -2402,23 +2402,13 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                         style={{
                           display: "flex",
                           flexWrap: "wrap",
-                          alignItems: "flex-start",
+                          alignItems: "stretch",
                           justifyContent: "space-between",
-                          gap: t.spacing(3),
+                          gap: t.spacing(4),
                         }}
                       >
-                        <div style={{ flex: "1 1 240px", minWidth: 0 }}>
-                          <div
-                            style={{
-                              ...sectionTitleStyle,
-                              marginBottom: t.spacing(2),
-                              display: "flex",
-                              alignItems: "center",
-                              gap: t.spacing(2),
-                            }}
-                          >
-                            Review grid
-                          </div>
+                        <div style={{ flex: "1 1 280px", minWidth: 0, maxWidth: "100%" }}>
+                          <div style={{ ...sectionTitleStyle, marginBottom: t.spacing(2) }}>Review grid</div>
                           <div
                             style={{
                               fontSize: "1.65rem",
@@ -2439,7 +2429,6 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                               overflow: "hidden",
                               textOverflow: "ellipsis",
                               whiteSpace: "nowrap",
-                              maxWidth: 420,
                             }}
                             title={tickerReview.company}
                           >
@@ -2466,7 +2455,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                             ))}
                             <HelpTooltip
                               theme={t}
-                              text={`Gold border = best ${tableAnnLabel.toLowerCase()} per unit of assignment probability on that row — often not the highest-yield (nearest OTM) cell. Full guide: Options Screener info (top of page).`}
+                              text={`Gold highlight = best ${tableAnnLabel.toLowerCase()} per unit of assignment probability on that row — often not the highest-yield (nearest OTM) cell. Full guide: Options Screener info (top of page).`}
                             >
                               <span
                                 style={{
@@ -2482,101 +2471,111 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                                     width: 8,
                                     height: 8,
                                     borderRadius: 2,
-                                    border: `2px solid ${rankingColors.gold}`,
-                                    backgroundColor: "transparent",
+                                    backgroundColor: rankingColors.gold,
                                     marginRight: t.spacing(1),
                                     flexShrink: 0,
                                   }}
                                   aria-hidden
                                 />
-                                Gold border = risk-adjusted
+                                Gold = risk-adjusted
                               </span>
                             </HelpTooltip>
                           </div>
                         </div>
-                        <div style={{ flexShrink: 0 }}>
-                          <button
-                            type="button"
-                            title="Copy grid to clipboard (Excel format)"
-                            aria-label="Copy review grid to clipboard"
-                            onClick={() => {
-                              void navigator.clipboard.writeText(
-                                buildTickerGridTsv(tickerGrid.levels, tickerGrid.rows, outcomePositionSide),
-                              );
-                              setLastCopiedBucketKey(gridCopyKey);
-                              window.setTimeout(
-                                () => setLastCopiedBucketKey((p) => (p === gridCopyKey ? null : p)),
-                                1500,
-                              );
-                            }}
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: t.spacing(2),
-                              padding: `${t.spacing(2)} ${t.spacing(3)}`,
-                              border: `1px solid ${gridCopied ? t.colors.success : t.colors.border}`,
-                              borderRadius: t.radius.md,
-                              background: gridCopied ? `${t.colors.success}12` : t.colors.background,
-                              color: gridCopied ? t.colors.success : t.colors.text,
-                              fontSize: "0.78rem",
-                              fontWeight: 600,
-                              cursor: "pointer",
-                            }}
-                          >
-                            <span className="material-symbols-outlined" style={{ fontSize: 18 }} aria-hidden>
-                              {gridCopied ? "check" : "content_copy"}
-                            </span>
-                            {gridCopied ? "Copied" : "Copy grid"}
-                          </button>
-                        </div>
-                      </div>
-                      <div
-                        style={{
-                          marginTop: t.spacing(4),
-                          display: "grid",
-                          gridTemplateColumns: "repeat(auto-fit, minmax(108px, 1fr))",
-                          border: `1px solid ${t.colors.border}`,
-                          borderRadius: t.radius.md,
-                          overflow: "hidden",
-                          backgroundColor: t.colors.background,
-                        }}
-                      >
-                        {statTiles.map((stat, idx) => (
-                          <div
-                            key={stat.key}
-                            style={{
-                              padding: `${t.spacing(3)} ${t.spacing(4)}`,
-                              borderRight:
-                                idx < statTiles.length - 1 ? `1px solid ${t.colors.border}` : undefined,
-                              backgroundColor: stat.emphasize ? `${t.colors.primary}06` : t.colors.background,
-                            }}
-                          >
-                            <div style={{ ...labelStyle, marginBottom: t.spacing(1) }}>{stat.label}</div>
-                            <div
+                        <div
+                          style={{
+                            flex: "1 1 300px",
+                            maxWidth: 420,
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: t.spacing(3),
+                            alignItems: "stretch",
+                          }}
+                        >
+                          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                            <button
+                              type="button"
+                              title="Copy grid to clipboard (Excel format)"
+                              aria-label="Copy review grid to clipboard"
+                              onClick={() => {
+                                void navigator.clipboard.writeText(
+                                  buildTickerGridTsv(tickerGrid.levels, tickerGrid.rows, outcomePositionSide),
+                                );
+                                setLastCopiedBucketKey(gridCopyKey);
+                                window.setTimeout(
+                                  () => setLastCopiedBucketKey((p) => (p === gridCopyKey ? null : p)),
+                                  1500,
+                                );
+                              }}
                               style={{
-                                fontSize: stat.emphasize ? "1.35rem" : "1.05rem",
-                                fontWeight: stat.emphasize ? 800 : 700,
-                                fontVariantNumeric: "tabular-nums",
-                                color: t.colors.text,
-                                lineHeight: 1.2,
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: t.spacing(2),
+                                padding: `${t.spacing(2)} ${t.spacing(3)}`,
+                                border: `1px solid ${gridCopied ? t.colors.success : t.colors.border}`,
+                                borderRadius: t.radius.md,
+                                background: gridCopied ? `${t.colors.success}12` : t.colors.background,
+                                color: gridCopied ? t.colors.success : t.colors.text,
+                                fontSize: "0.78rem",
+                                fontWeight: 600,
+                                cursor: "pointer",
                               }}
                             >
-                              {stat.value}
-                            </div>
-                            {stat.sub && (
+                              <span className="material-symbols-outlined" style={{ fontSize: 18 }} aria-hidden>
+                                {gridCopied ? "check" : "content_copy"}
+                              </span>
+                              {gridCopied ? "Copied" : "Copy grid"}
+                            </button>
+                          </div>
+                          <div
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: "repeat(2, 1fr)",
+                              border: `1px solid ${t.colors.border}`,
+                              borderRadius: t.radius.md,
+                              overflow: "hidden",
+                              backgroundColor: t.colors.background,
+                              flex: 1,
+                            }}
+                          >
+                            {statTiles.map((stat, idx) => (
                               <div
+                                key={stat.key}
                                 style={{
-                                  marginTop: t.spacing(1),
-                                  fontSize: "0.75rem",
-                                  fontWeight: 600,
-                                  color: stat.subColor ?? t.colors.textMuted,
+                                  padding: `${t.spacing(2)} ${t.spacing(3)}`,
+                                  borderRight: idx % 2 === 0 ? `1px solid ${t.colors.border}` : undefined,
+                                  borderBottom: idx < statTiles.length - 2 ? `1px solid ${t.colors.border}` : undefined,
+                                  backgroundColor: stat.emphasize ? `${t.colors.primary}06` : t.colors.background,
                                 }}
                               >
-                                {stat.sub}
+                                <div style={{ ...labelStyle, marginBottom: t.spacing(1) }}>{stat.label}</div>
+                                <div
+                                  style={{
+                                    fontSize: stat.emphasize ? "1.25rem" : "1.05rem",
+                                    fontWeight: stat.emphasize ? 800 : 700,
+                                    fontVariantNumeric: "tabular-nums",
+                                    color: t.colors.text,
+                                    lineHeight: 1.2,
+                                  }}
+                                >
+                                  {stat.value}
+                                </div>
+                                {stat.sub && (
+                                  <div
+                                    style={{
+                                      marginTop: t.spacing(1),
+                                      fontSize: "0.72rem",
+                                      fontWeight: 600,
+                                      color: stat.subColor ?? t.colors.textMuted,
+                                    }}
+                                  >
+                                    {stat.sub}
+                                  </div>
+                                )}
                               </div>
-                            )}
+                            ))}
                           </div>
-                        ))}
+                        </div>
                       </div>
                     </div>
                   );
@@ -2620,7 +2619,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                         const expShort = expDate.toLocaleDateString(undefined, {
                           month: "short",
                           day: "numeric",
-                          year: "2-digit",
+                          year: "numeric",
                           timeZone: "UTC",
                         });
                         const expLong = expDate.toLocaleDateString(undefined, {
@@ -2677,7 +2676,10 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                                     ...tdNumStyle,
                                     padding: `${t.spacing(2)} ${t.spacing(2)}`,
                                     ...(isBest
-                                      ? { boxShadow: `inset 0 0 0 2px ${rankingColors.gold}` }
+                                      ? {
+                                          backgroundColor: `${rankingColors.gold}1A`,
+                                          boxShadow: `inset 0 0 0 2px ${rankingColors.gold}`,
+                                        }
                                       : {}),
                                   }}
                                 >
@@ -2725,29 +2727,58 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                                         display: "flex",
                                         alignItems: "baseline",
                                         justifyContent: "flex-end",
-                                        gap: t.spacing(2),
+                                        gap: t.spacing(3),
+                                        flexWrap: "wrap",
                                       }}
                                     >
-                                      <span
-                                        style={{
-                                          fontSize: "0.95rem",
-                                          fontWeight: 800,
-                                          color: copied ? t.colors.success : t.colors.text,
-                                        }}
-                                      >
-                                        {formatStrikePrice(pick.strike)}
-                                        {indicative && (
-                                          <span
-                                            style={{ color: t.colors.textMuted, fontWeight: 600 }}
-                                            aria-hidden
-                                          >
-                                            *
-                                          </span>
-                                        )}
-                                        {copied ? " ✓" : ""}
+                                      <span style={{ display: "inline-flex", alignItems: "baseline" }}>
+                                        <span
+                                          style={{
+                                            fontSize: "0.62rem",
+                                            fontWeight: 700,
+                                            color: t.colors.textMuted,
+                                            textTransform: "uppercase",
+                                            letterSpacing: "0.04em",
+                                            marginRight: t.spacing(1),
+                                          }}
+                                        >
+                                          Strike
+                                        </span>
+                                        <span
+                                          style={{
+                                            fontSize: "0.95rem",
+                                            fontWeight: 800,
+                                            color: copied ? t.colors.success : t.colors.text,
+                                          }}
+                                        >
+                                          {formatStrikePrice(pick.strike)}
+                                          {indicative && (
+                                            <span
+                                              style={{ color: t.colors.textMuted, fontWeight: 600 }}
+                                              aria-hidden
+                                            >
+                                              *
+                                            </span>
+                                          )}
+                                          {copied ? " ✓" : ""}
+                                        </span>
                                       </span>
-                                      <span style={{ fontWeight: 700, color: yieldColor }}>
-                                        {periodPct.toFixed(2)}%
+                                      <span style={{ display: "inline-flex", alignItems: "baseline" }}>
+                                        <span
+                                          style={{
+                                            fontSize: "0.62rem",
+                                            fontWeight: 700,
+                                            color: t.colors.textMuted,
+                                            textTransform: "uppercase",
+                                            letterSpacing: "0.04em",
+                                            marginRight: t.spacing(1),
+                                          }}
+                                        >
+                                          {outcomePositionSide === "buy" ? "Debit" : "Yield"}
+                                        </span>
+                                        <span style={{ fontWeight: 700, color: yieldColor }}>
+                                          {periodPct.toFixed(2)}%
+                                        </span>
                                       </span>
                                     </span>
                                     <span
