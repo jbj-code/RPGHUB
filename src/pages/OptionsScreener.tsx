@@ -2355,41 +2355,24 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                     tickerReview.oneMonthPerfPct != null && tickerReview.oneMonthPerfPct >= 0
                       ? t.colors.success
                       : t.colors.danger;
-                  const statTiles: Array<{
-                    key: string;
-                    label: string;
-                    value: string;
-                    sub?: string;
-                    subColor?: string;
-                    emphasize?: boolean;
-                  }> = [
-                    {
-                      key: "spot",
-                      label: "Spot",
-                      value: formatStrikePrice(tickerReview.currentPrice),
-                      sub: `1M ${formatPct(tickerReview.oneMonthPerfPct)}`,
-                      subColor: perfColor,
-                      emphasize: true,
-                    },
-                    {
-                      key: "rv",
-                      label: "RV 20d",
-                      value: formatVolPct(tickerReview.realizedVol20dPct),
-                    },
-                    {
-                      key: "skew",
-                      label: "Skew",
-                      value:
-                        tickerReview.skewPct == null
-                          ? "—"
-                          : `${tickerReview.skewPct > 0 ? "+" : ""}${tickerReview.skewPct.toFixed(1)}`,
-                    },
-                    {
-                      key: "expiries",
-                      label: "Expiries",
-                      value: String(tickerGrid.rows.length),
-                    },
-                  ];
+                  const inlineStatSize = "1.05rem";
+                  const inlineStatStyle: React.CSSProperties = {
+                    fontSize: inlineStatSize,
+                    fontWeight: 700,
+                    fontVariantNumeric: "tabular-nums",
+                    color: t.colors.text,
+                    lineHeight: 1.3,
+                  };
+                  const inlineSepStyle: React.CSSProperties = {
+                    fontSize: inlineStatSize,
+                    fontWeight: 400,
+                    color: t.colors.border,
+                    userSelect: "none",
+                  };
+                  const skewDisplay =
+                    tickerReview.skewPct == null
+                      ? "—"
+                      : `${tickerReview.skewPct > 0 ? "+" : ""}${tickerReview.skewPct.toFixed(1)}`;
                   return (
                     <div
                       style={{
@@ -2402,189 +2385,172 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                         style={{
                           display: "flex",
                           flexWrap: "wrap",
-                          alignItems: "stretch",
+                          alignItems: "center",
                           justifyContent: "space-between",
-                          gap: t.spacing(4),
+                          gap: t.spacing(2),
+                          marginBottom: t.spacing(2),
                         }}
                       >
-                        <div style={{ flex: "1 1 280px", minWidth: 0, maxWidth: "100%" }}>
-                          <div style={{ ...sectionTitleStyle, marginBottom: t.spacing(2) }}>Review grid</div>
-                          <div
-                            style={{
-                              fontSize: "1.65rem",
-                              fontWeight: 800,
-                              lineHeight: 1.1,
-                              letterSpacing: "-0.02em",
-                              color: t.colors.text,
-                            }}
-                          >
-                            {tickerReview.ticker}
-                          </div>
-                          <div
-                            style={{
-                              marginTop: t.spacing(1),
-                              fontSize: "0.82rem",
-                              color: t.colors.textMuted,
-                              fontWeight: 500,
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                            }}
-                            title={tickerReview.company}
-                          >
-                            {tickerReview.company}
-                          </div>
-                          <div
-                            style={{
-                              display: "flex",
-                              flexWrap: "wrap",
-                              gap: t.spacing(2),
-                              marginTop: t.spacing(3),
-                            }}
-                          >
-                            {[
-                              tickerReview.optionType === "P" ? "Puts" : "Calls",
-                              outcomePositionSide === "buy" ? "Buy to open" : "Sell to open",
-                              `OTM ${tickerReview.otmRange.min}–${tickerReview.otmRange.max}%`,
-                              `Through ${throughExpLabel}`,
-                              outcomeRankMode === "yield" ? "Rank: yield" : "Rank: smart score",
-                            ].map((chip) => (
-                              <span key={chip} style={metaChipStyle}>
-                                {chip}
-                              </span>
-                            ))}
-                            <HelpTooltip
-                              theme={t}
-                              text={`Gold highlight = best ${tableAnnLabel.toLowerCase()} per unit of assignment probability on that row — often not the highest-yield (nearest OTM) cell. Full guide: Options Screener info (top of page).`}
-                            >
-                              <span
-                                style={{
-                                  ...metaChipStyle,
-                                  borderColor: rankingColors.gold,
-                                  backgroundColor: `${rankingColors.gold}14`,
-                                  color: t.colors.text,
-                                  cursor: "help",
-                                }}
-                              >
-                                <span
-                                  style={{
-                                    width: 8,
-                                    height: 8,
-                                    borderRadius: 2,
-                                    backgroundColor: rankingColors.gold,
-                                    marginRight: t.spacing(1),
-                                    flexShrink: 0,
-                                  }}
-                                  aria-hidden
-                                />
-                                Gold = risk-adjusted
-                              </span>
-                            </HelpTooltip>
-                          </div>
-                        </div>
-                        <div
+                        <div style={{ ...sectionTitleStyle, marginBottom: 0 }}>Review grid</div>
+                        <button
+                          type="button"
+                          title="Copy grid to clipboard (Excel format)"
+                          aria-label="Copy review grid to clipboard"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(
+                              buildTickerGridTsv(tickerGrid.levels, tickerGrid.rows, outcomePositionSide),
+                            );
+                            setLastCopiedBucketKey(gridCopyKey);
+                            window.setTimeout(
+                              () => setLastCopiedBucketKey((p) => (p === gridCopyKey ? null : p)),
+                              1500,
+                            );
+                          }}
                           style={{
-                            flex: "1 1 300px",
-                            maxWidth: 420,
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: t.spacing(3),
-                            alignItems: "stretch",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: t.spacing(2),
+                            padding: `${t.spacing(1)} ${t.spacing(2)}`,
+                            border: `1px solid ${gridCopied ? t.colors.success : t.colors.border}`,
+                            borderRadius: t.radius.sm,
+                            background: gridCopied ? `${t.colors.success}12` : t.colors.background,
+                            color: gridCopied ? t.colors.success : t.colors.textMuted,
+                            fontSize: "0.78rem",
+                            fontWeight: 600,
+                            cursor: "pointer",
                           }}
                         >
-                          <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                            <button
-                              type="button"
-                              title="Copy grid to clipboard (Excel format)"
-                              aria-label="Copy review grid to clipboard"
-                              onClick={() => {
-                                void navigator.clipboard.writeText(
-                                  buildTickerGridTsv(tickerGrid.levels, tickerGrid.rows, outcomePositionSide),
-                                );
-                                setLastCopiedBucketKey(gridCopyKey);
-                                window.setTimeout(
-                                  () => setLastCopiedBucketKey((p) => (p === gridCopyKey ? null : p)),
-                                  1500,
-                                );
-                              }}
-                              style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: t.spacing(2),
-                                padding: `${t.spacing(2)} ${t.spacing(3)}`,
-                                border: `1px solid ${gridCopied ? t.colors.success : t.colors.border}`,
-                                borderRadius: t.radius.md,
-                                background: gridCopied ? `${t.colors.success}12` : t.colors.background,
-                                color: gridCopied ? t.colors.success : t.colors.text,
-                                fontSize: "0.78rem",
-                                fontWeight: 600,
-                                cursor: "pointer",
-                              }}
-                            >
-                              <span className="material-symbols-outlined" style={{ fontSize: 18 }} aria-hidden>
-                                {gridCopied ? "check" : "content_copy"}
-                              </span>
-                              {gridCopied ? "Copied" : "Copy grid"}
-                            </button>
-                          </div>
-                          <div
+                          <span className="material-symbols-outlined" style={{ fontSize: 16 }} aria-hidden>
+                            {gridCopied ? "check" : "content_copy"}
+                          </span>
+                          {gridCopied ? "Copied" : "Copy grid"}
+                        </button>
+                      </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          alignItems: "baseline",
+                          gap: t.spacing(2),
+                          rowGap: t.spacing(1),
+                        }}
+                      >
+                        <span style={{ ...inlineStatStyle, fontWeight: 800 }}>{tickerReview.ticker}</span>
+                        <span style={inlineSepStyle} aria-hidden>
+                          ·
+                        </span>
+                        <span style={inlineStatStyle}>
+                          <span style={{ color: t.colors.textMuted, fontWeight: 600 }}>Spot </span>
+                          {formatStrikePrice(tickerReview.currentPrice)}
+                          <span style={{ color: perfColor, fontWeight: 600 }}>
+                            {" "}
+                            (1M {formatPct(tickerReview.oneMonthPerfPct)})
+                          </span>
+                        </span>
+                        <span style={inlineSepStyle} aria-hidden>
+                          ·
+                        </span>
+                        <span style={inlineStatStyle}>
+                          <span style={{ color: t.colors.textMuted, fontWeight: 600 }}>RV 20d </span>
+                          {formatVolPct(tickerReview.realizedVol20dPct)}
+                        </span>
+                        <span style={inlineSepStyle} aria-hidden>
+                          ·
+                        </span>
+                        <span style={inlineStatStyle}>
+                          <span style={{ color: t.colors.textMuted, fontWeight: 600 }}>Skew </span>
+                          {skewDisplay}
+                        </span>
+                        <span style={inlineSepStyle} aria-hidden>
+                          ·
+                        </span>
+                        <span style={inlineStatStyle}>
+                          <span style={{ color: t.colors.textMuted, fontWeight: 600 }}>Expiries </span>
+                          {tickerGrid.rows.length}
+                        </span>
+                      </div>
+                      <div
+                        style={{
+                          marginTop: t.spacing(1),
+                          fontSize: "0.82rem",
+                          color: t.colors.textMuted,
+                          fontWeight: 500,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                        title={tickerReview.company}
+                      >
+                        {tickerReview.company}
+                      </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          gap: t.spacing(2),
+                          marginTop: t.spacing(3),
+                        }}
+                      >
+                        {[
+                          tickerReview.optionType === "P" ? "Puts" : "Calls",
+                          outcomePositionSide === "buy" ? "Buy to open" : "Sell to open",
+                          `OTM ${tickerReview.otmRange.min}–${tickerReview.otmRange.max}%`,
+                          `Through ${throughExpLabel}`,
+                          outcomeRankMode === "yield" ? "Rank: yield" : "Rank: smart score",
+                        ].map((chip) => (
+                          <span key={chip} style={metaChipStyle}>
+                            {chip}
+                          </span>
+                        ))}
+                        <HelpTooltip
+                          theme={t}
+                          text={`Gold highlight = best ${tableAnnLabel.toLowerCase()} per unit of assignment probability on that row — often not the highest-yield (nearest OTM) cell. Full guide: Options Screener info (top of page).`}
+                        >
+                          <span
                             style={{
-                              display: "grid",
-                              gridTemplateColumns: "repeat(2, 1fr)",
-                              border: `1px solid ${t.colors.border}`,
-                              borderRadius: t.radius.md,
-                              overflow: "hidden",
-                              backgroundColor: t.colors.background,
-                              flex: 1,
+                              ...metaChipStyle,
+                              borderColor: rankingColors.gold,
+                              backgroundColor: `${rankingColors.gold}14`,
+                              color: t.colors.text,
+                              cursor: "help",
                             }}
                           >
-                            {statTiles.map((stat, idx) => (
-                              <div
-                                key={stat.key}
-                                style={{
-                                  padding: `${t.spacing(2)} ${t.spacing(3)}`,
-                                  borderRight: idx % 2 === 0 ? `1px solid ${t.colors.border}` : undefined,
-                                  borderBottom: idx < statTiles.length - 2 ? `1px solid ${t.colors.border}` : undefined,
-                                  backgroundColor: stat.emphasize ? `${t.colors.primary}06` : t.colors.background,
-                                }}
-                              >
-                                <div style={{ ...labelStyle, marginBottom: t.spacing(1) }}>{stat.label}</div>
-                                <div
-                                  style={{
-                                    fontSize: stat.emphasize ? "1.25rem" : "1.05rem",
-                                    fontWeight: stat.emphasize ? 800 : 700,
-                                    fontVariantNumeric: "tabular-nums",
-                                    color: t.colors.text,
-                                    lineHeight: 1.2,
-                                  }}
-                                >
-                                  {stat.value}
-                                </div>
-                                {stat.sub && (
-                                  <div
-                                    style={{
-                                      marginTop: t.spacing(1),
-                                      fontSize: "0.72rem",
-                                      fontWeight: 600,
-                                      color: stat.subColor ?? t.colors.textMuted,
-                                    }}
-                                  >
-                                    {stat.sub}
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
+                            <span
+                              style={{
+                                width: 8,
+                                height: 8,
+                                borderRadius: 2,
+                                backgroundColor: rankingColors.gold,
+                                marginRight: t.spacing(1),
+                                flexShrink: 0,
+                              }}
+                              aria-hidden
+                            />
+                            Gold = risk-adjusted
+                          </span>
+                        </HelpTooltip>
                       </div>
                     </div>
                   );
                 })()}
                 <div style={{ borderTop: `1px solid ${t.colors.border}`, overflowX: "auto" }}>
                   <table
-                    style={{ ...tableStyle, fontSize: "0.82rem" }}
+                    style={{
+                      ...tableStyle,
+                      fontSize: "0.82rem",
+                      tableLayout: "fixed",
+                      width: "100%",
+                      minWidth: `calc(14.75rem + ${tickerGrid.levels.length} * 9.25rem)`,
+                    }}
                     aria-label={`${tickerReview.ticker} ${tickerReview.optionType === "P" ? "put" : "call"} review grid by expiration and OTM distance`}
                   >
+                    <colgroup>
+                      <col style={{ width: "11.5rem" }} />
+                      <col style={{ width: "3.25rem" }} />
+                      {tickerGrid.levels.map((lvl) => (
+                        <col key={lvl} />
+                      ))}
+                    </colgroup>
                     <thead>
                       <tr>
                         <th scope="col" style={thStyle}>
@@ -2596,7 +2562,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                           </HelpTooltip>
                         </th>
                         {tickerGrid.levels.map((lvl) => (
-                          <th key={lvl} scope="col" style={{ ...thNumStyle, minWidth: 128 }}>
+                          <th key={lvl} scope="col" style={{ ...thNumStyle, overflow: "hidden" }}>
                             <HelpTooltip
                               theme={t}
                               text={
