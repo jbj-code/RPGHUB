@@ -882,6 +882,17 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                 {r.actualOtmPct.toFixed(1)}% OTM
               </span>
             )}
+            {variant === "singleTicker" && r.liquidityFlags && r.liquidityFlags.length > 0 && (
+              <span style={{ display: "block", fontSize: "0.65rem", color: t.colors.textMuted, fontWeight: 500, marginTop: 2 }}>
+                {[
+                  r.liquidityFlags.includes("mark_pricing") ? "Mark/mid price" : "",
+                  r.liquidityFlags.includes("wide_spread") ? "Wide spread" : "",
+                  r.liquidityFlags.includes("low_oi") ? "Low OI" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+            )}
           </td>
           <td style={{
             ...tdNumStyle,
@@ -1123,6 +1134,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
     setWarnings([]);
     setResultsByOtmPct({});
     setTickerReview(null);
+    setOutcomeScanMode("ticker");
     setTableSort({ phase: "none" });
     setScanning(true);
     setScanProgress(0);
@@ -2165,6 +2177,21 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
 
       {/* --- Results tables --- */}
       <div style={fixedRails.contentWrap}>
+        {scanning && scanMode === "ticker" && (
+          <div className="page-card" style={{ ...cardStyle, marginBottom: t.spacing(4) }}>
+            <div style={{ display: "flex", alignItems: "center", gap: t.spacing(3) }}>
+              <span className="options-pricing-fetch-spinner" aria-hidden />
+              <div>
+                <p style={{ margin: 0, fontWeight: 700 }}>Loading {singleTicker.trim().toUpperCase() || "ticker"} option chain</p>
+                <p style={{ margin: `${t.spacing(1)} 0 0`, fontSize: "0.85rem", color: t.colors.textMuted }}>
+                  Fetching every expiration through your cutoff date, then ranking top strikes per expiry (
+                  {rankMode === "yield" ? "yield only" : "smart score"}).
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {!showAnyResults && !scanning && !scanError && (
           <div
             className="page-card"
@@ -2241,231 +2268,108 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                     </div>
                   </div>
                   <div>
-                    <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, fontWeight: 600 }}>Expiries</div>
+                    <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, fontWeight: 600 }}>Expiries w/ picks</div>
                     <div style={{ fontSize: "1.1rem", fontWeight: 700 }}>{tickerReview.expirations.length}</div>
                   </div>
                 </div>
               </div>
             </div>
 
-            {tickerSummaryPicks.length > 0 && (() => {
-              let highlightIdx = -1;
-              if (outcomeRankMode === "yield") {
-                let bestPeriod = -Infinity;
-                tickerSummaryPicks.forEach(({ row }, i) => {
-                  const py = periodYieldFromRow(row, row.dte);
-                  if (py > bestPeriod) {
-                    bestPeriod = py;
-                    highlightIdx = i;
-                  }
-                });
-              } else {
-                let bestRatio = outcomePositionSide === "write" ? -Infinity : Infinity;
-                tickerSummaryPicks.forEach(({ row }, i) => {
-                  const iv = row.impliedVolPct ?? null;
-                  const rv = row.realizedVol20dPct ?? null;
-                  if (iv == null || rv == null || rv <= 0) return;
-                  const ratio = iv / rv;
-                  if (outcomePositionSide === "write" ? ratio > bestRatio : ratio < bestRatio) {
-                    bestRatio = ratio;
-                    highlightIdx = i;
-                  }
-                });
-              }
-              const summarySubtitle =
-                outcomeRankMode === "yield"
-                  ? "Highest period-yield strike at each expiration (#1 in each table below)"
-                  : "Best smart-score strike at each expiration (#1 in each table below)";
-
-              return (
-                <div style={{ ...cardStyle, marginBottom: t.spacing(4) }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "baseline",
-                      gap: t.spacing(2),
-                      marginBottom: t.spacing(3),
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    <h3 style={{ ...sectionTitleStyle, marginBottom: 0, flexShrink: 0 }}>Top picks</h3>
-                    <span style={{ fontSize: "0.78rem", color: t.colors.textMuted }}>{summarySubtitle}</span>
-                  </div>
-                  <div style={{ display: "flex", gap: t.spacing(3), flexWrap: "wrap" }}>
-                    {tickerSummaryPicks.map(({ expiration, dte, row }, i) => {
-                      const expShort = new Date(expiration + "T00:00:00Z").toLocaleDateString(undefined, {
-                        month: "short",
-                        day: "numeric",
-                        timeZone: "UTC",
-                      });
-                      const iv = row.impliedVolPct ?? null;
-                      const rv = row.realizedVol20dPct ?? null;
-                      const ratio = iv != null && rv != null && rv > 0 ? iv / rv : null;
-                      const isHighlight = i === highlightIdx;
-                      const periodPct = periodYieldFromRow(row, dte);
-                      const copyKey = `ticker-summary-${expiration}-${row.strike}`;
-                      const copied = lastCopiedOpportunityKey === copyKey;
-                      return (
-                        <div
-                          key={expiration}
-                          style={{
-                            flex: "1 1 170px",
-                            minWidth: 160,
-                            borderRadius: t.radius.md,
-                            border: `1.5px solid ${isHighlight ? rankingColors.gold : t.colors.border}`,
-                            backgroundColor: isHighlight ? "rgba(212,175,55,0.06)" : t.colors.background,
-                            padding: t.spacing(3),
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: t.spacing(1),
-                          }}
-                        >
-                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                            <span
-                              style={{
-                                fontSize: "0.68rem",
-                                fontWeight: 700,
-                                color: t.colors.secondary,
-                                textTransform: "uppercase",
-                                letterSpacing: "0.05em",
-                              }}
-                            >
-                              {expShort} · {dte} DTE
-                            </span>
-                            {isHighlight && outcomeRankMode === "score" && (
-                              <span
-                                style={{
-                                  fontSize: "0.62rem",
-                                  fontWeight: 700,
-                                  color: rankingColors.gold,
-                                  textTransform: "uppercase",
-                                  letterSpacing: "0.04em",
-                                }}
-                              >
-                                ★ Best IV/RV
-                              </span>
-                            )}
-                            {isHighlight && outcomeRankMode === "yield" && (
-                              <span
-                                style={{
-                                  fontSize: "0.62rem",
-                                  fontWeight: 700,
-                                  color: rankingColors.gold,
-                                  textTransform: "uppercase",
-                                  letterSpacing: "0.04em",
-                                }}
-                              >
-                                ★ Top yield
-                              </span>
-                            )}
-                          </div>
-                          <div style={{ fontWeight: 800, fontSize: "1.1rem", color: t.colors.text, lineHeight: 1 }}>
-                            {formatStrikePrice(row.strike)} strike
-                          </div>
-                          <div style={{ marginTop: t.spacing(1), display: "flex", flexDirection: "column", gap: 3 }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
-                              <span style={{ color: t.colors.textMuted }}>{tablePeriodLabel}</span>
-                              <span
-                                style={{
-                                  fontWeight: 700,
-                                  color: outcomePositionSide === "buy" ? t.colors.text : t.colors.success,
-                                }}
-                              >
-                                {periodPct.toFixed(2)}%
-                              </span>
-                            </div>
-                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
-                              <span style={{ color: t.colors.textMuted }}>{tableAnnLabel}</span>
-                              <span style={{ fontWeight: 700, color: t.colors.text }}>{row.annYieldPct.toFixed(1)}%</span>
-                            </div>
-                            {outcomeRankMode === "score" && row.score != null && (
-                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
-                                <span style={{ color: t.colors.textMuted }}>Score</span>
-                                <span style={{ fontWeight: 600, color: t.colors.text }}>{row.score.toFixed(1)}</span>
-                              </div>
-                            )}
-                            {ratio != null && (
-                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
-                                <span style={{ color: t.colors.textMuted }}>IV/RV</span>
-                                <span
-                                  style={{
-                                    fontWeight: 700,
-                                    color: (() => {
-                                      if (outcomePositionSide === "buy") {
-                                        return ratio < 1.0
-                                          ? t.colors.success
-                                          : ratio >= 1.15
-                                            ? t.colors.danger
-                                            : t.colors.textMuted;
-                                      }
-                                      return ratio >= 1.0
-                                        ? t.colors.success
-                                        : ratio < 0.85
-                                          ? t.colors.danger
-                                          : t.colors.textMuted;
-                                    })(),
-                                  }}
-                                >
-                                  {ratio.toFixed(2)}×
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              void navigator.clipboard.writeText(row.schwabSymbol);
-                              setLastCopiedOpportunityKey(copyKey);
-                              window.setTimeout(
-                                () => setLastCopiedOpportunityKey((p) => (p === copyKey ? null : p)),
-                                1200,
-                              );
-                            }}
-                            title={`Copy: ${row.schwabSymbol}`}
-                            style={{
-                              marginTop: t.spacing(1),
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "space-between",
-                              gap: 4,
-                              width: "100%",
-                              padding: `${t.spacing(1)} ${t.spacing(2)}`,
-                              border: `1px solid ${copied ? t.colors.success : t.colors.border}`,
-                              borderRadius: t.radius.sm,
-                              background: copied ? `${t.colors.success}12` : "none",
-                              cursor: "pointer",
-                              fontFamily: "ui-monospace, monospace",
-                            }}
-                          >
-                            <span
-                              style={{
-                                fontSize: "0.68rem",
-                                color: copied ? t.colors.success : t.colors.text,
-                                fontWeight: 600,
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
-                                flex: 1,
-                                textAlign: "left",
-                              }}
-                            >
-                              {row.schwabSymbol}
-                            </span>
-                            <span
-                              className="material-symbols-outlined"
-                              style={{ fontSize: 13, flexShrink: 0, color: copied ? t.colors.success : t.colors.textMuted }}
-                              aria-hidden
-                            >
-                              {copied ? "check" : "content_copy"}
-                            </span>
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
+            {tickerSummaryPicks.length > 0 && (
+              <div style={{ ...cardStyle, marginBottom: t.spacing(4) }}>
+                <div style={{ marginBottom: t.spacing(3) }}>
+                  <h3 style={{ ...sectionTitleStyle, marginBottom: t.spacing(1) }}>#1 per expiration</h3>
+                  <p style={{ margin: 0, fontSize: "0.78rem", color: t.colors.textMuted, lineHeight: 1.5 }}>
+                    One row per expiry — the top-ranked strike for that date (
+                    {outcomeRankMode === "yield" ? "highest period yield" : "highest smart score"}). Expand any
+                    expiration below for ranks #2–#{tickerReview.topPerExpiry ?? topPerExpiry}.
+                  </p>
                 </div>
-              );
-            })()}
+                <div style={tableWrapStyle}>
+                  <table style={tableStyle}>
+                    <thead>
+                      <tr style={{ borderBottom: `2px solid ${t.colors.border}` }}>
+                        <th style={{ ...thStyle, textAlign: "left" }}>Expiration</th>
+                        <th style={{ ...thStyle, textAlign: "right" }}>DTE</th>
+                        <th style={{ ...thStyle, textAlign: "right" }}>Strike</th>
+                        <th style={{ ...thStyle, textAlign: "right" }}>OTM</th>
+                        <th style={{ ...thStyle, textAlign: "right" }}>{tablePeriodLabel}</th>
+                        {outcomeRankMode === "score" && (
+                          <th style={{ ...thStyle, textAlign: "right" }}>Score</th>
+                        )}
+                        <th style={{ ...thStyle, textAlign: "right" }}>Copy</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tickerSummaryPicks.map(({ expiration, dte, row }) => {
+                        const expLabel = new Date(expiration + "T00:00:00Z").toLocaleDateString(undefined, {
+                          weekday: "short",
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                          timeZone: "UTC",
+                        });
+                        const periodPct = periodYieldFromRow(row, dte);
+                        const copyKey = `ticker-summary-${expiration}-${row.strike}`;
+                        const copied = lastCopiedOpportunityKey === copyKey;
+                        return (
+                          <tr key={expiration} style={{ borderBottom: `1px solid ${t.colors.border}` }}>
+                            <td style={{ ...tdStyle, fontWeight: 600 }}>{expLabel}</td>
+                            <td style={{ ...tdStyle, textAlign: "right" }}>{dte}</td>
+                            <td style={{ ...tdStyle, textAlign: "right", fontWeight: 700 }}>
+                              {formatStrikePrice(row.strike)}
+                            </td>
+                            <td style={{ ...tdStyle, textAlign: "right" }}>{row.actualOtmPct?.toFixed(1) ?? "—"}%</td>
+                            <td
+                              style={{
+                                ...tdStyle,
+                                textAlign: "right",
+                                fontWeight: 700,
+                                color: outcomePositionSide === "buy" ? t.colors.text : t.colors.success,
+                              }}
+                            >
+                              {periodPct.toFixed(2)}%
+                            </td>
+                            {outcomeRankMode === "score" && (
+                              <td style={{ ...tdStyle, textAlign: "right", fontWeight: 600 }}>
+                                {row.score?.toFixed(1) ?? "—"}
+                              </td>
+                            )}
+                            <td style={{ ...tdStyle, textAlign: "right" }}>
+                              <button
+                                type="button"
+                                aria-label={`Copy ${row.schwabSymbol}`}
+                                title={`Copy: ${row.schwabSymbol}`}
+                                onClick={() => {
+                                  void navigator.clipboard.writeText(row.schwabSymbol);
+                                  setLastCopiedOpportunityKey(copyKey);
+                                  window.setTimeout(
+                                    () => setLastCopiedOpportunityKey((p) => (p === copyKey ? null : p)),
+                                    1200,
+                                  );
+                                }}
+                                style={{
+                                  border: `1px solid ${copied ? t.colors.success : t.colors.border}`,
+                                  borderRadius: t.radius.sm,
+                                  background: copied ? `${t.colors.success}12` : "none",
+                                  cursor: "pointer",
+                                  padding: `${t.spacing(1)} ${t.spacing(2)}`,
+                                  fontSize: "0.72rem",
+                                  fontWeight: 600,
+                                  color: copied ? t.colors.success : t.colors.textMuted,
+                                }}
+                              >
+                                {copied ? "Copied" : "Symbol"}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {tickerReview.expirations.map((block) => {
               const expLabel = new Date(block.expiration + "T00:00:00Z").toLocaleDateString(undefined, {
@@ -2747,7 +2651,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
           );
         })()}
 
-        {outcomeScanMode === "universe" && resultsView === "bands" && bandLevelsForDisplay.map((otmPct) => {
+        {outcomeScanMode === "universe" && !(scanning && scanMode === "ticker") && resultsView === "bands" && bandLevelsForDisplay.map((otmPct) => {
           const arr = sortBucketRows(resultsByOtmPct[otmPct] ?? []);
           const bandLabel = formatOtmBandLabel(otmPct, rangeForBandLabels);
           if (!hasResults && !scanning) return null;

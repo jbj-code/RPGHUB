@@ -74,6 +74,149 @@ function parseExpKeyToIso(expKey: string): string | null {
   return null;
 }
 
+function addUtcDays(d: Date, days: number): Date {
+  const x = new Date(d.getTime());
+  x.setUTCDate(x.getUTCDate() + days);
+  return x;
+}
+
+function mergeStrikeMaps(
+  into: Record<string, Record<string, unknown>>,
+  from: Record<string, Record<string, unknown>> | null | undefined,
+): void {
+  if (!from || typeof from !== "object") return;
+  for (const [expKey, strikeObj] of Object.entries(from)) {
+    if (!strikeObj || typeof strikeObj !== "object") continue;
+    if (!into[expKey]) {
+      into[expKey] = { ...(strikeObj as Record<string, unknown>) };
+      continue;
+    }
+    for (const [sk, contracts] of Object.entries(strikeObj)) {
+      if (!into[expKey][sk]) into[expKey][sk] = contracts;
+    }
+  }
+}
+
+type QuoteLite = {
+  bid?: number;
+  ask?: number;
+  mark?: number;
+  last?: number;
+  delta?: number;
+  theta?: number;
+  gamma?: number;
+  openInterest?: number;
+  totalVolume?: number;
+  impliedVolPct?: number | null;
+};
+
+function quoteLiteFromChainContract(src: unknown): QuoteLite {
+  if (!src || typeof src !== "object") return {};
+  const c = src as Record<string, unknown>;
+  const num = (x: unknown): number | undefined =>
+    typeof x === "number" && Number.isFinite(x) ? x : undefined;
+  return {
+    bid: num(c.bidPrice) ?? num(c.bid),
+    ask: num(c.askPrice) ?? num(c.ask),
+    mark: num(c.markPrice) ?? num(c.mark),
+    last: num(c.lastPrice) ?? num(c.last),
+    delta: num(c.delta),
+    theta: num(c.theta),
+    gamma: num(c.gamma),
+    openInterest: num(c.openInterest) ?? num(c.open_interest),
+    totalVolume: num(c.totalVolume) ?? num(c.total_volume) ?? num(c.volume),
+    impliedVolPct: impliedVolPercentFromQuote(c),
+  };
+}
+
+function parseStrikeFromKey(strikeStr: string): number | null {
+  const head = strikeStr.split(":")[0]?.trim() ?? "";
+  const n = Number(head);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function contractsAtStrike(
+  strikesObj: Record<string, unknown>,
+  strike: number,
+): unknown[] | null {
+  for (const [sk, arr] of Object.entries(strikesObj)) {
+    if (parseStrikeFromKey(sk) === strike && Array.isArray(arr) && arr.length > 0) {
+      return arr;
+    }
+  }
+  return null;
+}
+
+type PriceSource = "bid" | "ask" | "mid" | "mark" | "last" | "none";
+
+function mergeQuoteLites(chain: QuoteLite, live?: QuoteLite): QuoteLite {
+  if (!live) return chain;
+  return {
+    bid: live.bid ?? chain.bid,
+    ask: live.ask ?? chain.ask,
+    mark: live.mark ?? chain.mark,
+    last: live.last ?? chain.last,
+    delta: live.delta ?? chain.delta,
+    theta: live.theta ?? chain.theta,
+    gamma: live.gamma ?? chain.gamma,
+    openInterest: live.openInterest ?? chain.openInterest,
+    totalVolume: live.totalVolume ?? chain.totalVolume,
+    impliedVolPct: live.impliedVolPct ?? chain.impliedVolPct,
+  };
+}
+
+/** Premium for yield/score — chain mark/mid so LEAPS count, not only strikes with a live bid. */
+function resolveOptionPrice(
+  lite: QuoteLite,
+  isBuyToOpen: boolean,
+  liquidityMode: LiquidityMode,
+): { price: number; source: PriceSource; displayBid: number; displayAsk: number } {
+  const bid = lite.bid ?? 0;
+  const ask = lite.ask ?? 0;
+  const mark = lite.mark ?? 0;
+  const last = lite.last ?? 0;
+  const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
+  const allowMark = liquidityMode !== "strict";
+
+  if (isBuyToOpen) {
+    if (ask > 0) return { price: ask, source: "ask", displayBid: bid, displayAsk: ask };
+    if (mid > 0) return { price: mid, source: "mid", displayBid: bid, displayAsk: ask };
+    if (allowMark && mark > 0) {
+      return { price: mark, source: "mark", displayBid: mark, displayAsk: mark };
+    }
+    if (allowMark && last > 0) {
+      return { price: last, source: "last", displayBid: last, displayAsk: last };
+    }
+    if (bid > 0) return { price: bid, source: "bid", displayBid: bid, displayAsk: ask };
+    return { price: 0, source: "none", displayBid: bid, displayAsk: ask };
+  }
+
+  if (bid > 0) return { price: bid, source: "bid", displayBid: bid, displayAsk: ask > 0 ? ask : bid };
+  if (mid > 0) return { price: mid, source: "mid", displayBid: bid, displayAsk: ask };
+  if (allowMark && mark > 0) {
+    return { price: mark, source: "mark", displayBid: mark, displayAsk: ask > 0 ? ask : mark };
+  }
+  if (allowMark && last > 0) {
+    return { price: last, source: "last", displayBid: last, displayAsk: ask > 0 ? ask : last };
+  }
+  return { price: 0, source: "none", displayBid: bid, displayAsk: ask };
+}
+
+function buildMonthChainWindows(from: Date, through: Date): Array<{ from: string; to: string }> {
+  const out: Array<{ from: string; to: string }> = [];
+  let cursor = new Date(from);
+  while (cursor.getTime() <= through.getTime()) {
+    const monthEnd = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 0));
+    const winEnd = monthEnd.getTime() > through.getTime() ? new Date(through) : monthEnd;
+    out.push({
+      from: cursor.toISOString().slice(0, 10),
+      to: winEnd.toISOString().slice(0, 10),
+    });
+    cursor = addUtcDays(winEnd, 1);
+  }
+  return out;
+}
+
 const numField = (x: unknown): number | undefined =>
   typeof x === "number" && Number.isFinite(x) ? x : undefined;
 
@@ -115,11 +258,11 @@ function getStrikesInRange(
     if (side === "P") {
       if (strike >= spot) return false;
       const otm = ((spot - strike) / spot) * 100;
-      return otm >= minOtmPct && otm < maxOtmPct;
+      return otm >= minOtmPct && otm <= maxOtmPct;
     }
     if (strike <= spot) return false;
     const otm = ((strike - spot) / spot) * 100;
-    return otm >= minOtmPct && otm < maxOtmPct;
+    return otm >= minOtmPct && otm <= maxOtmPct;
   });
 }
 
@@ -183,8 +326,8 @@ function computePutCallSkew(
   let putCnt = 0;
 
   for (const [sk, contracts] of Object.entries(callStrikesObj ?? {})) {
-    const strike = Number(sk);
-    if (!Number.isFinite(strike) || strike <= spot) continue;
+    const strike = parseStrikeFromKey(sk);
+    if (strike == null || strike <= spot) continue;
     const otm = ((strike - spot) / spot) * 100;
     if (otm < MIN_OTM || otm >= MAX_OTM) continue;
     if (Array.isArray(contracts) && contracts.length > 0) {
@@ -198,8 +341,8 @@ function computePutCallSkew(
     }
   }
   for (const [sk, contracts] of Object.entries(putStrikesObj ?? {})) {
-    const strike = Number(sk);
-    if (!Number.isFinite(strike) || strike >= spot) continue;
+    const strike = parseStrikeFromKey(sk);
+    if (strike == null || strike >= spot) continue;
     const otm = ((spot - strike) / spot) * 100;
     if (otm < MIN_OTM || otm >= MAX_OTM) continue;
     if (Array.isArray(contracts) && contracts.length > 0) {
@@ -274,8 +417,8 @@ export async function handler(req: any, res: any): Promise<void> {
     positionNorm === "buytoopen" ||
     positionNorm === "buy_to_open";
 
-  const otmPctMin = clamp(Number(body.otmPctMin) || 5, 0, 39);
-  const otmPctMax = clamp(Number(body.otmPctMax) || 40, otmPctMin + 0.5, 80);
+  const otmPctMin = clamp(Number(body.otmPctMin) || 5, 0, 79);
+  const otmPctMax = clamp(Number(body.otmPctMax) || 40, otmPctMin + 0.5, 85);
   const topPerExpiry = Math.min(Math.max(1, Number(body.topPerExpiry) || 5), 15);
   const rankMode = parseRankMode(body.rankMode);
   const liquidityMode = parseLiquidityMode(body.liquidityMode);
@@ -286,9 +429,6 @@ export async function handler(req: any, res: any): Promise<void> {
     res.status(400).json({ error: "maxExpiration must be today or later." });
     return;
   }
-
-  const fromStr = today.toISOString().slice(0, 10);
-  const toStr = maxExpiration;
 
   try {
     const supabaseUrl = process.env.SUPABASE_URL;
@@ -388,32 +528,82 @@ export async function handler(req: any, res: any): Promise<void> {
       /* supplemental */
     }
 
-    const chainParams = new URLSearchParams({
-      symbol: rawTicker,
-      contractType: "ALL",
-      includeUnderlyingQuote: "FALSE",
-      strategy: "SINGLE",
-      fromDate: fromStr,
-      toDate: toStr,
-      strikeCount: "200",
+    const callMap: Record<string, Record<string, unknown>> = {};
+    const putMap: Record<string, Record<string, unknown>> = {};
+    const chainWindows = buildMonthChainWindows(today, maxExpDate);
+    let chainWindowFailures = 0;
+
+    await runSchwabPool(chainWindows, 3, async (win) => {
+      const chainParams = new URLSearchParams({
+        symbol: rawTicker,
+        contractType: type === "C" ? "CALL" : "PUT",
+        includeUnderlyingQuote: "FALSE",
+        strategy: "SINGLE",
+        range: "OTM",
+        fromDate: win.from,
+        toDate: win.to,
+        strikeCount: "200",
+      });
+      const chainResp = await fetchSchwabWithRetry(
+        `https://api.schwabapi.com/marketdata/v1/chains?${chainParams}`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+      if (chainResp.status === 429) {
+        throw new Error(SCHWAB_RATE_LIMIT);
+      }
+      if (!chainResp.ok) {
+        chainWindowFailures++;
+        return;
+      }
+      const chainBody: any = await chainResp.json();
+      if (type === "C") {
+        mergeStrikeMaps(callMap, chainBody?.callExpDateMap);
+      } else {
+        mergeStrikeMaps(putMap, chainBody?.putExpDateMap);
+      }
     });
-    const chainResp = await fetchSchwabWithRetry(
-      `https://api.schwabapi.com/marketdata/v1/chains?${chainParams}`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-    if (chainResp.status === 429) {
-      res.status(503).json({ error: "Schwab rate limit on option chain. Wait 30–60 s and retry." });
-      return;
+
+    // Skew needs both sides near term — one short ALL window.
+    try {
+      const skewTo = addUtcDays(today, 75);
+      const skewEnd =
+        skewTo.getTime() > maxExpDate.getTime() ? new Date(maxExpDate) : skewTo;
+      const skewParams = new URLSearchParams({
+        symbol: rawTicker,
+        contractType: "ALL",
+        includeUnderlyingQuote: "FALSE",
+        strategy: "SINGLE",
+        fromDate: today.toISOString().slice(0, 10),
+        toDate: skewEnd.toISOString().slice(0, 10),
+        strikeCount: "80",
+      });
+      const skewResp = await fetchSchwabWithRetry(
+        `https://api.schwabapi.com/marketdata/v1/chains?${skewParams}`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+      if (skewResp.ok) {
+        const skewBody: any = await skewResp.json();
+        mergeStrikeMaps(callMap, skewBody?.callExpDateMap);
+        mergeStrikeMaps(putMap, skewBody?.putExpDateMap);
+      }
+    } catch {
+      /* skew is supplemental */
     }
-    if (!chainResp.ok) {
-      const t = await chainResp.text();
-      res.status(502).json({ error: `Option chain failed for ${rawTicker}.`, detail: t.slice(0, 200) });
-      return;
+
+    if (chainWindowFailures > 0) {
+      warnings.push(
+        `${chainWindowFailures} of ${chainWindows.length} monthly chain request(s) failed — expiries may be incomplete.`,
+      );
     }
-    const chainBody: any = await chainResp.json();
-    const callMap = chainBody?.callExpDateMap ?? {};
-    const putMap = chainBody?.putExpDateMap ?? {};
     const primaryMap = type === "C" ? callMap : putMap;
+    const expKeysFound = Object.keys(primaryMap).length;
+    if (expKeysFound === 0) {
+      res.status(502).json({ error: `Option chain returned no expirations for ${rawTicker}.` });
+      return;
+    }
+    warnings.push(
+      `Loaded ${expKeysFound} expiration(s) from Schwab (${chainWindows.length} monthly OTM chain request(s) through ${maxExpiration}).`,
+    );
 
     const skewPick = pickSkewExpiryMaps(callMap, putMap, today.getTime());
     const skewPct =
@@ -425,6 +615,7 @@ export async function handler(req: any, res: any): Promise<void> {
       expiry: string;
       strike: number;
       impliedVolPctFromChain: number | null;
+      chainContract: Record<string, unknown>;
     };
     const specs: Spec[] = [];
 
@@ -447,14 +638,14 @@ export async function handler(req: any, res: any): Promise<void> {
 
       const strikes: number[] = [];
       for (const [strikeStr, contracts] of Object.entries<any>(strikesObj)) {
-        const strike = Number(strikeStr);
-        if (!Number.isFinite(strike) || strike <= 0) continue;
+        const strike = parseStrikeFromKey(strikeStr);
+        if (strike == null) continue;
         if (Array.isArray(contracts) && contracts.length > 0) strikes.push(strike);
       }
       const validStrikes = getStrikesInRange(strikes, spot, otmPctMin, otmPctMax, type);
       for (const strike of validStrikes) {
-        let contractsRaw: any = strikesObj[String(strike)];
-        if (!Array.isArray(contractsRaw) || contractsRaw.length === 0) continue;
+        const contractsRaw = contractsAtStrike(strikesObj, strike);
+        if (!contractsRaw || contractsRaw.length === 0) continue;
         const c0 = contractsRaw[0];
         if (c0?.isMini === true || c0?.isNonStandard === true) continue;
         specs.push({
@@ -462,6 +653,7 @@ export async function handler(req: any, res: any): Promise<void> {
           strike,
           impliedVolPctFromChain:
             c0 && typeof c0 === "object" ? impliedVolPercentFromQuote(c0) : null,
+          chainContract: c0 && typeof c0 === "object" ? (c0 as Record<string, unknown>) : {},
         });
       }
     }
@@ -488,88 +680,29 @@ export async function handler(req: any, res: any): Promise<void> {
 
     if (specs.length > 800) {
       warnings.push(
-        `Large chain (${specs.length} contracts) — quoting in batches; this may take a moment.`
+        `Scoring ${specs.length} OTM contracts from chain data; live quotes fetched only for top picks per expiry.`,
       );
     }
-
-    type QuoteLite = {
-      bid?: number;
-      ask?: number;
-      delta?: number;
-      theta?: number;
-      gamma?: number;
-      openInterest?: number;
-      totalVolume?: number;
-      impliedVolPct?: number | null;
-    };
-    const optionQuotes: Record<string, QuoteLite> = {};
-    const occEntries: { occ: string; key: string }[] = [];
-    const seenOcc = new Set<string>();
-    for (const s of specs) {
-      const occ = toOCCSymbol(rawTicker, s.expiry, type, s.strike);
-      const key = `${s.expiry} ${s.strike}`;
-      if (seenOcc.has(occ)) continue;
-      seenOcc.add(occ);
-      occEntries.push({ occ, key });
-    }
-
-    const BATCH = 50;
-    const batches: (typeof occEntries)[] = [];
-    for (let i = 0; i < occEntries.length; i += BATCH) {
-      batches.push(occEntries.slice(i, i + BATCH));
-    }
-    await runSchwabPool(batches, 4, async (batch) => {
-      const qUrl =
-        "https://api.schwabapi.com/marketdata/v1/quotes?" +
-        new URLSearchParams({ symbols: batch.map((b) => b.occ).join(",") }).toString();
-      const qResp = await fetchSchwabWithRetry(qUrl, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!qResp.ok) return;
-      const qBody: any = await qResp.json();
-      for (const { occ, key } of batch) {
-        const row = qBody[occ] ?? qBody[occ.replace(/\s+/g, "")];
-        const qsrc =
-          row?.quote && typeof row.quote === "object"
-            ? row.quote
-            : row?.optionContract && typeof row.optionContract === "object"
-              ? row.optionContract
-              : row?.option && typeof row.option === "object"
-                ? row.option
-                : row;
-        if (!qsrc || typeof qsrc !== "object") continue;
-        const num = (x: any): number | undefined =>
-          typeof x === "number" && Number.isFinite(x) ? x : undefined;
-        optionQuotes[key] = {
-          bid: num(qsrc.bidPrice) ?? num(qsrc.bid),
-          ask: num(qsrc.askPrice) ?? num(qsrc.ask),
-          delta: num(qsrc.delta),
-          theta: num(qsrc.theta),
-          gamma: num(qsrc.gamma),
-          openInterest: num(qsrc.openInterest) ?? num(qsrc.open_interest),
-          totalVolume: num(qsrc.totalVolume) ?? num(qsrc.total_volume) ?? num(qsrc.volume),
-          impliedVolPct: impliedVolPercentFromQuote(qsrc),
-        };
-      }
-    });
 
     const byExpiry = new Map<string, ReviewRow[]>();
     const liquidityFiltered = { spread: 0, oi: 0 };
 
     for (const spec of specs) {
-      const key = `${spec.expiry} ${spec.strike}`;
-      const quote = optionQuotes[key];
-      const bid = quote?.bid ?? 0;
-      const ask = quote?.ask ?? 0;
-      const optionPrice = isBuyToOpen ? (ask > 0 ? ask : bid) : bid > 0 ? bid : ask;
-      if (optionPrice <= 0) continue;
-      if (!isBuyToOpen && bid <= 0) {
+      const chainLite = quoteLiteFromChainContract(spec.chainContract);
+      const { price: optionPrice, source: priceSource, displayBid, displayAsk } = resolveOptionPrice(
+        chainLite,
+        isBuyToOpen,
+        liquidityMode,
+      );
+      if (optionPrice <= 0) {
         liquidityFiltered.spread++;
         continue;
       }
-      if (isBuyToOpen && ask <= 0) {
-        liquidityFiltered.spread++;
-        continue;
+      const bid = displayBid;
+      const ask = displayAsk;
+      const liquidityFlags: string[] = [];
+      if (priceSource === "mark" || priceSource === "last" || priceSource === "mid") {
+        liquidityFlags.push("mark_pricing");
       }
 
       const expDate = new Date(spec.expiry + "T00:00:00Z");
@@ -585,7 +718,7 @@ export async function handler(req: any, res: any): Promise<void> {
           : ((spot - spec.strike) / spot) * 100
       );
       const BUFFER = 2;
-      if (actualOtmPct < otmPctMin - BUFFER || actualOtmPct >= otmPctMax + BUFFER) continue;
+      if (actualOtmPct < otmPctMin - BUFFER || actualOtmPct > otmPctMax + BUFFER) continue;
 
       const otmForTier = actualOtmPct;
       const otmTierAdj =
@@ -593,9 +726,8 @@ export async function handler(req: any, res: any): Promise<void> {
       let maxSpreadPct = (isBuyToOpen ? 0.42 : 0.35) + otmTierAdj;
       if (liquidityMode === "relaxed") maxSpreadPct += 0.12;
       const minOI = otmForTier <= 5 ? 25 : otmForTier <= 10 ? 12 : otmForTier <= 15 ? 6 : 3;
-      const oi = quote?.openInterest ?? null;
+      const oi = chainLite.openInterest ?? null;
 
-      const liquidityFlags: string[] = [];
       let spreadPenalty = 1;
       let oiPenalty = 1;
       if (spreadPct > maxSpreadPct) {
@@ -616,7 +748,7 @@ export async function handler(req: any, res: any): Promise<void> {
       const yieldPct = notional !== 0 ? (premiumPerContract / notional) * 100 : 0;
       const annYieldPct = yieldPct * (365 / dte);
       const annAbs = Math.abs(annYieldPct);
-      const rawDelta = quote?.delta;
+      const rawDelta = chainLite.delta;
       const probITM =
         rawDelta != null
           ? clamp(Math.abs(rawDelta), 0.02, 0.98)
@@ -626,7 +758,7 @@ export async function handler(req: any, res: any): Promise<void> {
               0.02,
               0.98
             );
-      const volume = quote?.totalVolume ?? 0;
+      const volume = chainLite.totalVolume ?? 0;
       const volOiRatio = oi != null && oi > 0 && volume > 0 ? volume / oi : 0;
       const liqScore = clamp(
         ((1 - clamp(spreadPct / Math.max(maxSpreadPct, 0.0001), 0, 1)) * 0.5 +
@@ -638,7 +770,7 @@ export async function handler(req: any, res: any): Promise<void> {
         0.05,
         1
       );
-      const ivPct = quote?.impliedVolPct ?? spec.impliedVolPctFromChain ?? null;
+      const ivPct = chainLite.impliedVolPct ?? spec.impliedVolPctFromChain ?? null;
       const rvPct = realizedVol20dPct;
       const volMult = volIvRvMultiplier(isBuyToOpen, ivPct, rvPct);
       const ivBonus = (() => {
@@ -651,7 +783,7 @@ export async function handler(req: any, res: any): Promise<void> {
         : Math.min(annAbs, 80) * Math.pow(1 - probITM, 1.35) * liqScore * ivBonus;
       const gammaPenalty = (() => {
         if (isBuyToOpen) return 1;
-        const g = quote?.gamma;
+        const g = chainLite.gamma;
         if (g == null || g <= 0) return 1;
         return clamp(1 - g * 5, 0.85, 1.0);
       })();
@@ -690,7 +822,7 @@ export async function handler(req: any, res: any): Promise<void> {
         skewPct,
         delta: rawDelta != null ? round2(clamp(Math.abs(rawDelta), 0, 1)) : null,
         thetaPerDay: (() => {
-          const th = quote?.theta;
+          const th = chainLite.theta;
           if (th == null || !Number.isFinite(th)) return null;
           const perContract = th * 100;
           return round2(isBuyToOpen ? perContract : -perContract);
@@ -733,6 +865,64 @@ export async function handler(req: any, res: any): Promise<void> {
         };
       })
       .filter((e) => e.picks.length > 0);
+
+    warnings.push(
+      `${specs.length} OTM contract(s) scored across ${byExpiry.size} expiration(s); returning top ${topPerExpiry} per expiry (${expirations.length} date(s) with picks).`,
+    );
+
+    const liveQuoteTargets: { occ: string; row: ReviewRow }[] = [];
+    for (const block of expirations) {
+      for (const row of block.picks) {
+        if (row.occSymbol) liveQuoteTargets.push({ occ: row.occSymbol, row });
+      }
+    }
+    if (liveQuoteTargets.length > 0) {
+      const batches: (typeof liveQuoteTargets)[] = [];
+      for (let i = 0; i < liveQuoteTargets.length; i += 50) {
+        batches.push(liveQuoteTargets.slice(i, i + 50));
+      }
+      await runSchwabPool(batches, 4, async (batch) => {
+        const qUrl =
+          "https://api.schwabapi.com/marketdata/v1/quotes?" +
+          new URLSearchParams({ symbols: batch.map((b) => b.occ).join(",") }).toString();
+        const qResp = await fetchSchwabWithRetry(qUrl, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!qResp.ok) return;
+        const qBody: any = await qResp.json();
+        for (const { occ, row } of batch) {
+          const raw = qBody[occ] ?? qBody[occ.replace(/\s+/g, "")];
+          const qsrc =
+            raw?.quote && typeof raw.quote === "object"
+              ? raw.quote
+              : raw?.optionContract && typeof raw.optionContract === "object"
+                ? raw.optionContract
+                : raw?.option && typeof raw.option === "object"
+                  ? raw.option
+                  : raw;
+          const live = quoteLiteFromChainContract(qsrc);
+          const resolved = resolveOptionPrice(live, isBuyToOpen, liquidityMode);
+          if (resolved.price <= 0) continue;
+          row.bid = round2(resolved.displayBid);
+          row.ask = round2(resolved.displayAsk > 0 ? resolved.displayAsk : resolved.displayBid);
+          row.limitPrice = round2(resolved.price);
+          const notional = row.strike * 100;
+          const prem = (isBuyToOpen ? -1 : 1) * resolved.price * 100;
+          row.premiumPerContract = round2(prem);
+          row.periodYieldPct = round2(notional !== 0 ? (prem / notional) * 100 : 0);
+          row.annYieldPct = round2(row.periodYieldPct * (365 / Math.max(1, row.dte)));
+          if (live.delta != null) row.delta = round2(clamp(Math.abs(live.delta), 0, 1));
+          if (live.impliedVolPct != null) row.impliedVolPct = round2(live.impliedVolPct);
+        }
+      });
+      for (const block of expirations) {
+        const resorted = sortRows(block.picks, rankMode).slice(0, topPerExpiry);
+        resorted.forEach((r, idx) => {
+          r.rank = idx + 1;
+        });
+        block.picks = resorted;
+      }
+    }
 
     res.status(200).json({
       ticker: rawTicker,
