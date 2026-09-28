@@ -300,6 +300,38 @@ function formatSchwabSymbol(args: {
   return `${args.ticker} ${mm}/${dd}/${yyyy} ${strike} ${t}`;
 }
 
+/** Review matrix: at most this many OTM columns, so one screenshot stays readable. */
+const MAX_OTM_LEVELS = 5;
+
+/**
+ * Fixed OTM columns shared by every expiration. Anchoring on the scan's min OTM (rather than
+ * each expiry's best strike) is what lets a reviewer read down a column and compare the same
+ * distance across dates.
+ */
+function buildOtmLevels(minPct: number, maxPct: number): number[] {
+  const span = Math.max(0, maxPct - minPct);
+  const step = span >= 15 ? 5 : Math.max(1, Math.round((span / 3) * 2) / 2);
+  const levels: number[] = [];
+  for (let v = minPct; v <= maxPct + 1e-6 && levels.length < MAX_OTM_LEVELS; v += step) {
+    levels.push(Math.round(v * 10) / 10);
+  }
+  return levels.length > 0 ? levels : [minPct];
+}
+
+function pickNearestOtm(rows: ReviewRow[], level: number, tolerance: number): ReviewRow | null {
+  let best: ReviewRow | null = null;
+  let bestDist = Infinity;
+  for (const r of rows) {
+    const dist = Math.abs(r.actualOtmPct - level);
+    if (dist > tolerance) continue;
+    if (dist < bestDist || (dist === bestDist && best != null && r.periodYieldPct > best.periodYieldPct)) {
+      best = r;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
 function sortRows(rows: ReviewRow[], rankMode: RankMode): ReviewRow[] {
   return [...rows].sort((a, b) => {
     if (rankMode === "yield") {
@@ -422,6 +454,11 @@ export async function handler(req: any, res: any): Promise<void> {
   const topPerExpiry = Math.min(Math.max(1, Number(body.topPerExpiry) || 5), 15);
   const rankMode = parseRankMode(body.rankMode);
   const liquidityMode = parseLiquidityMode(body.liquidityMode);
+  const otmLevels = buildOtmLevels(otmPctMin, otmPctMax);
+  const otmLevelTolerance = Math.max(
+    2,
+    otmLevels.length > 1 ? (otmLevels[1]! - otmLevels[0]!) / 2 : 2.5,
+  );
 
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
@@ -850,6 +887,27 @@ export async function handler(req: any, res: any): Promise<void> {
       warnings.push(`Excluded ${liquidityFiltered.oi} contracts with low open interest.`);
     }
 
+    const buildMatrix = () =>
+      [...byExpiry.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([expiration, rows]) => {
+          const expDate = new Date(expiration + "T00:00:00Z");
+          // A sparse far-dated ladder can put two columns on the same strike; show it once.
+          const usedStrikes = new Set<number>();
+          const cells = otmLevels.map((otmLevel) => {
+            const pick = pickNearestOtm(rows, otmLevel, otmLevelTolerance);
+            if (!pick || usedStrikes.has(pick.strike)) return { otmLevel, pick: null };
+            usedStrikes.add(pick.strike);
+            return { otmLevel, pick };
+          });
+          return {
+            expiration,
+            dte: Math.max(1, daysBetween(today, expDate)),
+            cells,
+          };
+        })
+        .filter((r) => r.cells.some((c) => c.pick != null));
+
     const expirations = [...byExpiry.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([expiration, rows]) => {
@@ -866,15 +924,28 @@ export async function handler(req: any, res: any): Promise<void> {
       })
       .filter((e) => e.picks.length > 0);
 
+    let matrix = buildMatrix();
+
     warnings.push(
       `${specs.length} OTM contract(s) scored across ${byExpiry.size} expiration(s); returning top ${topPerExpiry} per expiry (${expirations.length} date(s) with picks).`,
     );
+    warnings.push(
+      `Review grid: ${matrix.length} expiration(s) × ${otmLevels.map((l) => `${l}%`).join(" / ")} OTM columns (nearest listed strike, ±${otmLevelTolerance}%).`,
+    );
+
+    const quoteRowSet = new Set<ReviewRow>();
+    for (const block of expirations) {
+      for (const row of block.picks) quoteRowSet.add(row);
+    }
+    for (const r of matrix) {
+      for (const cell of r.cells) {
+        if (cell.pick) quoteRowSet.add(cell.pick);
+      }
+    }
 
     const liveQuoteTargets: { occ: string; row: ReviewRow }[] = [];
-    for (const block of expirations) {
-      for (const row of block.picks) {
-        if (row.occSymbol) liveQuoteTargets.push({ occ: row.occSymbol, row });
-      }
+    for (const row of quoteRowSet) {
+      if (row.occSymbol) liveQuoteTargets.push({ occ: row.occSymbol, row });
     }
     if (liveQuoteTargets.length > 0) {
       const batches: (typeof liveQuoteTargets)[] = [];
@@ -922,6 +993,7 @@ export async function handler(req: any, res: any): Promise<void> {
         });
         block.picks = resorted;
       }
+      matrix = buildMatrix();
     }
 
     res.status(200).json({
@@ -937,6 +1009,8 @@ export async function handler(req: any, res: any): Promise<void> {
       rankMode,
       otmRange: { min: otmPctMin, max: otmPctMax },
       topPerExpiry,
+      otmLevels,
+      matrix,
       expirations,
       message: expirations.length === 0 ? "No liquid contracts matched filters." : null,
       warnings,

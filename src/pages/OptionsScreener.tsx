@@ -77,6 +77,13 @@ type TickerReviewResponse = {
   rankMode: RankMode;
   otmRange: { min: number; max: number };
   topPerExpiry: number;
+  /** Shared OTM columns for the review grid (same distances on every expiration). */
+  otmLevels?: number[];
+  matrix?: Array<{
+    expiration: string;
+    dte: number;
+    cells: Array<{ otmLevel: number; pick: RankedOption | null }>;
+  }>;
   expirations: Array<{ expiration: string; dte: number; picks: RankedOption[] }>;
   message: string | null;
   warnings: string[];
@@ -243,6 +250,40 @@ function buildBucketTsv(rows: RankedOption[], positionSide: PositionSide, dte?: 
 function formatStrikePrice(n: number): string {
   if (!Number.isFinite(n)) return "—";
   return Number.isInteger(n) ? `$${n.toLocaleString("en-US")}` : `$${n.toFixed(2)}`;
+}
+
+/** Single-ticker review grid → TSV (one block of columns per OTM level). */
+function buildTickerGridTsv(
+  levels: number[],
+  rows: Array<{ expiration: string; dte: number; cells: Array<{ otmLevel: number; pick: RankedOption | null }> }>,
+  positionSide: PositionSide,
+): string {
+  const pct = (v: number | null | undefined) => (v == null || !Number.isFinite(v) ? "" : (v / 100).toFixed(4));
+  const periodLabel = positionSide === "buy" ? "Period debit %" : "Period yield %";
+  const annLabel = positionSide === "buy" ? "Ann. debit %" : "Ann. yield %";
+  const headers = ["Expiration", "DTE"];
+  for (const lvl of levels) {
+    headers.push(`${lvl}% Strike`, `${lvl}% OTM actual`, `${lvl}% ${periodLabel}`, `${lvl}% ${annLabel}`, `${lvl}% Contract`);
+  }
+  const body = rows.map((r) => {
+    const cols: (string | number)[] = [r.expiration, r.dte];
+    for (const lvl of levels) {
+      const pick = r.cells.find((c) => c.otmLevel === lvl)?.pick ?? null;
+      if (!pick) {
+        cols.push("", "", "", "", "");
+        continue;
+      }
+      cols.push(
+        pick.strike,
+        pick.actualOtmPct == null ? "" : pick.actualOtmPct.toFixed(1),
+        pct(periodYieldFromRow(pick, r.dte)),
+        pct(pick.annYieldPct),
+        pick.schwabSymbol,
+      );
+    }
+    return cols.join("\t");
+  });
+  return [headers.join("\t"), ...body].join("\n");
 }
 
 function toISODateUTC(d: Date): string {
@@ -790,37 +831,23 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
     [tableSort, lastScanDte],
   );
 
-  const tickerSummaryPicks = useMemo(() => {
-    if (!tickerReview) return [];
-    return tickerReview.expirations
+  /** Review grid: OTM columns shared by every expiration. Falls back to one best-pick column
+   * when the API predates the grid response, so the page still renders after a partial deploy. */
+  const tickerGrid = useMemo(() => {
+    if (!tickerReview) return null;
+    const levels = tickerReview.otmLevels ?? [];
+    const rows = tickerReview.matrix ?? [];
+    if (levels.length > 0 && rows.length > 0) return { levels, rows, isFallback: false };
+    const fallbackRows = tickerReview.expirations
+      .filter((block) => block.picks.length > 0)
       .map((block) => ({
         expiration: block.expiration,
         dte: block.dte,
-        row: block.picks[0] ?? null,
-      }))
-      .filter(
-        (p): p is { expiration: string; dte: number; row: RankedOption } => p.row != null,
-      );
+        cells: [{ otmLevel: 0, pick: block.picks[0]! }],
+      }));
+    if (fallbackRows.length === 0) return null;
+    return { levels: [0], rows: fallbackRows, isFallback: true };
   }, [tickerReview]);
-
-  const tickerSummaryYieldLeaders = useMemo(() => {
-    let bestPeriodIdx = -1;
-    let bestAnnIdx = -1;
-    let bestPeriod = -Infinity;
-    let bestAnn = -Infinity;
-    tickerSummaryPicks.forEach(({ row, dte }, i) => {
-      const py = periodYieldFromRow(row, dte);
-      if (py > bestPeriod) {
-        bestPeriod = py;
-        bestPeriodIdx = i;
-      }
-      if (Number.isFinite(row.annYieldPct) && row.annYieldPct > bestAnn) {
-        bestAnn = row.annYieldPct;
-        bestAnnIdx = i;
-      }
-    });
-    return { bestPeriodIdx, bestAnnIdx };
-  }, [tickerSummaryPicks]);
 
   const tickerTableRankOverride =
     tableSort.phase !== "none" ? (idx: number) => idx + 1 : undefined;
@@ -2240,61 +2267,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
 
         {outcomeScanMode === "ticker" && tickerReview && (
           <>
-            <div className="page-card" style={{ ...cardStyle, marginBottom: t.spacing(4) }}>
-              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", justifyContent: "space-between", gap: t.spacing(4) }}>
-                <div>
-                  <h3 style={{ ...sectionTitleStyle, marginBottom: t.spacing(1) }}>
-                    {tickerReview.ticker}
-                    <span style={{ fontWeight: 500, color: t.colors.textMuted, fontSize: "0.9rem", marginLeft: t.spacing(2) }}>
-                      {tickerReview.company}
-                    </span>
-                  </h3>
-                  <p style={{ margin: 0, fontSize: "0.85rem", color: t.colors.textMuted, lineHeight: 1.5 }}>
-                    {tickerReview.optionType === "P" ? "Puts" : "Calls"} ·{" "}
-                    {outcomePositionSide === "buy" ? "Buy to open" : "Sell to open"} · OTM{" "}
-                    {tickerReview.otmRange.min}–{tickerReview.otmRange.max}% · through{" "}
-                    {new Date(tickerReview.maxExpiration + "T00:00:00Z").toLocaleDateString(undefined, {
-                      month: "short",
-                      day: "numeric",
-                      year: "numeric",
-                      timeZone: "UTC",
-                    })}
-                  </p>
-                  <p style={{ margin: `${t.spacing(1)} 0 0`, fontSize: "0.78rem", color: t.colors.textMuted }}>
-                    Ranked by{" "}
-                    <strong style={{ color: t.colors.text }}>
-                      {outcomeRankMode === "yield" ? "period yield" : "smart score"}
-                    </strong>{" "}
-                    within each expiration
-                  </p>
-                </div>
-                <div style={{ display: "flex", gap: t.spacing(4), flexWrap: "wrap" }}>
-                  <div>
-                    <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, fontWeight: 600 }}>Spot</div>
-                    <div style={{ fontSize: "1.35rem", fontWeight: 800 }}>{formatStrikePrice(tickerReview.currentPrice)}</div>
-                    <div style={{ fontSize: "0.78rem", color: tickerReview.oneMonthPerfPct != null && tickerReview.oneMonthPerfPct >= 0 ? t.colors.success : t.colors.danger }}>
-                      1M {formatPct(tickerReview.oneMonthPerfPct)}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, fontWeight: 600 }}>RV 20d</div>
-                    <div style={{ fontSize: "1.1rem", fontWeight: 700 }}>{formatVolPct(tickerReview.realizedVol20dPct)}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, fontWeight: 600 }}>Skew</div>
-                    <div style={{ fontSize: "1.1rem", fontWeight: 700 }}>
-                      {tickerReview.skewPct == null ? "—" : `${tickerReview.skewPct > 0 ? "+" : ""}${tickerReview.skewPct.toFixed(1)}`}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, fontWeight: 600 }}>Expiries w/ picks</div>
-                    <div style={{ fontSize: "1.1rem", fontWeight: 700 }}>{tickerReview.expirations.length}</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {tickerSummaryPicks.length > 0 && (
+            {tickerGrid && (
               <div
                 style={{
                   ...cardStyle,
@@ -2308,161 +2281,181 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                     style={{
                       display: "flex",
                       flexWrap: "wrap",
-                      alignItems: "flex-end",
+                      alignItems: "flex-start",
                       justifyContent: "space-between",
-                      gap: t.spacing(3),
+                      gap: t.spacing(4),
                     }}
                   >
-                    <div>
-                      <h3 style={{ ...sectionTitleStyle, marginBottom: t.spacing(1) }}>#1 per expiration</h3>
-                      <p style={{ margin: 0, fontSize: "0.78rem", color: t.colors.textMuted, lineHeight: 1.5, maxWidth: 520 }}>
-                        Best strike on each expiry (
-                        {outcomeRankMode === "yield" ? "ranked by period yield" : "ranked by smart score"}). Gold bar
-                        = highest period or annualized yield in this list. Detail tables below show #
-                        {tickerReview.topPerExpiry ?? topPerExpiry} per date.
+                    <div style={{ flex: "1 1 280px", minWidth: 0 }}>
+                      <h3 style={{ ...sectionTitleStyle, marginBottom: t.spacing(1) }}>
+                        {tickerReview.ticker}
+                        <span
+                          style={{
+                            fontWeight: 500,
+                            color: t.colors.textMuted,
+                            fontSize: "0.9rem",
+                            marginLeft: t.spacing(2),
+                          }}
+                        >
+                          {tickerReview.company}
+                        </span>
+                      </h3>
+                      <p style={{ margin: 0, fontSize: "0.85rem", color: t.colors.textMuted, lineHeight: 1.5 }}>
+                        {tickerReview.optionType === "P" ? "Puts" : "Calls"} ·{" "}
+                        {outcomePositionSide === "buy" ? "Buy to open" : "Sell to open"} · scan OTM{" "}
+                        {tickerReview.otmRange.min}–{tickerReview.otmRange.max}% · through{" "}
+                        {new Date(tickerReview.maxExpiration + "T00:00:00Z").toLocaleDateString(undefined, {
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                          timeZone: "UTC",
+                        })}
                       </p>
+                      <p style={{ margin: `${t.spacing(2)} 0 0`, fontSize: "0.78rem", color: t.colors.textMuted, lineHeight: 1.55, maxWidth: 580 }}>
+                        <strong style={{ color: t.colors.text }}>Review grid</strong> — one row per expiration, one
+                        column per OTM distance. Read across for the risk/reward tradeoff on a date; read down to
+                        compare the same distance across dates. Click any cell to copy its contract. Detail tables
+                        below list the top {tickerReview.topPerExpiry ?? topPerExpiry} strikes per date.
+                      </p>
+                      <div
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: t.spacing(2),
+                          marginTop: t.spacing(2),
+                          padding: `${t.spacing(1)} ${t.spacing(2)}`,
+                          borderRadius: t.radius.sm,
+                          border: `1px solid ${rankingColors.gold}`,
+                          backgroundColor: `${rankingColors.gold}14`,
+                          fontSize: "0.72rem",
+                          color: t.colors.text,
+                        }}
+                      >
+                        <HelpTooltip
+                          theme={t}
+                          text={`Gold cell = best ${tableAnnLabel.toLowerCase()} per unit of assignment probability (annualized yield ÷ delta) on that expiration. Raw yield always rises as you move toward spot, so it would highlight the left-most column every time; this highlights the best return for the risk taken.`}
+                        >
+                          <span style={{ cursor: "help", fontWeight: 600 }}>
+                            Gold = best return per unit of risk
+                          </span>
+                        </HelpTooltip>
+                      </div>
                     </div>
-                    <span
-                      style={{
-                        fontSize: "0.72rem",
-                        fontWeight: 700,
-                        color: t.colors.textMuted,
-                        textTransform: "uppercase",
-                        letterSpacing: "0.05em",
-                      }}
-                    >
-                      {tickerSummaryPicks.length} expiries
-                    </span>
+                    <div style={{ display: "flex", gap: t.spacing(4), flexWrap: "wrap", flexShrink: 0 }}>
+                      <div>
+                        <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, fontWeight: 600 }}>Spot</div>
+                        <div style={{ fontSize: "1.35rem", fontWeight: 800 }}>
+                          {formatStrikePrice(tickerReview.currentPrice)}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: "0.78rem",
+                            color:
+                              tickerReview.oneMonthPerfPct != null && tickerReview.oneMonthPerfPct >= 0
+                                ? t.colors.success
+                                : t.colors.danger,
+                          }}
+                        >
+                          1M {formatPct(tickerReview.oneMonthPerfPct)}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, fontWeight: 600 }}>RV 20d</div>
+                        <div style={{ fontSize: "1.1rem", fontWeight: 700 }}>
+                          {formatVolPct(tickerReview.realizedVol20dPct)}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, fontWeight: 600 }}>Skew</div>
+                        <div style={{ fontSize: "1.1rem", fontWeight: 700 }}>
+                          {tickerReview.skewPct == null
+                            ? "—"
+                            : `${tickerReview.skewPct > 0 ? "+" : ""}${tickerReview.skewPct.toFixed(1)}`}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: "0.72rem", color: t.colors.textMuted, fontWeight: 600 }}>Expiries</div>
+                        <div style={{ fontSize: "1.1rem", fontWeight: 700 }}>{tickerGrid.rows.length}</div>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "flex-end" }}>
+                        {(() => {
+                          const gridCopyKey = "ticker-grid";
+                          const gridCopied = lastCopiedBucketKey === gridCopyKey;
+                          return (
+                            <button
+                              type="button"
+                              title="Copy grid to clipboard (Excel format)"
+                              aria-label="Copy review grid to clipboard"
+                              onClick={() => {
+                                void navigator.clipboard.writeText(
+                                  buildTickerGridTsv(tickerGrid.levels, tickerGrid.rows, outcomePositionSide),
+                                );
+                                setLastCopiedBucketKey(gridCopyKey);
+                                window.setTimeout(
+                                  () => setLastCopiedBucketKey((p) => (p === gridCopyKey ? null : p)),
+                                  1500,
+                                );
+                              }}
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: t.spacing(1),
+                                padding: `${t.spacing(1)} ${t.spacing(2)}`,
+                                border: `1px solid ${gridCopied ? t.colors.success : t.colors.border}`,
+                                borderRadius: t.radius.sm,
+                                background: gridCopied ? `${t.colors.success}12` : "none",
+                                color: gridCopied ? t.colors.success : t.colors.textMuted,
+                                fontSize: "0.78rem",
+                                fontWeight: 500,
+                                cursor: "pointer",
+                              }}
+                            >
+                              <span className="material-symbols-outlined" style={{ fontSize: 15 }} aria-hidden>
+                                {gridCopied ? "check" : "content_copy"}
+                              </span>
+                              {gridCopied ? "Copied!" : "Copy grid"}
+                            </button>
+                          );
+                        })()}
+                      </div>
+                    </div>
                   </div>
                 </div>
-                <div
-                  style={{
-                    maxHeight: 440,
-                    overflow: "auto",
-                    borderTop: `1px solid ${t.colors.border}`,
-                  }}
-                >
-                  <table style={{ ...tableStyle, fontSize: "0.82rem" }}>
+                <div style={{ borderTop: `1px solid ${t.colors.border}`, overflowX: "auto" }}>
+                  <table
+                    style={{ ...tableStyle, fontSize: "0.82rem" }}
+                    aria-label={`${tickerReview.ticker} ${tickerReview.optionType === "P" ? "put" : "call"} review grid by expiration and OTM distance`}
+                  >
                     <thead>
                       <tr>
-                        <th
-                          style={{
-                            ...thStyle,
-                            position: "sticky",
-                            top: 0,
-                            zIndex: 2,
-                            boxShadow: `0 1px 0 ${t.colors.border}`,
-                          }}
-                        >
+                        <th scope="col" style={thStyle}>
                           Expiration
                         </th>
-                        <th
-                          style={{
-                            ...thNumStyle,
-                            position: "sticky",
-                            top: 0,
-                            zIndex: 2,
-                            boxShadow: `0 1px 0 ${t.colors.border}`,
-                          }}
-                        >
-                          DTE
-                        </th>
-                        <th
-                          style={{
-                            ...thNumStyle,
-                            position: "sticky",
-                            top: 0,
-                            zIndex: 2,
-                            boxShadow: `0 1px 0 ${t.colors.border}`,
-                          }}
-                        >
-                          Strike
-                        </th>
-                        <th
-                          style={{
-                            ...thNumStyle,
-                            position: "sticky",
-                            top: 0,
-                            zIndex: 2,
-                            boxShadow: `0 1px 0 ${t.colors.border}`,
-                          }}
-                        >
-                          OTM
-                        </th>
-                        <th
-                          style={{
-                            ...thNumStyle,
-                            position: "sticky",
-                            top: 0,
-                            zIndex: 2,
-                            boxShadow: `0 1px 0 ${t.colors.border}`,
-                          }}
-                        >
-                          <HelpTooltip
-                            theme={t}
-                            text={
-                              outcomePositionSide === "buy"
-                                ? "Debit as % of strike notional for this expiry (not annualized)."
-                                : "Premium as % of strike notional if held to expiration (not annualized)."
-                            }
-                          >
-                            <span style={{ cursor: "help" }}>{tablePeriodLabel}</span>
+                        <th scope="col" style={thNumStyle}>
+                          <HelpTooltip theme={t} text="Days to expiration from today.">
+                            <span style={{ cursor: "help" }}>DTE</span>
                           </HelpTooltip>
                         </th>
-                        <th
-                          style={{
-                            ...thNumStyle,
-                            position: "sticky",
-                            top: 0,
-                            zIndex: 2,
-                            boxShadow: `0 1px 0 ${t.colors.border}`,
-                          }}
-                        >
-                          <HelpTooltip
-                            theme={t}
-                            text={
-                              outcomePositionSide === "buy"
-                                ? "Annualized debit as % of strike (period yield × 365 ÷ DTE). Use this to compare expiries on the same scale."
-                                : "Annualized yield as % of strike (period yield × 365 ÷ DTE). Use this to compare expiries on the same scale."
-                            }
-                          >
-                            <span style={{ cursor: "help" }}>{tableAnnLabel}</span>
-                          </HelpTooltip>
-                        </th>
-                        {outcomeRankMode === "score" && (
-                          <th
-                            style={{
-                              ...thNumStyle,
-                              position: "sticky",
-                              top: 0,
-                              zIndex: 2,
-                              boxShadow: `0 1px 0 ${t.colors.border}`,
-                            }}
-                          >
+                        {tickerGrid.levels.map((lvl) => (
+                          <th key={lvl} scope="col" style={{ ...thNumStyle, minWidth: 128 }}>
                             <HelpTooltip
                               theme={t}
-                              text="Smart score — composite within this expiry only: yield, delta (assignment risk), IV vs 20-day RV, spread/OI liquidity, and put/call skew. Higher = better risk/reward for your side (write or buy). Compare different DTEs with annualized yield, not score."
+                              text={
+                                tickerGrid.isFallback
+                                  ? `Top-ranked strike in your ${tickerReview.otmRange.min}–${tickerReview.otmRange.max}% OTM range on each expiration.`
+                                  : `Nearest listed strike to ${lvl}% out-of-the-money on each expiration. Each cell shows strike, ${tablePeriodLabel.toLowerCase()}, ${tableAnnLabel.toLowerCase()}, actual OTM and assignment probability (Δ). Same column = same distance, so dates compare directly.`
+                              }
                             >
-                              <span style={{ cursor: "help" }}>Score</span>
+                              <span style={{ cursor: "help" }}>
+                                {tickerGrid.isFallback ? "Best in range" : `~${lvl}% OTM`}
+                              </span>
                             </HelpTooltip>
                           </th>
-                        )}
-                        <th
-                          style={{
-                            ...thStyle,
-                            position: "sticky",
-                            top: 0,
-                            zIndex: 2,
-                            boxShadow: `0 1px 0 ${t.colors.border}`,
-                            minWidth: 168,
-                          }}
-                        >
-                          Contract
-                        </th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {tickerSummaryPicks.map(({ expiration, dte, row }, i) => {
+                      {tickerGrid.rows.map(({ expiration, dte, cells }, rowIdx) => {
                         const expDate = new Date(expiration + "T00:00:00Z");
                         const expShort = expDate.toLocaleDateString(undefined, {
                           month: "short",
@@ -2477,87 +2470,126 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                           year: "numeric",
                           timeZone: "UTC",
                         });
-                        const periodPct = periodYieldFromRow(row, dte);
-                        const copyKey = `ticker-summary-${expiration}-${row.strike}`;
-                        const copied = lastCopiedOpportunityKey === copyKey;
-                        const isBestPeriod = i === tickerSummaryYieldLeaders.bestPeriodIdx;
-                        const isBestAnn = i === tickerSummaryYieldLeaders.bestAnnIdx;
-                        const rowBg = i % 2 === 1 ? `${t.colors.primary}06` : t.colors.background;
+                        const yieldColor = outcomePositionSide === "buy" ? t.colors.text : t.colors.success;
+                        const rowBg = rowIdx % 2 === 1 ? `${t.colors.primary}06` : t.colors.background;
+                        // Best return per unit of assignment risk on this date — the cell worth arguing for.
+                        let bestLevel: number | null = null;
+                        let bestEfficiency = -Infinity;
+                        for (const c of cells) {
+                          if (!c.pick || c.pick.delta == null || c.pick.delta <= 0) continue;
+                          const eff = c.pick.annYieldPct / c.pick.delta;
+                          if (eff > bestEfficiency) {
+                            bestEfficiency = eff;
+                            bestLevel = c.otmLevel;
+                          }
+                        }
                         return (
                           <tr
                             key={expiration}
-                            style={{
-                              backgroundColor: rowBg,
-                              borderBottom: `1px solid ${t.colors.border}`,
-                            }}
+                            style={{ backgroundColor: rowBg, borderBottom: `1px solid ${t.colors.border}` }}
                           >
-                            <td style={{ ...tdStyle, fontWeight: 600 }} title={expLong}>
+                            <th
+                              scope="row"
+                              style={{ ...tdStyle, fontWeight: 600, whiteSpace: "nowrap", textAlign: "left" }}
+                              title={expLong}
+                            >
                               <span style={{ display: "block" }}>{expShort}</span>
                               <span style={{ fontSize: "0.68rem", color: t.colors.textMuted, fontWeight: 500 }}>
                                 {expDate.toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" })}
                               </span>
-                            </td>
+                            </th>
                             <td style={tdNumStyle}>{dte}</td>
-                            <td style={{ ...tdNumStyle, fontWeight: 800 }}>{formatStrikePrice(row.strike)}</td>
-                            <td style={{ ...tdNumStyle, color: t.colors.textMuted, fontWeight: 500 }}>
-                              {row.actualOtmPct?.toFixed(1) ?? "—"}%
-                            </td>
-                            <td
-                              style={{
-                                ...tdNumStyle,
-                                color: outcomePositionSide === "buy" ? t.colors.text : t.colors.success,
-                                ...(isBestPeriod
-                                  ? { boxShadow: `inset 3px 0 0 ${rankingColors.gold}` }
-                                  : {}),
-                              }}
-                            >
-                              {periodPct.toFixed(2)}%
-                            </td>
-                            <td
-                              style={{
-                                ...tdNumStyle,
-                                fontWeight: 700,
-                                ...(isBestAnn ? { boxShadow: `inset 3px 0 0 ${rankingColors.gold}` } : {}),
-                              }}
-                            >
-                              {row.annYieldPct.toFixed(1)}%
-                            </td>
-                            {outcomeRankMode === "score" && (
-                              <td style={{ ...tdNumStyle, color: t.colors.textMuted }}>
-                                {row.score?.toFixed(1) ?? "—"}
-                              </td>
-                            )}
-                            <td style={{ ...tdStyle, maxWidth: 220 }}>
-                              <button
-                                type="button"
-                                title={copied ? "Copied" : "Click to copy"}
-                                aria-label={`Copy contract ${row.schwabSymbol}`}
-                                onClick={() => {
-                                  void navigator.clipboard.writeText(row.schwabSymbol);
-                                  setLastCopiedOpportunityKey(copyKey);
-                                  window.setTimeout(
-                                    () => setLastCopiedOpportunityKey((p) => (p === copyKey ? null : p)),
-                                    1200,
-                                  );
-                                }}
-                                style={{
-                                  background: "none",
-                                  border: "none",
-                                  padding: 0,
-                                  margin: 0,
-                                  cursor: "pointer",
-                                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                                  fontSize: "0.72rem",
-                                  fontWeight: 600,
-                                  color: copied ? t.colors.success : t.colors.text,
-                                  textAlign: "left",
-                                  lineHeight: 1.35,
-                                  wordBreak: "break-word",
-                                }}
-                              >
-                                {copied ? `${row.schwabSymbol} ✓` : row.schwabSymbol}
-                              </button>
-                            </td>
+                            {tickerGrid.levels.map((lvl) => {
+                              const pick = cells.find((c) => c.otmLevel === lvl)?.pick ?? null;
+                              if (!pick) {
+                                return (
+                                  <td key={lvl} style={{ ...tdNumStyle, color: t.colors.textMuted, fontWeight: 400 }}>
+                                    <span aria-label={`No liquid strike near ${lvl}% OTM on ${expLong}`}>—</span>
+                                  </td>
+                                );
+                              }
+                              const periodPct = periodYieldFromRow(pick, dte);
+                              const copyKey = `ticker-grid-${expiration}-${lvl}`;
+                              const copied = lastCopiedOpportunityKey === copyKey;
+                              const isBest = bestLevel === lvl;
+                              return (
+                                <td
+                                  key={lvl}
+                                  style={{
+                                    ...tdNumStyle,
+                                    padding: `${t.spacing(2)} ${t.spacing(2)}`,
+                                    ...(isBest
+                                      ? {
+                                          backgroundColor: `${rankingColors.gold}1A`,
+                                          boxShadow: `inset 0 0 0 1.5px ${rankingColors.gold}`,
+                                        }
+                                      : {}),
+                                  }}
+                                >
+                                  <button
+                                    type="button"
+                                    title={copied ? "Copied" : `Click to copy: ${pick.schwabSymbol}`}
+                                    aria-label={[
+                                      pick.schwabSymbol,
+                                      `${periodPct.toFixed(2)}% ${tablePeriodLabel.toLowerCase()}`,
+                                      `${pick.annYieldPct.toFixed(1)}% ${tableAnnLabel.toLowerCase()}`,
+                                      pick.actualOtmPct != null ? `${pick.actualOtmPct.toFixed(1)}% out of the money` : "",
+                                      pick.delta != null ? `${(pick.delta * 100).toFixed(0)}% assignment probability` : "",
+                                      isBest ? "best return per unit of risk on this expiration" : "",
+                                      "Activate to copy contract symbol",
+                                    ]
+                                      .filter(Boolean)
+                                      .join(", ")}
+                                    onClick={() => {
+                                      void navigator.clipboard.writeText(pick.schwabSymbol);
+                                      setLastCopiedOpportunityKey(copyKey);
+                                      window.setTimeout(
+                                        () => setLastCopiedOpportunityKey((p) => (p === copyKey ? null : p)),
+                                        1200,
+                                      );
+                                    }}
+                                    style={{
+                                      background: "none",
+                                      border: "none",
+                                      padding: 0,
+                                      margin: 0,
+                                      width: "100%",
+                                      cursor: "pointer",
+                                      font: "inherit",
+                                      color: "inherit",
+                                      textAlign: "right",
+                                    }}
+                                  >
+                                    <span
+                                      style={{
+                                        display: "block",
+                                        fontSize: "0.95rem",
+                                        fontWeight: 800,
+                                        color: copied ? t.colors.success : t.colors.text,
+                                      }}
+                                    >
+                                      {formatStrikePrice(pick.strike)}
+                                      {copied ? " ✓" : ""}
+                                    </span>
+                                    <span style={{ display: "block", fontWeight: 700, color: yieldColor }}>
+                                      {periodPct.toFixed(2)}%
+                                    </span>
+                                    <span
+                                      style={{
+                                        display: "block",
+                                        fontSize: "0.7rem",
+                                        fontWeight: 500,
+                                        color: t.colors.textMuted,
+                                      }}
+                                    >
+                                      {pick.annYieldPct.toFixed(1)}%/yr
+                                      {pick.actualOtmPct != null ? ` · ${pick.actualOtmPct.toFixed(1)}% OTM` : ""}
+                                      {pick.delta != null ? ` · Δ${(pick.delta * 100).toFixed(0)}%` : ""}
+                                    </span>
+                                  </button>
+                                </td>
+                              );
+                            })}
                           </tr>
                         );
                       })}
