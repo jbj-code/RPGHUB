@@ -11,6 +11,7 @@ import { handler as handlePrices } from "./_handlers/prices.js";
 import { handler as handleOptimize } from "./_handlers/optimize.js";
 import { handler as handleCollar } from "./_handlers/collar.js";
 import { handler as handleScreener } from "./_handlers/screener.js";
+import { handler as handleTickerReview } from "./_handlers/tickerReview.js";
 import { handler as handleExplorer } from "./_handlers/explorer.js";
 import { handler as handleSheetQuote } from "./_handlers/sheetQuote.js";
 import { handler as handleSheetBatch } from "./_handlers/sheetBatch.js";
@@ -36,13 +37,14 @@ export default async function handler(req: any, res: any) {
     case "optimize": return handleOptimize(req, res);
     case "collar":   return handleCollar(req, res);
     case "screener": return handleScreener(req, res);
+    case "tickerReview": return handleTickerReview(req, res);
     case "explorer":    return handleExplorer(req, res);
     case "sheetQuote":  return handleSheetQuote(req, res);
     case "sheetBatch":  return handleSheetBatch(req, res);
     case "sheetStock":  return handleSheetStock(req, res);
     default:
       res.status(400).json({
-        error: `Unknown or missing action: "${action}". Valid: auth, status, quotes, returns, figi, prices, optimize, collar, screener, explorer, sheetQuote, sheetBatch, sheetStock`,
+        error: `Unknown or missing action: "${action}". Valid: auth, status, quotes, returns, figi, prices, optimize, collar, screener, tickerReview, explorer, sheetQuote, sheetBatch, sheetStock`,
       });
   }
 }
