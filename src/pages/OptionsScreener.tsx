@@ -50,6 +50,8 @@ type RankedOption = {
   skewPct?: number | null;
   /** |delta| from option quote — probability of finishing ITM / being assigned. */
   delta?: number | null;
+  /** Open interest (contracts) from chain or live quote. */
+  openInterest?: number | null;
   /** Theta: dollars of time decay per contract per day (positive = earned for writes). */
   thetaPerDay?: number | null;
   schwabSymbol: string;
@@ -252,6 +254,11 @@ function formatStrikePrice(n: number): string {
   return Number.isInteger(n) ? `$${n.toLocaleString("en-US")}` : `$${n.toFixed(2)}`;
 }
 
+function formatOpenInterest(oi: number | null | undefined): string {
+  if (oi == null || !Number.isFinite(oi)) return "—";
+  return Math.round(oi).toLocaleString("en-US");
+}
+
 /** Single-ticker review grid → TSV (one block of columns per OTM level). */
 function buildTickerGridTsv(
   levels: number[],
@@ -263,14 +270,21 @@ function buildTickerGridTsv(
   const annLabel = positionSide === "buy" ? "Ann. debit %" : "Ann. yield %";
   const headers = ["Expiration", "DTE"];
   for (const lvl of levels) {
-    headers.push(`${lvl}% Strike`, `${lvl}% OTM actual`, `${lvl}% ${periodLabel}`, `${lvl}% ${annLabel}`, `${lvl}% Contract`);
+    headers.push(
+      `${lvl}% Strike`,
+      `${lvl}% OTM actual`,
+      `${lvl}% ${periodLabel}`,
+      `${lvl}% ${annLabel}`,
+      `${lvl}% OI`,
+      `${lvl}% Contract`,
+    );
   }
   const body = rows.map((r) => {
     const cols: (string | number)[] = [r.expiration, r.dte];
     for (const lvl of levels) {
       const pick = r.cells.find((c) => c.otmLevel === lvl)?.pick ?? null;
       if (!pick) {
-        cols.push("", "", "", "", "");
+        cols.push("", "", "", "", "", "");
         continue;
       }
       cols.push(
@@ -278,6 +292,7 @@ function buildTickerGridTsv(
         pick.actualOtmPct == null ? "" : pick.actualOtmPct.toFixed(1),
         pct(periodYieldFromRow(pick, r.dte)),
         pct(pick.annYieldPct),
+        pick.openInterest ?? "",
         pick.schwabSymbol,
       );
     }
@@ -965,7 +980,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
             {variant === "singleTicker" && r.liquidityFlags && r.liquidityFlags.length > 0 && (
               <span style={{ display: "block", fontSize: "0.65rem", color: t.colors.textMuted, fontWeight: 500, marginTop: 2 }}>
                 {[
-                  r.liquidityFlags.includes("mark_pricing") ? "Mark/mid price" : "",
+                  r.liquidityFlags.includes("mark_pricing") ? "Mark/last price" : "",
                   r.liquidityFlags.includes("wide_spread") ? "Wide spread" : "",
                   r.liquidityFlags.includes("low_oi") ? "Low OI" : "",
                 ]
@@ -984,6 +999,9 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
           }}>
             {r.delta == null ? "—" : `${(r.delta * 100).toFixed(0)}%`}
           </td>
+          {variant === "singleTicker" && (
+            <td style={tdNumStyle}>{formatOpenInterest(r.openInterest)}</td>
+          )}
           <td style={tdNumStyle}>
             <span>
               {formatVolPct(r.impliedVolPct ?? null)}
@@ -1139,6 +1157,16 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
             <span style={{ cursor: "help" }}>Δ Prob</span>
           </HelpTooltip>
         </th>
+        {single && (
+          <th style={thNumStyle}>
+            <HelpTooltip
+              theme={t}
+              text="Open interest — number of outstanding contracts at this strike and expiration. Higher OI usually means easier fills and more reliable quotes."
+            >
+              <span style={{ cursor: "help" }}>OI</span>
+            </HelpTooltip>
+          </th>
+        )}
         <th style={thNumStyle}>
           <HelpTooltip
             theme={t}
@@ -1660,7 +1688,8 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                 <li><strong>Read across a row</strong> — tradeoff between yield and assignment risk on one expiry.</li>
                 <li><strong>Read down a column</strong> — same OTM distance across dates (e.g. all ~10% OTM monthlies).</li>
                 <li><strong>Gold border</strong> — best annualized yield per unit of assignment probability (yield ÷ delta) on that row; not always the highest yield strike (usually not the left-most column). Strikes under {GRID_BEST_MIN_DELTA * 100}% delta are excluded from gold.</li>
-                <li><strong>Click a cell</strong> — copies the Schwab contract symbol. <strong>*</strong> = indicative mark/last when no live bid.</li>
+                <li><strong>Premium / yield</strong> — for writes and buys, when bid and ask are both quoted, premium uses the midpoint (bid + ask) ÷ 2 (desk-style fair value); otherwise ask/bid side fallback, then mark or last (cells marked <strong>*</strong>). Bid/ask columns still show the live two-sided quote.</li>
+                <li><strong>Click a cell</strong> — copies the Schwab contract symbol. Works for put writes and covered-call writes (OTM calls, sell to open).</li>
                 <li><strong>Detail tables</strong> — top strikes per expiration by smart score or yield-only (your ranking choice).</li>
               </ul>
 
@@ -2662,6 +2691,9 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                                       `${pick.annYieldPct.toFixed(1)}% ${tableAnnLabel.toLowerCase()}`,
                                       pick.actualOtmPct != null ? `${pick.actualOtmPct.toFixed(1)}% out of the money` : "",
                                       pick.delta != null ? `${(pick.delta * 100).toFixed(0)}% assignment probability` : "",
+                                      pick.openInterest != null
+                                        ? `${formatOpenInterest(pick.openInterest)} open interest`
+                                        : "open interest unknown",
                                       isBest ? "best return per unit of risk on this expiration" : "",
                                       indicative ? "indicative price, no live bid or ask" : "",
                                       "Activate to copy contract symbol",
@@ -2758,6 +2790,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                                       {pick.annYieldPct.toFixed(1)}%/yr
                                       {pick.actualOtmPct != null ? ` · ${pick.actualOtmPct.toFixed(1)}% OTM` : ""}
                                       {pick.delta != null ? ` · Δ${(pick.delta * 100).toFixed(0)}%` : ""}
+                                      {` · OI ${formatOpenInterest(pick.openInterest)}`}
                                     </span>
                                   </button>
                                 </td>

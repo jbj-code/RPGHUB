@@ -163,7 +163,7 @@ type RankedOption = {
   strike: number;
   bid: number;
   ask: number;
-  /** Bid when selling to open, ask when buying to open — used for yield / cost %. */
+  /** Premium used for yield / cost % (mid when bid+ask quoted, else side fallback or mark/last). */
   limitPrice: number;
   annYieldPct: number;
   /** Premium ÷ strike notional for this expiry (not annualized). */
@@ -177,6 +177,7 @@ type RankedOption = {
   skewPct: number | null;
   /** |delta| from option quote (0–1). Approximates probability of finishing ITM / being assigned. */
   delta: number | null;
+  openInterest: number | null;
   /** Theta from option quote: dollars of time-decay earned (write) or lost (buy) per calendar day per contract. */
   thetaPerDay: number | null;
   /** Internal composite score used for ranking (higher is better). */
@@ -1108,21 +1109,25 @@ export async function handler(req: any, res: any): Promise<void> {
       const quote = optionQuotes[key];
       const bid = quote?.bid ?? 0;
       const ask = quote?.ask ?? 0;
-      const optionPrice = isBuyToOpen
-        ? ask > 0
-          ? ask
-          : bid
-        : bid > 0
-          ? bid
-          : ask;
+      const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
+      const optionPrice =
+        mid > 0
+          ? mid
+          : isBuyToOpen
+            ? ask > 0
+              ? ask
+              : bid
+            : bid > 0
+              ? bid
+              : ask;
       if (optionPrice <= 0) continue;
       // Sell legs need a bid; buy legs need an ask — always required.
       if (!isBuyToOpen && bid <= 0) { liquidityFiltered.spread++; continue; }
       if (isBuyToOpen && ask <= 0) { liquidityFiltered.spread++; continue; }
 
       const spread = ask > 0 && bid > 0 ? ask - bid : Math.max(ask, bid);
-      const mid = ask > 0 && bid > 0 ? (ask + bid) / 2 : optionPrice;
-      const spreadPct = mid > 0 ? spread / mid : 1;
+      const spreadMid = mid > 0 ? mid : optionPrice;
+      const spreadPct = spreadMid > 0 ? spread / spreadMid : 1;
 
       const otmForTier =
         spec.otmPct === CUSTOM_OTM_KEY
@@ -1285,6 +1290,7 @@ export async function handler(req: any, res: any): Promise<void> {
         realizedVol20dPct: rvPct == null ? null : round2(rvPct),
         skewPct: skewPctByTicker[spec.ticker] ?? null,
         delta: rawDelta != null ? round2(clamp(Math.abs(rawDelta), 0, 1)) : null,
+        openInterest: oi != null && Number.isFinite(oi) ? Math.round(oi) : null,
         // thetaPerDay: dollars of time decay per contract per day.
         // Schwab theta is negative (value decays); flip sign for writes so display is positive $ earned/day.
         thetaPerDay: (() => {

@@ -35,6 +35,7 @@ type ReviewRow = {
   skewPct: number | null;
   delta: number | null;
   thetaPerDay: number | null;
+  openInterest: number | null;
   score: number;
   liquidityFlags?: string[];
   schwabSymbol: string;
@@ -165,7 +166,7 @@ function mergeQuoteLites(chain: QuoteLite, live?: QuoteLite): QuoteLite {
   };
 }
 
-/** Premium for yield/score — chain mark/mid so LEAPS count, not only strikes with a live bid. */
+/** Premium for yield/score — prefer bid/ask midpoint when both sides quote; else mark/last for LEAPS. */
 function resolveOptionPrice(
   lite: QuoteLite,
   isBuyToOpen: boolean,
@@ -178,9 +179,11 @@ function resolveOptionPrice(
   const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
   const allowMark = liquidityMode !== "strict";
 
+  // Desk-style fair premium for yield/score: midpoint whenever the quote is two-sided.
+  if (mid > 0) return { price: mid, source: "mid", displayBid: bid, displayAsk: ask };
+
   if (isBuyToOpen) {
     if (ask > 0) return { price: ask, source: "ask", displayBid: bid, displayAsk: ask };
-    if (mid > 0) return { price: mid, source: "mid", displayBid: bid, displayAsk: ask };
     if (allowMark && mark > 0) {
       return { price: mark, source: "mark", displayBid: mark, displayAsk: mark };
     }
@@ -192,7 +195,6 @@ function resolveOptionPrice(
   }
 
   if (bid > 0) return { price: bid, source: "bid", displayBid: bid, displayAsk: ask > 0 ? ask : bid };
-  if (mid > 0) return { price: mid, source: "mid", displayBid: bid, displayAsk: ask };
   if (allowMark && mark > 0) {
     return { price: mark, source: "mark", displayBid: mark, displayAsk: ask > 0 ? ask : mark };
   }
@@ -738,7 +740,7 @@ export async function handler(req: any, res: any): Promise<void> {
       const bid = displayBid;
       const ask = displayAsk;
       const liquidityFlags: string[] = [];
-      if (priceSource === "mark" || priceSource === "last" || priceSource === "mid") {
+      if (priceSource === "mark" || priceSource === "last") {
         liquidityFlags.push("mark_pricing");
       }
 
@@ -858,6 +860,7 @@ export async function handler(req: any, res: any): Promise<void> {
         realizedVol20dPct: rvPct == null ? null : round2(rvPct),
         skewPct,
         delta: rawDelta != null ? round2(clamp(Math.abs(rawDelta), 0, 1)) : null,
+        openInterest: oi != null && Number.isFinite(oi) ? Math.round(oi) : null,
         thetaPerDay: (() => {
           const th = chainLite.theta;
           if (th == null || !Number.isFinite(th)) return null;
@@ -984,6 +987,8 @@ export async function handler(req: any, res: any): Promise<void> {
           row.annYieldPct = round2(row.periodYieldPct * (365 / Math.max(1, row.dte)));
           if (live.delta != null) row.delta = round2(clamp(Math.abs(live.delta), 0, 1));
           if (live.impliedVolPct != null) row.impliedVolPct = round2(live.impliedVolPct);
+          const liveOi = live.openInterest ?? null;
+          if (liveOi != null && Number.isFinite(liveOi)) row.openInterest = Math.round(liveOi);
         }
       });
       for (const block of expirations) {
