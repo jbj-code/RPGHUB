@@ -73,6 +73,7 @@ type TickerReviewResponse = {
   oneMonthPerfPct: number | null;
   realizedVol20dPct: number | null;
   skewPct: number | null;
+  minExpiration: string;
   maxExpiration: string;
   optionType: "P" | "C";
   positionSide: PositionSide;
@@ -773,6 +774,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
   );
   const [scanMode, setScanMode] = useState<ScanMode>("universe");
   const [singleTicker, setSingleTicker] = useState("");
+  const [minExpiration, setMinExpiration] = useState<string>(() => expirations[0]?.value ?? "");
   const [maxExpiration, setMaxExpiration] = useState<string>(
     () => expirations[expirations.length - 1]?.value ?? ""
   );
@@ -1229,8 +1231,16 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
       setScanError("Invalid ticker format.");
       return;
     }
+    if (!minExpiration || !/^\d{4}-\d{2}-\d{2}$/.test(minExpiration)) {
+      setScanError("Choose a start expiration date.");
+      return;
+    }
     if (!maxExpiration || !/^\d{4}-\d{2}-\d{2}$/.test(maxExpiration)) {
-      setScanError("Choose a latest expiration date.");
+      setScanError("Choose a through expiration date.");
+      return;
+    }
+    if (minExpiration > maxExpiration) {
+      setScanError("Start expiration must be on or before through expiration.");
       return;
     }
     if (otmPctMax <= otmPctMin) {
@@ -1254,6 +1264,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
         body: JSON.stringify({
           action: "tickerReview",
           ticker: sym,
+          minExpiration,
           maxExpiration,
           optionType,
           positionSide,
@@ -1271,6 +1282,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
         oneMonthPerfPct: null,
         realizedVol20dPct: null,
         skewPct: null,
+        minExpiration,
         maxExpiration,
         optionType: optionType === "calls" ? "C" : "P",
         positionSide,
@@ -1771,6 +1783,23 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                   placeholder="e.g. MDB"
                   style={{ ...inputStyle, fontWeight: 700, letterSpacing: "0.04em" }}
                   aria-label="Stock ticker"
+                />
+              </div>
+              <div>
+                <span style={labelStyle}>
+                  <HelpTooltip
+                    theme={t}
+                    text="Earliest expiration date to include. Expiries before this date are skipped — use this to avoid the nearest weekly (e.g. skip this Friday and start at the monthly)."
+                  >
+                    <span style={{ cursor: "help" }}>Start expiration</span>
+                  </HelpTooltip>
+                </span>
+                <input
+                  type="date"
+                  value={minExpiration}
+                  onChange={(e) => setMinExpiration(e.target.value)}
+                  style={{ ...inputStyle }}
+                  aria-label="Earliest expiration date"
                 />
               </div>
               <div>
@@ -2362,10 +2391,15 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                 }}
               >
                 {(() => {
-                  const throughExpLabel = new Date(tickerReview.maxExpiration + "T00:00:00Z").toLocaleDateString(
-                    undefined,
-                    { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" },
-                  );
+                  const formatExpChip = (iso: string) =>
+                    new Date(iso + "T00:00:00Z").toLocaleDateString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                      timeZone: "UTC",
+                    });
+                  const fromExpLabel = formatExpChip(tickerReview.minExpiration ?? minExpiration);
+                  const throughExpLabel = formatExpChip(tickerReview.maxExpiration);
                   const metaChipStyle: React.CSSProperties = {
                     display: "inline-flex",
                     alignItems: "center",
@@ -2524,7 +2558,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                           tickerReview.optionType === "P" ? "Puts" : "Calls",
                           outcomePositionSide === "buy" ? "Buy to open" : "Sell to open",
                           `OTM ${tickerReview.otmRange.min}–${tickerReview.otmRange.max}%`,
-                          `Through ${throughExpLabel}`,
+                          `Expiries ${fromExpLabel} – ${throughExpLabel}`,
                           outcomeRankMode === "yield" ? "Rank: yield" : "Rank: smart score",
                         ].map((chip) => (
                           <span key={chip} style={metaChipStyle}>

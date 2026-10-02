@@ -438,6 +438,13 @@ export async function handler(req: any, res: any): Promise<void> {
     return;
   }
 
+  const minExpirationRaw = typeof body.minExpiration === "string" ? body.minExpiration.trim() : "";
+  let minExpiration = minExpirationRaw;
+  if (minExpiration && !/^\d{4}-\d{2}-\d{2}$/.test(minExpiration)) {
+    res.status(400).json({ error: "minExpiration must be YYYY-MM-DD (earliest expiry to include)." });
+    return;
+  }
+
   const optionTypeRaw = body.optionType ?? "puts";
   const optionType = String(optionTypeRaw).toLowerCase();
   const type: "P" | "C" =
@@ -464,8 +471,24 @@ export async function handler(req: any, res: any): Promise<void> {
 
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
+  if (!minExpiration) {
+    minExpiration = today.toISOString().slice(0, 10);
+  }
+  const minExpDate = new Date(minExpiration + "T00:00:00Z");
+  if (Number.isNaN(minExpDate.getTime())) {
+    res.status(400).json({ error: "minExpiration is not a valid date." });
+    return;
+  }
   if (maxExpDate.getTime() < today.getTime()) {
     res.status(400).json({ error: "maxExpiration must be today or later." });
+    return;
+  }
+  if (minExpDate.getTime() < today.getTime()) {
+    res.status(400).json({ error: "minExpiration must be today or later." });
+    return;
+  }
+  if (minExpDate.getTime() > maxExpDate.getTime()) {
+    res.status(400).json({ error: "minExpiration must be on or before maxExpiration." });
     return;
   }
 
@@ -497,7 +520,7 @@ export async function handler(req: any, res: any): Promise<void> {
 
     const warnings: string[] = [];
     warnings.push(
-      `Single-ticker review: ${rawTicker}, ${type === "P" ? "puts" : "calls"}, expiries through ${maxExpiration}, OTM ${otmPctMin}–${otmPctMax}%.`
+      `Single-ticker review: ${rawTicker}, ${type === "P" ? "puts" : "calls"}, expiries ${minExpiration} through ${maxExpiration}, OTM ${otmPctMin}–${otmPctMax}%.`
     );
 
     const quotesResp = await fetchSchwabWithRetry(
@@ -670,7 +693,7 @@ export async function handler(req: any, res: any): Promise<void> {
       if (!expiry) continue;
       const expDate = new Date(expiry + "T00:00:00Z");
       if (expDate.getTime() > maxExpDate.getTime()) continue;
-      if (expDate.getTime() < today.getTime()) continue;
+      if (expDate.getTime() < minExpDate.getTime()) continue;
 
       const strikesObj = primaryMap[expKey];
       if (!strikesObj || typeof strikesObj !== "object") continue;
@@ -705,6 +728,7 @@ export async function handler(req: any, res: any): Promise<void> {
         oneMonthPerfPct,
         realizedVol20dPct: realizedVol20dPct == null ? null : round2(realizedVol20dPct),
         skewPct,
+        minExpiration,
         maxExpiration,
         optionType: type,
         positionSide: isBuyToOpen ? "buy" : "write",
@@ -1008,6 +1032,7 @@ export async function handler(req: any, res: any): Promise<void> {
       oneMonthPerfPct,
       realizedVol20dPct: realizedVol20dPct == null ? null : round2(realizedVol20dPct),
       skewPct,
+      minExpiration,
       maxExpiration,
       optionType: type,
       positionSide: isBuyToOpen ? "buy" : "write",
