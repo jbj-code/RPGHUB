@@ -268,6 +268,50 @@ function getStrikesInRange(
   });
 }
 
+/**
+ * One listed strike just outside the scan band (per expiry) so edge grid columns can show
+ * the nearest market line to the first/last OTM targets when the ladder ends inside min/max.
+ */
+function reviewAnchorStrikesBeyondRange(
+  strikes: number[],
+  spot: number,
+  minOtmPct: number,
+  maxOtmPct: number,
+  side: "C" | "P",
+): number[] {
+  const inRange = getStrikesInRange(strikes, spot, minOtmPct, maxOtmPct, side);
+  if (inRange.length === 0) return [];
+  const anchors: number[] = [];
+
+  if (side === "C") {
+    const maxIn = Math.max(...inRange);
+    const nextAbove = strikes
+      .filter((s) => s > maxIn && s > spot)
+      .sort((a, b) => a - b)[0];
+    if (nextAbove != null) anchors.push(nextAbove);
+
+    const minIn = Math.min(...inRange);
+    const nextBelow = strikes
+      .filter((s) => s > spot && s < minIn)
+      .sort((a, b) => b - a)[0];
+    if (nextBelow != null) anchors.push(nextBelow);
+  } else {
+    const minIn = Math.min(...inRange);
+    const nextLower = strikes
+      .filter((s) => s < spot && s < minIn)
+      .sort((a, b) => b - a)[0];
+    if (nextLower != null) anchors.push(nextLower);
+
+    const maxIn = Math.max(...inRange);
+    const nextHigher = strikes
+      .filter((s) => s < spot && s > maxIn)
+      .sort((a, b) => a - b)[0];
+    if (nextHigher != null) anchors.push(nextHigher);
+  }
+
+  return anchors;
+}
+
 function annualizedRealizedVolPctFromCloses(closes: number[]): number | null {
   const c = closes.filter((x) => typeof x === "number" && x > 0);
   if (c.length < 12) return null;
@@ -321,12 +365,12 @@ function buildOtmLevels(minPct: number, maxPct: number): number[] {
   return levels;
 }
 
-/** Max |actual OTM − column target| still worth showing (half-step between adjacent columns). */
+/** Max |actual OTM − column target| still worth showing. Edge columns use the full step to the neighbor so the outer band can reach the next listed strike. */
 function maxOtmAssignDist(levels: number[], columnIndex: number): number {
   const level = levels[columnIndex]!;
   if (levels.length === 1) return 2.5;
-  if (columnIndex === 0) return (levels[1]! - level) / 2;
-  if (columnIndex === levels.length - 1) return (level - levels[columnIndex - 1]!) / 2;
+  if (columnIndex === 0) return levels[1]! - level;
+  if (columnIndex === levels.length - 1) return level - levels[columnIndex - 1]!;
   return Math.min(
     (level - levels[columnIndex - 1]!) / 2,
     (levels[columnIndex + 1]! - level) / 2,
@@ -334,9 +378,8 @@ function maxOtmAssignDist(levels: number[], columnIndex: number): number {
 }
 
 /**
- * One strike per column, low → high label order: closest unused strike to each column target
- * (same rule for every band, including the last). Skips a band when the nearest unused strike
- * is farther than half the gap to the next label.
+ * One strike per column, low → high label order: closest unused strike to each column target.
+ * Middle bands use half-step distance caps; first/last bands allow up to a full step (see maxOtmAssignDist).
  */
 function assignOtmMatrixColumns(
   rows: ReviewRow[],
@@ -710,6 +753,8 @@ export async function handler(req: any, res: any): Promise<void> {
       strike: number;
       impliedVolPctFromChain: number | null;
       chainContract: Record<string, unknown>;
+      /** Listed strike one step outside min/max OTM scan — for grid edge columns only. */
+      matrixAnchorBeyondScan?: boolean;
     };
     const specs: Spec[] = [];
 
@@ -737,7 +782,16 @@ export async function handler(req: any, res: any): Promise<void> {
         if (Array.isArray(contracts) && contracts.length > 0) strikes.push(strike);
       }
       const validStrikes = getStrikesInRange(strikes, spot, otmPctMin, otmPctMax, type);
-      for (const strike of validStrikes) {
+      const anchorStrikes = reviewAnchorStrikesBeyondRange(
+        strikes,
+        spot,
+        otmPctMin,
+        otmPctMax,
+        type,
+      );
+      const anchorSet = new Set(anchorStrikes);
+      const strikesToScore = [...new Set([...validStrikes, ...anchorStrikes])];
+      for (const strike of strikesToScore) {
         const contractsRaw = contractsAtStrike(strikesObj, strike);
         if (!contractsRaw || contractsRaw.length === 0) continue;
         const c0 = contractsRaw[0];
@@ -748,6 +802,7 @@ export async function handler(req: any, res: any): Promise<void> {
           impliedVolPctFromChain:
             c0 && typeof c0 === "object" ? impliedVolPercentFromQuote(c0) : null,
           chainContract: c0 && typeof c0 === "object" ? (c0 as Record<string, unknown>) : {},
+          matrixAnchorBeyondScan: anchorSet.has(strike),
         });
       }
     }
@@ -799,6 +854,9 @@ export async function handler(req: any, res: any): Promise<void> {
       if (priceSource === "mark" || priceSource === "last") {
         liquidityFlags.push("mark_pricing");
       }
+      if (spec.matrixAnchorBeyondScan) {
+        liquidityFlags.push("beyond_scan_otm");
+      }
 
       const expDate = new Date(spec.expiry + "T00:00:00Z");
       const dte = Math.max(1, daysBetween(today, expDate));
@@ -813,7 +871,12 @@ export async function handler(req: any, res: any): Promise<void> {
           : ((spot - spec.strike) / spot) * 100
       );
       const BUFFER = 2;
-      if (actualOtmPct < otmPctMin - BUFFER || actualOtmPct > otmPctMax + BUFFER) continue;
+      if (spec.matrixAnchorBeyondScan) {
+        if (actualOtmPct >= otmPctMin && actualOtmPct <= otmPctMax) continue;
+        if (actualOtmPct < otmPctMin - BUFFER || actualOtmPct > otmPctMax + BUFFER + 8) continue;
+      } else if (actualOtmPct < otmPctMin - BUFFER || actualOtmPct > otmPctMax + BUFFER) {
+        continue;
+      }
 
       const otmForTier = actualOtmPct;
       const otmTierAdj =
@@ -963,7 +1026,8 @@ export async function handler(req: any, res: any): Promise<void> {
     const expirations = [...byExpiry.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([expiration, rows]) => {
-        const deduped = sortRows(rows, rankMode).slice(0, topPerExpiry);
+        const forPicks = rows.filter((r) => !r.liquidityFlags?.includes("beyond_scan_otm"));
+        const deduped = sortRows(forPicks.length > 0 ? forPicks : rows, rankMode).slice(0, topPerExpiry);
         deduped.forEach((r, idx) => {
           r.rank = idx + 1;
         });
