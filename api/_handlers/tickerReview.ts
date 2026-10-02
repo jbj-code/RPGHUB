@@ -320,18 +320,49 @@ function buildOtmLevels(minPct: number, maxPct: number): number[] {
   return levels.length > 0 ? levels : [minPct];
 }
 
-function pickNearestOtm(rows: ReviewRow[], level: number, tolerance: number): ReviewRow | null {
-  let best: ReviewRow | null = null;
-  let bestDist = Infinity;
-  for (const r of rows) {
-    const dist = Math.abs(r.actualOtmPct - level);
-    if (dist > tolerance) continue;
-    if (dist < bestDist || (dist === bestDist && best != null && r.periodYieldPct > best.periodYieldPct)) {
-      best = r;
-      bestDist = dist;
+/** Max |actual OTM − column target| still worth showing (half-step between adjacent columns). */
+function maxOtmAssignDist(levels: number[], columnIndex: number): number {
+  const level = levels[columnIndex]!;
+  if (levels.length === 1) return 2.5;
+  if (columnIndex === 0) return (levels[1]! - level) / 2;
+  if (columnIndex === levels.length - 1) return (level - levels[columnIndex - 1]!) / 2;
+  return Math.min(
+    (level - levels[columnIndex - 1]!) / 2,
+    (levels[columnIndex + 1]! - level) / 2,
+  );
+}
+
+/**
+ * One strike per column: walk labels low → high, each column gets the closest unused strike
+ * to its target. Skips assignment when even the best unused strike is too far (avoids e.g.
+ * parking an 18% OTM strike in the ~30% column after nearer targets took the rest).
+ */
+function assignOtmMatrixColumns(
+  rows: ReviewRow[],
+  levels: number[],
+): Array<{ otmLevel: number; pick: ReviewRow | null }> {
+  const usedStrikes = new Set<number>();
+  return levels.map((otmLevel, colIdx) => {
+    const maxDist = maxOtmAssignDist(levels, colIdx);
+    let best: ReviewRow | null = null;
+    let bestDist = Infinity;
+    for (const r of rows) {
+      if (usedStrikes.has(r.strike)) continue;
+      const dist = Math.abs(r.actualOtmPct - otmLevel);
+      if (
+        dist < bestDist ||
+        (dist === bestDist && best != null && r.periodYieldPct > best.periodYieldPct)
+      ) {
+        best = r;
+        bestDist = dist;
+      }
     }
-  }
-  return best;
+    if (best == null || bestDist > maxDist + 1e-6) {
+      return { otmLevel, pick: null };
+    }
+    usedStrikes.add(best.strike);
+    return { otmLevel, pick: best };
+  });
 }
 
 function sortRows(rows: ReviewRow[], rankMode: RankMode): ReviewRow[] {
@@ -464,10 +495,6 @@ export async function handler(req: any, res: any): Promise<void> {
   const rankMode = parseRankMode(body.rankMode);
   const liquidityMode = parseLiquidityMode(body.liquidityMode);
   const otmLevels = buildOtmLevels(otmPctMin, otmPctMax);
-  const otmLevelTolerance = Math.max(
-    2,
-    otmLevels.length > 1 ? (otmLevels[1]! - otmLevels[0]!) / 2 : 2.5,
-  );
 
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
@@ -919,14 +946,7 @@ export async function handler(req: any, res: any): Promise<void> {
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([expiration, rows]) => {
           const expDate = new Date(expiration + "T00:00:00Z");
-          // A sparse far-dated ladder can put two columns on the same strike; show it once.
-          const usedStrikes = new Set<number>();
-          const cells = otmLevels.map((otmLevel) => {
-            const pick = pickNearestOtm(rows, otmLevel, otmLevelTolerance);
-            if (!pick || usedStrikes.has(pick.strike)) return { otmLevel, pick: null };
-            usedStrikes.add(pick.strike);
-            return { otmLevel, pick };
-          });
+          const cells = assignOtmMatrixColumns(rows, otmLevels);
           return {
             expiration,
             dte: Math.max(1, daysBetween(today, expDate)),
@@ -957,7 +977,7 @@ export async function handler(req: any, res: any): Promise<void> {
       `${specs.length} OTM contract(s) scored across ${byExpiry.size} expiration(s); returning top ${topPerExpiry} per expiry (${expirations.length} date(s) with picks).`,
     );
     warnings.push(
-      `Review grid: ${matrix.length} expiration(s) × ${otmLevels.map((l) => `${l}%`).join(" / ")} OTM columns (nearest listed strike, ±${otmLevelTolerance}%).`,
+      `Review grid: ${matrix.length} expiration(s) × ${otmLevels.map((l) => `${l}%`).join(" / ")} OTM columns (closest unused strike per column; actual OTM in each cell).`,
     );
 
     const quoteRowSet = new Set<ReviewRow>();
