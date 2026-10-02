@@ -2631,7 +2631,7 @@ export function OptionsScreener({ theme: t, sidebarWidth }: OptionsScreenerProps
                               text={
                                 tickerGrid.isFallback
                                   ? `Top-ranked strike in your ${tickerReview.otmRange.min}–${tickerReview.otmRange.max}% OTM range on each expiration.`
-                                  : `~${lvl}% OTM — closest unused listed strike to this target (each strike at most once; e.g. 9.8% OTM can win ~10% over 11.4%). Actual OTM % always shown below. Top: strike and ${tablePeriodLabel.toLowerCase()}; then ${tableAnnLabel.toLowerCase()}, actual OTM, Δ, OI.`
+                                  : `~${lvl}% OTM — closest unused listed strike to this target (each strike once; actual OTM in the cell). Top: strike and ${tablePeriodLabel.toLowerCase()}; then ${tableAnnLabel.toLowerCase()}, actual OTM, Δ, OI.`
                               }
                             >
                               <span style={{ cursor: "help" }}>

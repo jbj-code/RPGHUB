@@ -306,18 +306,19 @@ function formatSchwabSymbol(args: {
 const MAX_OTM_LEVELS = 5;
 
 /**
- * Fixed OTM columns shared by every expiration. Anchoring on the scan's min OTM (rather than
- * each expiry's best strike) is what lets a reviewer read down a column and compare the same
- * distance across dates.
+ * Up to five OTM column labels from the user's min–max scan range. Wide ranges (e.g. 10–70%)
+ * are spread evenly (10 / 25 / 40 / 55 / 70), not stuck at min + 5% steps only.
  */
 function buildOtmLevels(minPct: number, maxPct: number): number[] {
-  const span = Math.max(0, maxPct - minPct);
-  const step = span >= 15 ? 5 : Math.max(1, Math.round((span / 3) * 2) / 2);
+  if (maxPct <= minPct + 1e-6) return [Math.round(minPct * 10) / 10];
+  const n = MAX_OTM_LEVELS;
   const levels: number[] = [];
-  for (let v = minPct; v <= maxPct + 1e-6 && levels.length < MAX_OTM_LEVELS; v += step) {
+  for (let i = 0; i < n; i++) {
+    const t = n === 1 ? 0 : i / (n - 1);
+    const v = minPct + t * (maxPct - minPct);
     levels.push(Math.round(v * 10) / 10);
   }
-  return levels.length > 0 ? levels : [minPct];
+  return levels;
 }
 
 /** Max |actual OTM − column target| still worth showing (half-step between adjacent columns). */
@@ -333,14 +334,18 @@ function maxOtmAssignDist(levels: number[], columnIndex: number): number {
 }
 
 /**
- * One strike per column: walk labels low → high, each column gets the closest unused strike
- * to its target. Skips assignment when even the best unused strike is too far (avoids e.g.
- * parking an 18% OTM strike in the ~30% column after nearer targets took the rest).
+ * One strike per column, low → high label order: closest unused strike to each column target
+ * (same rule for every band, including the last). Skips a band when the nearest unused strike
+ * is farther than half the gap to the next label.
  */
 function assignOtmMatrixColumns(
   rows: ReviewRow[],
   levels: number[],
 ): Array<{ otmLevel: number; pick: ReviewRow | null }> {
+  if (rows.length === 0 || levels.length === 0) {
+    return levels.map((otmLevel) => ({ otmLevel, pick: null }));
+  }
+
   const usedStrikes = new Set<number>();
   return levels.map((otmLevel, colIdx) => {
     const maxDist = maxOtmAssignDist(levels, colIdx);
@@ -977,7 +982,7 @@ export async function handler(req: any, res: any): Promise<void> {
       `${specs.length} OTM contract(s) scored across ${byExpiry.size} expiration(s); returning top ${topPerExpiry} per expiry (${expirations.length} date(s) with picks).`,
     );
     warnings.push(
-      `Review grid: ${matrix.length} expiration(s) × ${otmLevels.map((l) => `${l}%`).join(" / ")} OTM columns (closest unused strike per column; actual OTM in each cell).`,
+      `Review grid: ${matrix.length} expiration(s) × ${otmLevels.map((l) => `${l}%`).join(" / ")} OTM columns (closest unused strike per band).`,
     );
 
     const quoteRowSet = new Set<ReviewRow>();
